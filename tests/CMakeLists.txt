@@ -26,10 +26,10 @@ endfunction()
 # Unit tests
 argus_add_unit_test(test_handle unit/test_handle.c)
 argus_add_unit_test(test_connect_string unit/test_connect_string.c)
-argus_add_unit_test(test_type_convert unit/test_type_convert.c)
 argus_add_unit_test(test_diag unit/test_diag.c)
 argus_add_unit_test(test_info unit/test_info.c)
 if(ARGUS_BUILD_THRIFT_BACKENDS)
+    argus_add_unit_test(test_type_convert unit/test_type_convert.c)
     argus_add_unit_test(test_impala_types unit/test_impala_types.c)
 endif()
 
