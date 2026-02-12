@@ -57,6 +57,16 @@ if(NOT WIN32)
     add_compile_definitions(_GNU_SOURCE)
 endif()
 
+# MinGW ODBC headers (sqltypes.h) require Windows type definitions from
+# windows.h to be available. Force-include it before any source file.
+if(WIN32)
+    if(MSVC)
+        add_compile_options(/FIwindows.h)
+    else()
+        add_compile_options(-include windows.h)
+    endif()
+endif()
+
 # Global compiler flags
 if(MSVC)
     add_compile_options(/W4)

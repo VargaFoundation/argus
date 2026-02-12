@@ -1,6 +1,9 @@
 #ifndef ARGUS_BACKEND_H
 #define ARGUS_BACKEND_H
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 #include <stdbool.h>
