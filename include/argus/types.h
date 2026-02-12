@@ -1,6 +1,9 @@
 #ifndef ARGUS_TYPES_H
 #define ARGUS_TYPES_H
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 #include <stddef.h>

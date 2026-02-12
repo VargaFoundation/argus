@@ -1,6 +1,9 @@
 #ifndef ARGUS_ODBC_API_H
 #define ARGUS_ODBC_API_H
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <sql.h>
 #include <sqlext.h>
 #include <sqltypes.h>
