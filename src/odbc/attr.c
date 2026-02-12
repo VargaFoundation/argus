@@ -1,5 +1,6 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
+#include "argus/compat.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
