@@ -18,7 +18,61 @@ set(ARGUS_SOURCES
     backend/hive/hive_fetch.c
     backend/hive/hive_metadata.c
     backend/hive/hive_types.c
+    backend/impala/impala_backend.c
+    backend/impala/impala_session.c
+    backend/impala/impala_query.c
+    backend/impala/impala_fetch.c
+    backend/impala/impala_metadata.c
+    backend/impala/impala_types.c
 )
+
+set(ARGUS_PRIVATE_INCLUDE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/backend/hive
+    ${CMAKE_CURRENT_SOURCE_DIR}/backend/impala
+    ${ODBC_INCLUDE_DIRS}
+    ${GLIB2_INCLUDE_DIRS}
+    ${GOBJECT2_INCLUDE_DIRS}
+    ${THRIFT_C_GLIB_INCLUDE_DIRS}
+)
+
+set(ARGUS_LINK_LIBS
+    argus_thrift_generated
+    ${ODBC_LIBRARIES}
+    ${GLIB2_LIBRARIES}
+    ${GOBJECT2_LIBRARIES}
+    ${THRIFT_C_GLIB_LIBRARIES}
+)
+
+set(ARGUS_LINK_DIRS
+    ${GLIB2_LIBRARY_DIRS}
+    ${GOBJECT2_LIBRARY_DIRS}
+    ${THRIFT_C_GLIB_LIBRARY_DIRS}
+)
+
+# Conditionally add Trino backend
+if(ARGUS_BUILD_TRINO)
+    list(APPEND ARGUS_SOURCES
+        backend/trino/trino_backend.c
+        backend/trino/trino_session.c
+        backend/trino/trino_query.c
+        backend/trino/trino_fetch.c
+        backend/trino/trino_metadata.c
+        backend/trino/trino_types.c
+    )
+    list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend/trino
+        ${LIBCURL_INCLUDE_DIRS}
+        ${JSON_GLIB_INCLUDE_DIRS}
+    )
+    list(APPEND ARGUS_LINK_LIBS
+        ${LIBCURL_LIBRARIES}
+        ${JSON_GLIB_LIBRARIES}
+    )
+    list(APPEND ARGUS_LINK_DIRS
+        ${LIBCURL_LIBRARY_DIRS}
+        ${JSON_GLIB_LIBRARY_DIRS}
+    )
+endif()
 
 add_library(argus_odbc ${ARGUS_SOURCES})
 
@@ -27,30 +81,24 @@ target_include_directories(argus_odbc
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/backend/hive
-        ${ODBC_INCLUDE_DIRS}
-        ${GLIB2_INCLUDE_DIRS}
-        ${GOBJECT2_INCLUDE_DIRS}
-        ${THRIFT_C_GLIB_INCLUDE_DIRS}
+        ${ARGUS_PRIVATE_INCLUDE_DIRS}
 )
 
 target_link_libraries(argus_odbc
     PRIVATE
-        argus_thrift_generated
-        ${ODBC_LIBRARIES}
-        ${GLIB2_LIBRARIES}
-        ${GOBJECT2_LIBRARIES}
-        ${THRIFT_C_GLIB_LIBRARIES}
+        ${ARGUS_LINK_LIBS}
 )
 
 target_link_directories(argus_odbc
     PRIVATE
-        ${GLIB2_LIBRARY_DIRS}
-        ${GOBJECT2_LIBRARY_DIRS}
-        ${THRIFT_C_GLIB_LIBRARY_DIRS}
+        ${ARGUS_LINK_DIRS}
 )
 
 target_compile_definitions(argus_odbc PRIVATE ARGUS_BUILD_DLL)
+
+if(ARGUS_BUILD_TRINO)
+    target_compile_definitions(argus_odbc PRIVATE ARGUS_HAS_TRINO)
+endif()
 
 set_target_properties(argus_odbc PROPERTIES
     VERSION ${PROJECT_VERSION}
@@ -66,27 +114,20 @@ if(BUILD_TESTING)
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
         PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/backend/hive
-            ${ODBC_INCLUDE_DIRS}
-            ${GLIB2_INCLUDE_DIRS}
-            ${GOBJECT2_INCLUDE_DIRS}
-            ${THRIFT_C_GLIB_INCLUDE_DIRS}
+            ${ARGUS_PRIVATE_INCLUDE_DIRS}
     )
     target_link_libraries(argus_odbc_static
         PUBLIC
-            argus_thrift_generated
-            ${ODBC_LIBRARIES}
-            ${GLIB2_LIBRARIES}
-            ${GOBJECT2_LIBRARIES}
-            ${THRIFT_C_GLIB_LIBRARIES}
+            ${ARGUS_LINK_LIBS}
     )
     target_link_directories(argus_odbc_static
         PUBLIC
-            ${GLIB2_LIBRARY_DIRS}
-            ${GOBJECT2_LIBRARY_DIRS}
-            ${THRIFT_C_GLIB_LIBRARY_DIRS}
+            ${ARGUS_LINK_DIRS}
     )
     target_compile_definitions(argus_odbc_static PRIVATE ARGUS_BUILD_DLL)
+    if(ARGUS_BUILD_TRINO)
+        target_compile_definitions(argus_odbc_static PRIVATE ARGUS_HAS_TRINO)
+    endif()
     set_target_properties(argus_odbc_static PROPERTIES
         POSITION_INDEPENDENT_CODE ON
     )

@@ -1,6 +1,6 @@
 #include "hive_internal.h"
+#include "argus/compat.h"
 #include <string.h>
-#include <strings.h>
 
 /* ── Map Hive type name string -> ODBC SQL type ──────────────── */
 

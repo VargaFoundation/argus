@@ -29,6 +29,11 @@ argus_add_unit_test(test_connect_string unit/test_connect_string.c)
 argus_add_unit_test(test_type_convert unit/test_type_convert.c)
 argus_add_unit_test(test_diag unit/test_diag.c)
 argus_add_unit_test(test_info unit/test_info.c)
+argus_add_unit_test(test_impala_types unit/test_impala_types.c)
+
+if(ARGUS_BUILD_TRINO)
+    argus_add_unit_test(test_trino_types unit/test_trino_types.c)
+endif()
 
 # Integration tests (optional)
 if(BUILD_INTEGRATION_TESTS)

@@ -1,13 +1,17 @@
 #include "argus/backend.h"
+#include "argus/compat.h"
 #include <string.h>
-#include <strings.h>
 
 /* Backend registry */
 static const argus_backend_t *registry[ARGUS_MAX_BACKENDS];
 static int registry_count = 0;
 
-/* Hive backend registration (defined in hive/hive_backend.c) */
+/* Backend registration (defined in respective backend files) */
 extern const argus_backend_t *argus_hive_backend_get(void);
+extern const argus_backend_t *argus_impala_backend_get(void);
+#ifdef ARGUS_HAS_TRINO
+extern const argus_backend_t *argus_trino_backend_get(void);
+#endif
 
 void argus_backend_register(const argus_backend_t *backend)
 {
@@ -32,4 +36,8 @@ void argus_backends_init(void)
 {
     /* Register all built-in backends */
     argus_backend_register(argus_hive_backend_get());
+    argus_backend_register(argus_impala_backend_get());
+#ifdef ARGUS_HAS_TRINO
+    argus_backend_register(argus_trino_backend_get());
+#endif
 }

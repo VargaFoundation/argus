@@ -11,9 +11,27 @@
 #include "argus/odbc_api.h"
 #include "argus/backend.h"
 
+#ifdef _WIN32
+#include <windows.h>
+
+BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
+{
+    (void)hinstDLL;
+    (void)lpvReserved;
+
+    if (fdwReason == DLL_PROCESS_ATTACH) {
+        argus_backends_init();
+    }
+    return TRUE;
+}
+
+#else
+
 /* Constructor: initialize backends when the library is loaded */
 __attribute__((constructor))
 static void argus_init(void)
 {
     argus_backends_init();
 }
+
+#endif
