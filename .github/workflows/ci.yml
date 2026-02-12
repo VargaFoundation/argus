@@ -48,6 +48,9 @@ jobs:
   build-windows:
     runs-on: windows-latest
 
+    env:
+      HAS_CODESIGN: ${{ secrets.CODESIGN_CERT != '' }}
+
     defaults:
       run:
         shell: msys2 {0}
@@ -107,7 +110,7 @@ jobs:
           makensis -NOCD ../argus-odbc.nsi
 
       - name: Sign installer
-        if: ${{ secrets.CODESIGN_CERT != '' }}
+        if: env.HAS_CODESIGN == 'true'
         env:
           CODESIGN_CERT: ${{ secrets.CODESIGN_CERT }}
           CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
