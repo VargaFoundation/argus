@@ -107,7 +107,7 @@ jobs:
           makensis -NOCD ../argus-odbc.nsi
 
       - name: Sign installer
-        if: env.CODESIGN_CERT != ''
+        if: ${{ secrets.CODESIGN_CERT != '' }}
         env:
           CODESIGN_CERT: ${{ secrets.CODESIGN_CERT }}
           CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
