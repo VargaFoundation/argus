@@ -10,6 +10,11 @@
  * information_schema.
  */
 
+/* Forward declaration */
+int trino_execute(argus_backend_conn_t raw_conn,
+                  const char *query,
+                  argus_backend_op_t *out_op);
+
 /* ── Helper: execute a SQL query and return the operation ─────── */
 
 static int trino_execute_query(trino_conn_t *conn, const char *query,
@@ -21,11 +26,6 @@ static int trino_execute_query(trino_conn_t *conn, const char *query,
     *out_op = (trino_operation_t *)raw_op;
     return 0;
 }
-
-/* Forward declaration */
-int trino_execute(argus_backend_conn_t raw_conn,
-                  const char *query,
-                  argus_backend_op_t *out_op);
 
 /* ── GetTables via information_schema ────────────────────────── */
 
