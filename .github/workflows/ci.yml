@@ -47,6 +47,7 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    environment: main
 
     env:
       CODESIGN_CERT: ${{ secrets.CODESIGN_CERT }}
