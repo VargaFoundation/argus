@@ -19,7 +19,11 @@ find_package(ODBC REQUIRED)
 
 pkg_check_modules(GLIB2 REQUIRED glib-2.0>=2.56)
 pkg_check_modules(GOBJECT2 REQUIRED gobject-2.0>=2.56)
-pkg_check_modules(THRIFT_C_GLIB REQUIRED thrift_c_glib>=0.16)
+# Thrift C GLib: try "thrift_c_glib" (Linux) then "thrift" (MSYS2)
+pkg_check_modules(THRIFT_C_GLIB thrift_c_glib>=0.16)
+if(NOT THRIFT_C_GLIB_FOUND)
+    pkg_check_modules(THRIFT_C_GLIB REQUIRED thrift>=0.16)
+endif()
 
 # Optional: Trino backend dependencies
 pkg_check_modules(LIBCURL libcurl>=7.28)

@@ -40,10 +40,10 @@ jobs:
 
       - name: Check shared library exports
         run: |
-          nm -D build/libargus_odbc.so | grep ' T SQL' | head -20
+          nm -D build/src/libargus_odbc.so | grep ' T SQL' | head -20
           echo "---"
           echo "Total exported SQL functions:"
-          nm -D build/libargus_odbc.so | grep -c ' T SQL'
+          nm -D build/src/libargus_odbc.so | grep -c ' T SQL'
 
   build-windows:
     runs-on: windows-latest
@@ -60,12 +60,13 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
-          update: true
+          update: false
+          cache: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-glib2
             mingw-w64-ucrt-x86_64-thrift
             mingw-w64-ucrt-x86_64-curl
