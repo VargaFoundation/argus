@@ -44,48 +44,66 @@ typedef struct argus_backend {
 } argus_backend_t;
 ```
 
-## Step-by-Step: Adding an Impala Backend
+## Existing Backends
+
+### Hive (`src/backend/hive/`)
+
+- Protocol: Thrift TCLIService (binary), protocol V10
+- Default port: 10000
+- Database: Set via `use:database` config in OpenSession
+- 7 files: internal header, backend, session, query, fetch, metadata, types
+
+### Impala (`src/backend/impala/`)
+
+- Protocol: Thrift TCLIService (binary), protocol V6
+- Default port: 21050
+- Database: Set via `USE <db>` statement after connect
+- Same Thrift operations as Hive with minor protocol differences
+- 7 files: same structure as Hive
+
+### Trino (`src/backend/trino/`)
+
+- Protocol: HTTP REST API with JSON (libcurl + json-glib)
+- Default port: 8080
+- Database: Maps to Trino catalog via X-Trino-Catalog header
+- Catalog operations via `information_schema` SQL queries
+- 7 files: same structure pattern
+
+## Step-by-Step: Adding a New Backend
 
 ### 1. Create the directory
 
 ```
-src/backend/impala/
-    impala_backend.c    # Vtable + registration
-    impala_session.c    # Connect/disconnect
-    impala_query.c      # Execute/fetch
-    impala_metadata.c   # Catalog operations
-    impala_types.c      # Type mapping
+src/backend/mybackend/
+    mybackend_internal.h  # Internal structs
+    mybackend_backend.c   # Vtable + registration
+    mybackend_session.c   # Connect/disconnect
+    mybackend_query.c     # Execute/status/close
+    mybackend_fetch.c     # Fetch results + metadata
+    mybackend_metadata.c  # Catalog operations
+    mybackend_types.c     # Type mapping
 ```
 
 ### 2. Implement the vtable
 
 ```c
-// impala_backend.c
+// mybackend_backend.c
 #include "argus/backend.h"
 
 // Forward declarations
-int impala_connect(...);
-void impala_disconnect(...);
+int mybackend_connect(...);
+void mybackend_disconnect(...);
 // ... etc
 
-static const argus_backend_t impala_backend = {
-    .name = "impala",
-    .connect = impala_connect,
-    .disconnect = impala_disconnect,
-    .execute = impala_execute,
-    .get_operation_status = impala_get_operation_status,
-    .close_operation = impala_close_operation,
-    .fetch_results = impala_fetch_results,
-    .get_result_metadata = impala_get_result_metadata,
-    .get_tables = impala_get_tables,
-    .get_columns = impala_get_columns,
-    .get_type_info = impala_get_type_info,
-    .get_schemas = impala_get_schemas,
-    .get_catalogs = impala_get_catalogs,
+static const argus_backend_t mybackend = {
+    .name = "mybackend",
+    .connect = mybackend_connect,
+    .disconnect = mybackend_disconnect,
+    // ... all 13 function pointers
 };
 
-const argus_backend_t *argus_impala_backend_get(void) {
-    return &impala_backend;
+const argus_backend_t *argus_mybackend_backend_get(void) {
+    return &mybackend;
 }
 ```
 
@@ -94,26 +112,29 @@ const argus_backend_t *argus_impala_backend_get(void) {
 In `src/backend/backend.c`, add:
 
 ```c
-extern const argus_backend_t *argus_impala_backend_get(void);
+extern const argus_backend_t *argus_mybackend_backend_get(void);
 
 void argus_backends_init(void) {
     argus_backend_register(argus_hive_backend_get());
-    argus_backend_register(argus_impala_backend_get());  // NEW
+    argus_backend_register(argus_impala_backend_get());
+    argus_backend_register(argus_trino_backend_get());
+    argus_backend_register(argus_mybackend_backend_get());  // NEW
 }
 ```
 
 ### 4. Add to CMake
 
-In `src/CMakeLists.txt`, add the new source files:
+In `src/CMakeLists.txt`, add the new source files and include directories:
 
 ```cmake
 set(ARGUS_SOURCES
     ...
-    backend/impala/impala_backend.c
-    backend/impala/impala_session.c
-    backend/impala/impala_query.c
-    backend/impala/impala_metadata.c
-    backend/impala/impala_types.c
+    backend/mybackend/mybackend_backend.c
+    backend/mybackend/mybackend_session.c
+    backend/mybackend/mybackend_query.c
+    backend/mybackend/mybackend_fetch.c
+    backend/mybackend/mybackend_metadata.c
+    backend/mybackend/mybackend_types.c
 )
 ```
 
@@ -122,7 +143,7 @@ set(ARGUS_SOURCES
 Users select the backend via connection string:
 
 ```
-DRIVER=Argus;Backend=impala;HOST=impala-host;PORT=21050;...
+DRIVER=Argus;Backend=mybackend;HOST=my-host;PORT=12345;...
 ```
 
 ## Key Requirements
@@ -132,12 +153,15 @@ DRIVER=Argus;Backend=impala;HOST=impala-host;PORT=21050;...
 3. **get_result_metadata()** fills `argus_column_desc_t` array with column name, SQL type, size, etc.
 4. All opaque handles (`argus_backend_conn_t`, `argus_backend_op_t`) are `void*` - cast to your backend's internal structs.
 5. The backend owns the memory for its internal structs. `disconnect()` and `close_operation()` must free them.
+6. Include `argus/compat.h` for cross-platform support (strcasecmp, strdup, strtok_r, strndup).
 
 ## Backend Differences
 
 | Feature | Hive | Impala | Trino |
 |---------|------|--------|-------|
-| Protocol | Thrift (TCLIService) | Thrift (Beeswax/HS2) | REST (HTTP) |
+| Protocol | Thrift (TCLIService) | Thrift (TCLIService) | REST (HTTP/JSON) |
 | Default Port | 10000 | 21050 | 8080 |
-| Auth | NOSASL, PLAIN, Kerberos | NOSASL, PLAIN, LDAP | Basic, JWT |
-| Catalog | Hive Metastore | Hive Metastore | Connectors |
+| Protocol Version | V10 | V6 | N/A |
+| Auth | NOSASL, PLAIN | NOSASL, PLAIN | HTTP headers |
+| Catalog | Hive Metastore | Hive Metastore | information_schema |
+| Dependencies | thrift_c_glib | thrift_c_glib | libcurl, json-glib |

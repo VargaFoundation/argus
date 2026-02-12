@@ -21,15 +21,42 @@ pkg_check_modules(GLIB2 REQUIRED glib-2.0>=2.56)
 pkg_check_modules(GOBJECT2 REQUIRED gobject-2.0>=2.56)
 pkg_check_modules(THRIFT_C_GLIB REQUIRED thrift_c_glib>=0.16)
 
+# Optional: Trino backend dependencies
+pkg_check_modules(LIBCURL libcurl>=7.28)
+pkg_check_modules(JSON_GLIB json-glib-1.0>=1.2)
+
+if(LIBCURL_FOUND AND JSON_GLIB_FOUND)
+    set(ARGUS_BUILD_TRINO ON)
+    message(STATUS "Trino backend: ENABLED (libcurl + json-glib found)")
+else()
+    set(ARGUS_BUILD_TRINO OFF)
+    message(STATUS "Trino backend: DISABLED (install libcurl-dev and libjson-glib-dev to enable)")
+endif()
+
 # POSIX extensions needed for strdup/strndup in C11 mode
-add_compile_definitions(_GNU_SOURCE)
+if(NOT WIN32)
+    add_compile_definitions(_GNU_SOURCE)
+endif()
 
 # Global compiler flags
-add_compile_options(-Wall -Wextra -Wpedantic -Werror=implicit-function-declaration)
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    add_compile_options(-g -O0)
+if(MSVC)
+    add_compile_options(/W4)
 else()
-    add_compile_options(-O2)
+    add_compile_options(-Wall -Wextra -Wpedantic -Werror=implicit-function-declaration)
+endif()
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    if(MSVC)
+        add_compile_options(/Zi /Od)
+    else()
+        add_compile_options(-g -O0)
+    endif()
+else()
+    if(MSVC)
+        add_compile_options(/O2)
+    else()
+        add_compile_options(-O2)
+    endif()
 endif()
 
 # Thrift generated code

@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  build-and-test:
+  build-linux:
     runs-on: ubuntu-latest
 
     steps:
@@ -25,7 +25,9 @@ jobs:
             libglib2.0-dev \
             libthrift-c-glib-dev \
             thrift-compiler \
-            libcmocka-dev
+            libcmocka-dev \
+            libcurl4-openssl-dev \
+            libjson-glib-dev
 
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
@@ -42,3 +44,39 @@ jobs:
           echo "---"
           echo "Total exported SQL functions:"
           nm -D build/libargus_odbc.so | grep -c ' T SQL'
+
+  build-windows:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-glib2
+            mingw-w64-ucrt-x86_64-thrift
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-json-glib
+            mingw-w64-ucrt-x86_64-cmocka
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Unit Tests
+        run: cd build && ctest --output-on-failure -L unit
