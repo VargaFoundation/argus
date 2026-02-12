@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            unixodbc-dev \
+            libglib2.0-dev \
+            libthrift-c-glib-dev \
+            thrift-compiler \
+            libcmocka-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Unit Tests
+        run: cd build && ctest --output-on-failure -L unit
+
+      - name: Check shared library exports
+        run: |
+          nm -D build/libargus_odbc.so | grep ' T SQL' | head -20
+          echo "---"
+          echo "Total exported SQL functions:"
+          nm -D build/libargus_odbc.so | grep -c ' T SQL'

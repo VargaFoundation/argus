@@ -1,0 +1,25 @@
+# Build output
+build/
+cmake-build-*/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.cache/
+
+# Generated thrift code
+thrift/gen-*/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Compiled objects
+*.o
+*.so
+*.so.*
+*.a
+*.dylib
