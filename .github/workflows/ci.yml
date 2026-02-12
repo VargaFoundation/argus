@@ -106,6 +106,20 @@ jobs:
           cd installer/staging
           makensis -NOCD ../argus-odbc.nsi
 
+      - name: Sign installer
+        if: env.CODESIGN_CERT != ''
+        env:
+          CODESIGN_CERT: ${{ secrets.CODESIGN_CERT }}
+          CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
+        shell: powershell
+        run: |
+          $certBytes = [Convert]::FromBase64String($env:CODESIGN_CERT)
+          $certPath = "$env:RUNNER_TEMP\codesign.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match "x64" } | Select-Object -First 1 -ExpandProperty FullName
+          & $signtool sign /f $certPath /p $env:CODESIGN_PASSWORD /fd SHA256 /tr http://timestamp.sectigo.com /td SHA256 "installer\staging\argus-odbc-installer.exe"
+          Remove-Item $certPath
+
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
