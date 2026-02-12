@@ -15,8 +15,19 @@ extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
 
 static SQLRETURN do_connect(argus_dbc_t *dbc)
 {
-    /* Default backend to hive */
-    const char *backend_name = dbc->backend_name ? dbc->backend_name : "hive";
+    /* Default backend depends on what was compiled in */
+#ifdef ARGUS_HAS_THRIFT_BACKENDS
+    const char *default_backend = "hive";
+    int default_port = 10000;
+#elif defined(ARGUS_HAS_TRINO)
+    const char *default_backend = "trino";
+    int default_port = 8080;
+#else
+    const char *default_backend = "";
+    int default_port = 0;
+#endif
+
+    const char *backend_name = dbc->backend_name ? dbc->backend_name : default_backend;
     const argus_backend_t *backend = argus_backend_find(backend_name);
     if (!backend) {
         char msg[256];
@@ -28,7 +39,7 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
     dbc->backend = backend;
 
     const char *host = dbc->host ? dbc->host : "localhost";
-    int port = dbc->port > 0 ? dbc->port : 10000;
+    int port = dbc->port > 0 ? dbc->port : default_port;
     const char *user = dbc->username ? dbc->username : "";
     const char *pass = dbc->password ? dbc->password : "";
     const char *db   = dbc->database ? dbc->database : "default";

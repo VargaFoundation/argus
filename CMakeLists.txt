@@ -3,7 +3,13 @@ project(argus VERSION 0.1.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
+
+# Windows/MinGW ODBC headers require compiler extensions (gnu11 not c11)
+if(WIN32)
+    set(CMAKE_C_EXTENSIONS ON)
+else()
+    set(CMAKE_C_EXTENSIONS OFF)
+endif()
 
 # Build options
 option(BUILD_TESTING "Build unit tests" ON)
@@ -19,13 +25,18 @@ find_package(ODBC REQUIRED)
 
 pkg_check_modules(GLIB2 REQUIRED glib-2.0>=2.56)
 pkg_check_modules(GOBJECT2 REQUIRED gobject-2.0>=2.56)
-# Thrift C GLib: try "thrift_c_glib" (Linux) then "thrift" (MSYS2)
+
+# Optional: Hive/Impala backend dependencies (Thrift C GLib)
 pkg_check_modules(THRIFT_C_GLIB thrift_c_glib>=0.16)
-if(NOT THRIFT_C_GLIB_FOUND)
-    pkg_check_modules(THRIFT_C_GLIB REQUIRED thrift>=0.16)
+if(THRIFT_C_GLIB_FOUND)
+    set(ARGUS_BUILD_THRIFT_BACKENDS ON)
+    message(STATUS "Hive/Impala backends: ENABLED (thrift_c_glib found)")
+else()
+    set(ARGUS_BUILD_THRIFT_BACKENDS OFF)
+    message(STATUS "Hive/Impala backends: DISABLED (thrift_c_glib not found)")
 endif()
 
-# Optional: Trino backend dependencies
+# Optional: Trino backend dependencies (libcurl + json-glib)
 pkg_check_modules(LIBCURL libcurl>=7.28)
 pkg_check_modules(JSON_GLIB json-glib-1.0>=1.2)
 
@@ -35,6 +46,10 @@ if(LIBCURL_FOUND AND JSON_GLIB_FOUND)
 else()
     set(ARGUS_BUILD_TRINO OFF)
     message(STATUS "Trino backend: DISABLED (install libcurl-dev and libjson-glib-dev to enable)")
+endif()
+
+if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO)
+    message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino).")
 endif()
 
 # POSIX extensions needed for strdup/strndup in C11 mode
@@ -63,8 +78,10 @@ else()
     endif()
 endif()
 
-# Thrift generated code
-add_subdirectory(thrift)
+# Thrift generated code (only if Hive/Impala backends enabled)
+if(ARGUS_BUILD_THRIFT_BACKENDS)
+    add_subdirectory(thrift)
+endif()
 
 # Main library
 add_subdirectory(src)

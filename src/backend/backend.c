@@ -7,8 +7,10 @@ static const argus_backend_t *registry[ARGUS_MAX_BACKENDS];
 static int registry_count = 0;
 
 /* Backend registration (defined in respective backend files) */
+#ifdef ARGUS_HAS_THRIFT_BACKENDS
 extern const argus_backend_t *argus_hive_backend_get(void);
 extern const argus_backend_t *argus_impala_backend_get(void);
+#endif
 #ifdef ARGUS_HAS_TRINO
 extern const argus_backend_t *argus_trino_backend_get(void);
 #endif
@@ -34,9 +36,11 @@ const argus_backend_t *argus_backend_find(const char *name)
 
 void argus_backends_init(void)
 {
-    /* Register all built-in backends */
+    /* Register all available backends */
+#ifdef ARGUS_HAS_THRIFT_BACKENDS
     argus_backend_register(argus_hive_backend_get());
     argus_backend_register(argus_impala_backend_get());
+#endif
 #ifdef ARGUS_HAS_TRINO
     argus_backend_register(argus_trino_backend_get());
 #endif
