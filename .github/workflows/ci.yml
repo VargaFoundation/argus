@@ -49,7 +49,8 @@ jobs:
     runs-on: windows-latest
 
     env:
-      HAS_CODESIGN: ${{ secrets.CODESIGN_CERT != '' }}
+      CODESIGN_CERT: ${{ secrets.CODESIGN_CERT }}
+      CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
 
     defaults:
       run:
@@ -110,10 +111,7 @@ jobs:
           makensis -NOCD ../argus-odbc.nsi
 
       - name: Sign installer
-        if: env.HAS_CODESIGN == 'true'
-        env:
-          CODESIGN_CERT: ${{ secrets.CODESIGN_CERT }}
-          CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
+        if: env.CODESIGN_CERT != ''
         shell: powershell
         run: |
           $certBytes = [Convert]::FromBase64String($env:CODESIGN_CERT)
