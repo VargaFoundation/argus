@@ -54,9 +54,12 @@ target_link_directories(argus_thrift_generated
 set_target_properties(argus_thrift_generated PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Suppress warnings in generated code
-target_compile_options(argus_thrift_generated PRIVATE
-    -Wno-unused-parameter
-    -Wno-pedantic
-    -Wno-sign-compare
-    -Wno-missing-field-initializers
-)
+if(NOT MSVC)
+    target_compile_options(argus_thrift_generated PRIVATE
+        -Wno-unused-parameter
+        -Wno-pedantic
+        -Wno-sign-compare
+        -Wno-missing-field-initializers
+        -Wno-cast-function-type
+    )
+endif()

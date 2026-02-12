@@ -112,7 +112,7 @@ int trino_parse_data(JsonNode *data_node,
                 gint64 v = json_node_get_int(val_node);
                 cell->data = malloc(24);
                 if (cell->data)
-                    cell->data_len = (size_t)snprintf(cell->data, 24, "%ld", (long)v);
+                    cell->data_len = (size_t)snprintf(cell->data, 24, "%lld", (long long)v);
             } else if (vtype == G_TYPE_DOUBLE) {
                 gdouble v = json_node_get_double(val_node);
                 cell->data = malloc(32);

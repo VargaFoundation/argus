@@ -12,44 +12,59 @@ set(ARGUS_SOURCES
     odbc/attr.c
     odbc/util.c
     backend/backend.c
-    backend/hive/hive_backend.c
-    backend/hive/hive_session.c
-    backend/hive/hive_query.c
-    backend/hive/hive_fetch.c
-    backend/hive/hive_metadata.c
-    backend/hive/hive_types.c
-    backend/impala/impala_backend.c
-    backend/impala/impala_session.c
-    backend/impala/impala_query.c
-    backend/impala/impala_fetch.c
-    backend/impala/impala_metadata.c
-    backend/impala/impala_types.c
 )
 
 set(ARGUS_PRIVATE_INCLUDE_DIRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/backend/hive
-    ${CMAKE_CURRENT_SOURCE_DIR}/backend/impala
     ${ODBC_INCLUDE_DIRS}
     ${GLIB2_INCLUDE_DIRS}
     ${GOBJECT2_INCLUDE_DIRS}
-    ${THRIFT_C_GLIB_INCLUDE_DIRS}
 )
 
 set(ARGUS_LINK_LIBS
-    argus_thrift_generated
     ${ODBC_LIBRARIES}
     ${GLIB2_LIBRARIES}
     ${GOBJECT2_LIBRARIES}
-    ${THRIFT_C_GLIB_LIBRARIES}
 )
 
 set(ARGUS_LINK_DIRS
     ${GLIB2_LIBRARY_DIRS}
     ${GOBJECT2_LIBRARY_DIRS}
-    ${THRIFT_C_GLIB_LIBRARY_DIRS}
 )
 
-# Conditionally add Trino backend
+set(ARGUS_COMPILE_DEFS ARGUS_BUILD_DLL)
+
+# Conditionally add Hive/Impala backends (require Thrift C GLib)
+if(ARGUS_BUILD_THRIFT_BACKENDS)
+    list(APPEND ARGUS_SOURCES
+        backend/hive/hive_backend.c
+        backend/hive/hive_session.c
+        backend/hive/hive_query.c
+        backend/hive/hive_fetch.c
+        backend/hive/hive_metadata.c
+        backend/hive/hive_types.c
+        backend/impala/impala_backend.c
+        backend/impala/impala_session.c
+        backend/impala/impala_query.c
+        backend/impala/impala_fetch.c
+        backend/impala/impala_metadata.c
+        backend/impala/impala_types.c
+    )
+    list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend/hive
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend/impala
+        ${THRIFT_C_GLIB_INCLUDE_DIRS}
+    )
+    list(APPEND ARGUS_LINK_LIBS
+        argus_thrift_generated
+        ${THRIFT_C_GLIB_LIBRARIES}
+    )
+    list(APPEND ARGUS_LINK_DIRS
+        ${THRIFT_C_GLIB_LIBRARY_DIRS}
+    )
+    list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_THRIFT_BACKENDS)
+endif()
+
+# Conditionally add Trino backend (requires libcurl + json-glib)
 if(ARGUS_BUILD_TRINO)
     list(APPEND ARGUS_SOURCES
         backend/trino/trino_backend.c
@@ -72,6 +87,7 @@ if(ARGUS_BUILD_TRINO)
         ${LIBCURL_LIBRARY_DIRS}
         ${JSON_GLIB_LIBRARY_DIRS}
     )
+    list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_TRINO)
 endif()
 
 add_library(argus_odbc ${ARGUS_SOURCES})
@@ -94,11 +110,7 @@ target_link_directories(argus_odbc
         ${ARGUS_LINK_DIRS}
 )
 
-target_compile_definitions(argus_odbc PRIVATE ARGUS_BUILD_DLL)
-
-if(ARGUS_BUILD_TRINO)
-    target_compile_definitions(argus_odbc PRIVATE ARGUS_HAS_TRINO)
-endif()
+target_compile_definitions(argus_odbc PRIVATE ${ARGUS_COMPILE_DEFS})
 
 set_target_properties(argus_odbc PROPERTIES
     VERSION ${PROJECT_VERSION}
@@ -124,10 +136,7 @@ if(BUILD_TESTING)
         PUBLIC
             ${ARGUS_LINK_DIRS}
     )
-    target_compile_definitions(argus_odbc_static PRIVATE ARGUS_BUILD_DLL)
-    if(ARGUS_BUILD_TRINO)
-        target_compile_definitions(argus_odbc_static PRIVATE ARGUS_HAS_TRINO)
-    endif()
+    target_compile_definitions(argus_odbc_static PRIVATE ${ARGUS_COMPILE_DEFS})
     set_target_properties(argus_odbc_static PROPERTIES
         POSITION_INDEPENDENT_CODE ON
     )
