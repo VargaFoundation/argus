@@ -71,6 +71,7 @@ jobs:
             mingw-w64-ucrt-x86_64-curl
             mingw-w64-ucrt-x86_64-json-glib
             mingw-w64-ucrt-x86_64-cmocka
+            mingw-w64-ucrt-x86_64-nsis
 
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -80,3 +81,33 @@ jobs:
 
       - name: Unit Tests
         run: cd build && ctest --output-on-failure -L unit
+
+      - name: Prepare installer files
+        run: |
+          mkdir -p installer/staging
+          cp build/src/libargus_odbc.dll installer/staging/argus_odbc.dll
+          # Bundle runtime dependencies
+          for dll in libcurl-4.dll libglib-2.0-0.dll libgobject-2.0-0.dll \
+                     libjson-glib-1.0-0.dll libgio-2.0-0.dll libgmodule-2.0-0.dll \
+                     libintl-8.dll libiconv-2.dll libffi-8.dll libz1.dll \
+                     libzstd.dll libbrotlidec.dll libbrotlicommon.dll \
+                     libnghttp2-14.dll libssh2-1.dll libssl-3-x64.dll \
+                     libcrypto-3-x64.dll libnghttp3-9.dll libidn2-0.dll \
+                     libpsl-5.dll libunistring-5.dll libpcre2-8-0.dll; do
+            src="$MINGW_PREFIX/bin/$dll"
+            if [ -f "$src" ]; then
+              cp "$src" installer/staging/
+            fi
+          done
+          ls -la installer/staging/
+
+      - name: Build NSIS installer
+        run: |
+          cd installer/staging
+          makensis -NOCD ../argus-odbc.nsi
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-odbc-installer
+          path: installer/staging/argus-odbc-installer.exe

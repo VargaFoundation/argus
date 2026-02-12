@@ -29,8 +29,9 @@ Section "Argus ODBC Driver" SecDriver
 
     SetOutPath "$INSTDIR"
 
-    ; Copy driver DLL and dependencies
+    ; Copy driver DLL and all bundled dependencies
     File "argus_odbc.dll"
+    File /nonfatal "*.dll"
 
     ; Store install directory
     WriteRegStr HKLM "Software\Argus ODBC Driver" "InstallDir" "$INSTDIR"
@@ -76,7 +77,7 @@ Section "Uninstall"
         "Argus ODBC Driver"
 
     ; Remove files
-    Delete "$INSTDIR\argus_odbc.dll"
+    Delete "$INSTDIR\*.dll"
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"
 
