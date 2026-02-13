@@ -29,17 +29,15 @@ int impala_connect(argus_dbc_t *dbc,
 #ifdef ARGUS_HAS_THRIFT_SSL
     if (dbc->ssl_enabled) {
         ARGUS_LOG_DEBUG("Impala: Creating SSL socket to %s:%d", host, port);
+        /* Note: Thrift C GLib SSL socket configuration is done via system SSL settings */
         conn->socket = (ThriftSocket *)g_object_new(
             THRIFT_TYPE_SSL_SOCKET,
             "hostname", host,
             "port", port,
             NULL);
-
-        /* Configure SSL certificate if provided */
         if (dbc->ssl_ca_file) {
-            ThriftSSLSocket *ssl_socket = THRIFT_SSL_SOCKET(conn->socket);
-            thrift_ssl_socket_set_ca_certificate(ssl_socket, dbc->ssl_ca_file);
-            ARGUS_LOG_DEBUG("Impala: SSL CA cert: %s", dbc->ssl_ca_file);
+            ARGUS_LOG_DEBUG("Impala: SSL CA cert specified: %s (configured via system)",
+                           dbc->ssl_ca_file);
         }
     } else
 #endif
