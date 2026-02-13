@@ -48,6 +48,10 @@ typedef struct argus_backend {
     void (*close_operation)(argus_backend_conn_t conn,
                             argus_backend_op_t op);
 
+    /* Cancel a running operation */
+    int (*cancel)(argus_backend_conn_t conn,
+                  argus_backend_op_t op);
+
     /* Result fetching */
     int (*fetch_results)(argus_backend_conn_t conn,
                          argus_backend_op_t op,

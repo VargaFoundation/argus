@@ -1,9 +1,20 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
 #include "argus/backend.h"
+#include "argus/log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+#ifdef _WIN32
+#define strcasecmp _stricmp
+#include <windows.h>
+#define sleep_seconds(n) Sleep((n) * 1000)
+#else
+#include <strings.h>  /* for strcasecmp */
+#include <unistd.h>
+#define sleep_seconds(n) sleep(n)
+#endif
 
 /* External string helper declarations */
 extern SQLSMALLINT argus_copy_string(const char *src,
@@ -33,6 +44,7 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
         char msg[256];
         snprintf(msg, sizeof(msg),
                  "[Argus] Unknown backend: %s", backend_name);
+        ARGUS_LOG_ERROR("Unknown backend: %s", backend_name);
         return argus_set_error(&dbc->diag, "HY000", msg, 0);
     }
 
@@ -45,20 +57,45 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
     const char *db   = dbc->database ? dbc->database : "default";
     const char *auth = dbc->auth_mechanism ? dbc->auth_mechanism : "NOSASL";
 
-    int rc = backend->connect(dbc, host, port, user, pass, db, auth,
-                              &dbc->backend_conn);
-    if (rc != 0) {
-        /* Backend should have set diagnostics */
-        if (dbc->diag.count == 0) {
-            argus_set_error(&dbc->diag, "08001",
-                            "[Argus] Failed to connect to backend", 0);
+    /* Retry logic: try up to (1 + retry_count) times */
+    int max_attempts = 1 + (dbc->retry_count > 0 ? dbc->retry_count : 0);
+    int rc = -1;
+
+    for (int attempt = 1; attempt <= max_attempts; attempt++) {
+        if (attempt > 1) {
+            ARGUS_LOG_INFO("Retry attempt %d/%d after %d second(s)",
+                           attempt, max_attempts, dbc->retry_delay_sec);
+            argus_diag_clear(&dbc->diag);
+            sleep_seconds(dbc->retry_delay_sec);
         }
-        dbc->backend = NULL;
-        return SQL_ERROR;
+
+        ARGUS_LOG_INFO("Connecting to %s backend at %s:%d (user=%s, db=%s, auth=%s) [attempt %d/%d]",
+                       backend_name, host, port, user, db, auth, attempt, max_attempts);
+
+        rc = backend->connect(dbc, host, port, user, pass, db, auth,
+                              &dbc->backend_conn);
+        if (rc == 0) {
+            /* Success */
+            ARGUS_LOG_INFO("Connected successfully to %s backend at %s:%d (attempt %d/%d)",
+                           backend_name, host, port, attempt, max_attempts);
+            dbc->connected = true;
+            return SQL_SUCCESS;
+        }
+
+        /* Connection failed */
+        ARGUS_LOG_WARN("Connection failed: backend=%s, host=%s:%d, rc=%d (attempt %d/%d)",
+                       backend_name, host, port, rc, attempt, max_attempts);
     }
 
-    dbc->connected = true;
-    return SQL_SUCCESS;
+    /* All retry attempts exhausted */
+    ARGUS_LOG_ERROR("Connection failed after %d attempt(s): backend=%s, host=%s:%d, rc=%d",
+                    max_attempts, backend_name, host, port, rc);
+    if (dbc->diag.count == 0) {
+        argus_set_error(&dbc->diag, "08001",
+                        "[Argus] Failed to connect to backend", 0);
+    }
+    dbc->backend = NULL;
+    return SQL_ERROR;
 }
 
 /* ── ODBC API: SQLDriverConnect ──────────────────────────────── */
@@ -134,6 +171,71 @@ SQLRETURN SQL_API SQLDriverConnect(
     if (!v) v = argus_conn_params_get(&params, "DRIVER_TYPE");
     if (v) { free(dbc->backend_name); dbc->backend_name = strdup(v); }
 
+    /* SSL/TLS parameters */
+    v = argus_conn_params_get(&params, "SSL");
+    if (!v) v = argus_conn_params_get(&params, "USESSL");
+    if (v) {
+        dbc->ssl_enabled = (strcmp(v, "1") == 0 || strcasecmp(v, "true") == 0 ||
+                            strcasecmp(v, "yes") == 0);
+    }
+
+    v = argus_conn_params_get(&params, "SSLCERTFILE");
+    if (v) { free(dbc->ssl_cert_file); dbc->ssl_cert_file = strdup(v); }
+
+    v = argus_conn_params_get(&params, "SSLKEYFILE");
+    if (v) { free(dbc->ssl_key_file); dbc->ssl_key_file = strdup(v); }
+
+    v = argus_conn_params_get(&params, "SSLCAFILE");
+    if (!v) v = argus_conn_params_get(&params, "TRUSTEDCERTS");
+    if (v) { free(dbc->ssl_ca_file); dbc->ssl_ca_file = strdup(v); }
+
+    v = argus_conn_params_get(&params, "SSLVERIFY");
+    if (v) {
+        dbc->ssl_verify = (strcmp(v, "1") == 0 || strcasecmp(v, "true") == 0 ||
+                           strcasecmp(v, "yes") == 0);
+    }
+
+    /* Logging parameters */
+    v = argus_conn_params_get(&params, "LOGLEVEL");
+    if (v) dbc->log_level = atoi(v);
+
+    v = argus_conn_params_get(&params, "LOGFILE");
+    if (v) { free(dbc->log_file); dbc->log_file = strdup(v); }
+
+    /* Additional connection parameters */
+    v = argus_conn_params_get(&params, "APPLICATIONNAME");
+    if (!v) v = argus_conn_params_get(&params, "APPNAME");
+    if (v) { free(dbc->app_name); dbc->app_name = strdup(v); }
+
+    v = argus_conn_params_get(&params, "FETCHBUFFERSIZE");
+    if (v) dbc->fetch_buffer_size = atoi(v);
+
+    v = argus_conn_params_get(&params, "SOCKETTIMEOUT");
+    if (v) dbc->socket_timeout_sec = atoi(v);
+
+    v = argus_conn_params_get(&params, "CONNECTTIMEOUT");
+    if (v) dbc->connect_timeout_sec = atoi(v);
+
+    v = argus_conn_params_get(&params, "QUERYTIMEOUT");
+    if (v) dbc->query_timeout_sec = atoi(v);
+
+    v = argus_conn_params_get(&params, "RETRYCOUNT");
+    if (v) dbc->retry_count = atoi(v);
+
+    v = argus_conn_params_get(&params, "RETRYDELAY");
+    if (v) dbc->retry_delay_sec = atoi(v);
+
+    v = argus_conn_params_get(&params, "HTTPPATH");
+    if (v) { free(dbc->http_path); dbc->http_path = strdup(v); }
+
+    /* Apply logging settings if specified */
+    if (dbc->log_level >= 0) {
+        argus_log_set_level(dbc->log_level);
+    }
+    if (dbc->log_file) {
+        argus_log_set_file(dbc->log_file);
+    }
+
     argus_conn_params_free(&params);
 
     /* Connect */
@@ -198,6 +300,9 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC ConnectionHandle)
                                "[Argus] Not connected", 0);
     }
 
+    ARGUS_LOG_INFO("Disconnecting from %s backend",
+                   dbc->backend ? dbc->backend->name : "unknown");
+
     if (dbc->backend && dbc->backend_conn) {
         dbc->backend->disconnect(dbc->backend_conn);
     }
@@ -206,6 +311,7 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC ConnectionHandle)
     dbc->backend      = NULL;
     dbc->connected    = false;
 
+    ARGUS_LOG_DEBUG("Disconnected successfully");
     return SQL_SUCCESS;
 }
 

@@ -7,6 +7,12 @@
 #include <thrift/c_glib/transport/thrift_buffered_transport.h>
 #include <thrift/c_glib/protocol/thrift_binary_protocol.h>
 
+/* SSL support (requires OpenSSL) */
+#if __has_include(<openssl/ssl.h>)
+#include <thrift/c_glib/transport/thrift_ssl_socket.h>
+#define ARGUS_HAS_THRIFT_SSL 1
+#endif
+
 #include "argus/types.h"
 #include "argus/backend.h"
 
@@ -41,5 +47,8 @@ SQLSMALLINT hive_type_decimal_digits(SQLSMALLINT sql_type);
 /* Helper to create a new operation */
 hive_operation_t *hive_operation_new(void);
 void hive_operation_free(hive_operation_t *op);
+
+/* Query operations */
+int hive_cancel(argus_backend_conn_t conn, argus_backend_op_t op);
 
 #endif /* ARGUS_HIVE_INTERNAL_H */

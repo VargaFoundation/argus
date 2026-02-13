@@ -110,6 +110,30 @@ int trino_get_operation_status(argus_backend_conn_t raw_conn,
     return 0;
 }
 
+/* ── Cancel a running operation ──────────────────────────────── */
+
+int trino_cancel(argus_backend_conn_t raw_conn,
+                 argus_backend_op_t raw_op)
+{
+    trino_conn_t *conn = (trino_conn_t *)raw_conn;
+    trino_operation_t *op = (trino_operation_t *)raw_op;
+    if (!conn || !op) return -1;
+
+    /* Send DELETE request to cancel the query */
+    if (op->query_id) {
+        char cancel_url[1024];
+        snprintf(cancel_url, sizeof(cancel_url),
+                 "%s/v1/query/%s", conn->base_url, op->query_id);
+        int rc = trino_http_delete(conn, cancel_url);
+        if (rc == 0) {
+            op->finished = true;
+        }
+        return rc;
+    }
+
+    return -1;  /* No query ID to cancel */
+}
+
 /* ── Close an operation ───────────────────────────────────────── */
 
 void trino_close_operation(argus_backend_conn_t raw_conn,
@@ -121,10 +145,7 @@ void trino_close_operation(argus_backend_conn_t raw_conn,
 
     /* Cancel the query if it's still running */
     if (op->query_id && !op->finished) {
-        char cancel_url[1024];
-        snprintf(cancel_url, sizeof(cancel_url),
-                 "%s/v1/query/%s", conn->base_url, op->query_id);
-        trino_http_delete(conn, cancel_url);
+        trino_cancel(raw_conn, raw_op);
     }
 
     trino_operation_free(op);

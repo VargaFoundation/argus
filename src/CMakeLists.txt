@@ -11,6 +11,7 @@ set(ARGUS_SOURCES
     odbc/diag.c
     odbc/attr.c
     odbc/util.c
+    odbc/log.c
     backend/backend.c
 )
 
@@ -18,17 +19,20 @@ set(ARGUS_PRIVATE_INCLUDE_DIRS
     ${ODBC_INCLUDE_DIRS}
     ${GLIB2_INCLUDE_DIRS}
     ${GOBJECT2_INCLUDE_DIRS}
+    ${GIO2_INCLUDE_DIRS}
 )
 
 set(ARGUS_LINK_LIBS
     ${ODBC_LIBRARIES}
     ${GLIB2_LIBRARIES}
     ${GOBJECT2_LIBRARIES}
+    ${GIO2_LIBRARIES}
 )
 
 set(ARGUS_LINK_DIRS
     ${GLIB2_LIBRARY_DIRS}
     ${GOBJECT2_LIBRARY_DIRS}
+    ${GIO2_LIBRARY_DIRS}
 )
 
 set(ARGUS_COMPILE_DEFS ARGUS_BUILD_DLL)

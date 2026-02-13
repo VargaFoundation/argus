@@ -7,6 +7,12 @@
 #include <thrift/c_glib/transport/thrift_buffered_transport.h>
 #include <thrift/c_glib/protocol/thrift_binary_protocol.h>
 
+/* SSL support (requires OpenSSL) */
+#if __has_include(<openssl/ssl.h>)
+#include <thrift/c_glib/transport/thrift_ssl_socket.h>
+#define ARGUS_HAS_THRIFT_SSL 1
+#endif
+
 #include "argus/types.h"
 #include "argus/backend.h"
 
@@ -41,5 +47,8 @@ SQLSMALLINT impala_type_decimal_digits(SQLSMALLINT sql_type);
 /* Helper to create/free operations */
 impala_operation_t *impala_operation_new(void);
 void impala_operation_free(impala_operation_t *op);
+
+/* Query operations */
+int impala_cancel(argus_backend_conn_t conn, argus_backend_op_t op);
 
 #endif /* ARGUS_IMPALA_INTERNAL_H */

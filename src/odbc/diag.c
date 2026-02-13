@@ -1,6 +1,7 @@
 #include "argus/error.h"
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
+#include "argus/log.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -78,6 +79,10 @@ SQLRETURN argus_set_error(argus_diag_t *diag,
     argus_diag_clear(diag);
     argus_diag_push(diag, sqlstate, message, native_error);
     diag->return_code = SQL_ERROR;
+    ARGUS_LOG_ERROR("SQLSTATE=%s, native=%d, msg=%s",
+                    sqlstate ? sqlstate : "(null)",
+                    (int)native_error,
+                    message ? message : "(null)");
     return SQL_ERROR;
 }
 

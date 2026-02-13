@@ -22,6 +22,9 @@ int trino_get_operation_status(argus_backend_conn_t conn,
 void trino_close_operation(argus_backend_conn_t conn,
                             argus_backend_op_t op);
 
+int trino_cancel(argus_backend_conn_t conn,
+                 argus_backend_op_t op);
+
 int trino_fetch_results(argus_backend_conn_t conn,
                         argus_backend_op_t op,
                         int max_rows,
@@ -63,6 +66,7 @@ static const argus_backend_t trino_backend = {
     .execute               = trino_execute,
     .get_operation_status  = trino_get_operation_status,
     .close_operation       = trino_close_operation,
+    .cancel                = trino_cancel,
     .fetch_results         = trino_fetch_results,
     .get_result_metadata   = trino_get_result_metadata,
     .get_tables            = trino_get_tables,

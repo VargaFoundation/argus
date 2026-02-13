@@ -25,6 +25,7 @@ find_package(ODBC REQUIRED)
 
 pkg_check_modules(GLIB2 REQUIRED glib-2.0>=2.56)
 pkg_check_modules(GOBJECT2 REQUIRED gobject-2.0>=2.56)
+pkg_check_modules(GIO2 REQUIRED gio-2.0>=2.56)
 
 # Optional: Hive/Impala backend dependencies (Thrift C GLib)
 pkg_check_modules(THRIFT_C_GLIB thrift_c_glib>=0.16)

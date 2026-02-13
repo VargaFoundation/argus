@@ -1,9 +1,11 @@
 #include "impala_internal.h"
 #include "argus/handle.h"
 #include "argus/error.h"
+#include "argus/log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <gio/gio.h>
 
 /* ── Connect to Impala via Thrift (TCLIService) ──────────────── */
 
@@ -23,12 +25,34 @@ int impala_connect(argus_dbc_t *dbc,
         return -1;
     }
 
-    /* Create Thrift transport stack */
-    conn->socket = (ThriftSocket *)g_object_new(
-        THRIFT_TYPE_SOCKET,
-        "hostname", host,
-        "port", port,
-        NULL);
+    /* Create Thrift transport stack (with SSL support if available) */
+#ifdef ARGUS_HAS_THRIFT_SSL
+    if (dbc->ssl_enabled) {
+        ARGUS_LOG_DEBUG("Impala: Creating SSL socket to %s:%d", host, port);
+        conn->socket = (ThriftSocket *)g_object_new(
+            THRIFT_TYPE_SSL_SOCKET,
+            "hostname", host,
+            "port", port,
+            NULL);
+
+        /* Configure SSL certificate if provided */
+        if (dbc->ssl_ca_file) {
+            ThriftSSLSocket *ssl_socket = THRIFT_SSL_SOCKET(conn->socket);
+            thrift_ssl_socket_set_ca_certificate(ssl_socket, dbc->ssl_ca_file);
+            ARGUS_LOG_DEBUG("Impala: SSL CA cert: %s", dbc->ssl_ca_file);
+        }
+    } else
+#endif
+    {
+        if (dbc->ssl_enabled) {
+            ARGUS_LOG_WARN("Impala: SSL requested but not available (OpenSSL not installed)");
+        }
+        conn->socket = (ThriftSocket *)g_object_new(
+            THRIFT_TYPE_SOCKET,
+            "hostname", host,
+            "port", port,
+            NULL);
+    }
 
     conn->transport = (ThriftTransport *)g_object_new(
         THRIFT_TYPE_BUFFERED_TRANSPORT,
@@ -56,6 +80,17 @@ int impala_connect(argus_dbc_t *dbc,
         argus_set_error(&dbc->diag, "08001", msg, 0);
         if (error) g_error_free(error);
         goto fail;
+    }
+
+    /* Set socket timeout if specified */
+    if (dbc->socket_timeout_sec > 0) {
+        GSocket *gsocket = NULL;
+        g_object_get(conn->socket, "socket", &gsocket, NULL);
+        if (gsocket) {
+            g_socket_set_timeout(gsocket, (guint)dbc->socket_timeout_sec);
+            ARGUS_LOG_DEBUG("Impala: Set socket timeout to %d seconds", dbc->socket_timeout_sec);
+            g_object_unref(gsocket);
+        }
     }
 
     /* Open an Impala session with protocol V6 */

@@ -73,8 +73,22 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_CATALOG_NAME:
         return set_string_info(dbc->database ? dbc->database : "default",
                                InfoValue, BufferLength, StringLength);
-    case SQL_DBMS_NAME:
-        return set_string_info("Apache Hive", InfoValue, BufferLength, StringLength);
+    case SQL_DBMS_NAME: {
+        /* Return backend-specific name */
+        const char *dbms_name = "Unknown";
+        if (dbc->backend) {
+            if (strcmp(dbc->backend->name, "hive") == 0) {
+                dbms_name = "Apache Hive";
+            } else if (strcmp(dbc->backend->name, "impala") == 0) {
+                dbms_name = "Apache Impala";
+            } else if (strcmp(dbc->backend->name, "trino") == 0) {
+                dbms_name = "Trino";
+            } else {
+                dbms_name = dbc->backend->name;
+            }
+        }
+        return set_string_info(dbms_name, InfoValue, BufferLength, StringLength);
+    }
     case SQL_DBMS_VER:
         return set_string_info("04.00.0000", InfoValue, BufferLength, StringLength);
 

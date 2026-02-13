@@ -48,6 +48,25 @@ struct argus_dbc {
     char        *database;
     char        *auth_mechanism; /* "NOSASL" or "PLAIN" */
     char        *backend_name;  /* "hive", "impala", etc. */
+
+    /* SSL/TLS settings */
+    bool         ssl_enabled;
+    char        *ssl_cert_file;
+    char        *ssl_key_file;
+    char        *ssl_ca_file;
+    bool         ssl_verify;
+
+    /* Additional connection parameters */
+    char        *app_name;
+    int          fetch_buffer_size;
+    int          retry_count;
+    int          retry_delay_sec;
+    int          socket_timeout_sec;
+    int          connect_timeout_sec;
+    int          query_timeout_sec;
+    char        *http_path;
+    int          log_level;
+    char        *log_file;
 };
 
 /* Statement handle */
