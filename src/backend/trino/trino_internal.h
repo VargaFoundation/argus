@@ -10,11 +10,22 @@
 /* Trino connection state */
 typedef struct trino_conn {
     CURL               *curl;
-    char               *base_url;       /* e.g. "http://host:port" */
+    char               *base_url;       /* e.g. "http://host:port" or "https://..." */
     char               *user;
     char               *catalog;
     char               *schema;
     struct curl_slist   *default_headers;
+
+    /* SSL/TLS settings (from DBC) */
+    bool                ssl_enabled;
+    char               *ssl_cert_file;
+    char               *ssl_key_file;
+    char               *ssl_ca_file;
+    bool                ssl_verify;
+
+    /* Timeout settings */
+    int                 connect_timeout_sec;
+    int                 query_timeout_sec;
 } trino_conn_t;
 
 /* Trino operation state */
@@ -54,6 +65,9 @@ int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
 int trino_http_get(trino_conn_t *conn, const char *url,
                    trino_response_t *resp);
 int trino_http_delete(trino_conn_t *conn, const char *url);
+
+/* Query operations */
+int trino_cancel(argus_backend_conn_t conn, argus_backend_op_t op);
 
 /* Parse column metadata from Trino JSON response */
 int trino_parse_columns(JsonNode *columns_node,

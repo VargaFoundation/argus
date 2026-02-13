@@ -22,6 +22,9 @@ int impala_get_operation_status(argus_backend_conn_t conn,
 void impala_close_operation(argus_backend_conn_t conn,
                              argus_backend_op_t op);
 
+int impala_cancel(argus_backend_conn_t conn,
+                  argus_backend_op_t op);
+
 int impala_fetch_results(argus_backend_conn_t conn,
                          argus_backend_op_t op,
                          int max_rows,
@@ -63,6 +66,7 @@ static const argus_backend_t impala_backend = {
     .execute               = impala_execute,
     .get_operation_status  = impala_get_operation_status,
     .close_operation       = impala_close_operation,
+    .cancel                = impala_cancel,
     .fetch_results         = impala_fetch_results,
     .get_result_metadata   = impala_get_result_metadata,
     .get_tables            = impala_get_tables,

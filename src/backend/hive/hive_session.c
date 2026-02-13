@@ -1,9 +1,11 @@
 #include "hive_internal.h"
 #include "argus/handle.h"
 #include "argus/error.h"
+#include "argus/log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <gio/gio.h>
 
 /* ── Connect to HiveServer2 via Thrift ───────────────────────── */
 
@@ -23,12 +25,34 @@ int hive_connect(argus_dbc_t *dbc,
         return -1;
     }
 
-    /* Create Thrift transport stack */
-    conn->socket = (ThriftSocket *)g_object_new(
-        THRIFT_TYPE_SOCKET,
-        "hostname", host,
-        "port", port,
-        NULL);
+    /* Create Thrift transport stack (with SSL support if available) */
+#ifdef ARGUS_HAS_THRIFT_SSL
+    if (dbc->ssl_enabled) {
+        ARGUS_LOG_DEBUG("Hive: Creating SSL socket to %s:%d", host, port);
+        conn->socket = (ThriftSocket *)g_object_new(
+            THRIFT_TYPE_SSL_SOCKET,
+            "hostname", host,
+            "port", port,
+            NULL);
+
+        /* Configure SSL certificate if provided */
+        if (dbc->ssl_ca_file) {
+            ThriftSSLSocket *ssl_socket = THRIFT_SSL_SOCKET(conn->socket);
+            thrift_ssl_socket_set_ca_certificate(ssl_socket, dbc->ssl_ca_file);
+            ARGUS_LOG_DEBUG("Hive: SSL CA cert: %s", dbc->ssl_ca_file);
+        }
+    } else
+#endif
+    {
+        if (dbc->ssl_enabled) {
+            ARGUS_LOG_WARN("Hive: SSL requested but not available (OpenSSL not installed)");
+        }
+        conn->socket = (ThriftSocket *)g_object_new(
+            THRIFT_TYPE_SOCKET,
+            "hostname", host,
+            "port", port,
+            NULL);
+    }
 
     conn->transport = (ThriftTransport *)g_object_new(
         THRIFT_TYPE_BUFFERED_TRANSPORT,
@@ -58,6 +82,17 @@ int hive_connect(argus_dbc_t *dbc,
         goto fail;
     }
 
+    /* Set socket timeout if specified */
+    if (dbc->socket_timeout_sec > 0) {
+        GSocket *gsocket = NULL;
+        g_object_get(conn->socket, "socket", &gsocket, NULL);
+        if (gsocket) {
+            g_socket_set_timeout(gsocket, (guint)dbc->socket_timeout_sec);
+            ARGUS_LOG_DEBUG("Hive: Set socket timeout to %d seconds", dbc->socket_timeout_sec);
+            g_object_unref(gsocket);
+        }
+    }
+
     /* Open a Hive session */
     TOpenSessionReq *open_req = g_object_new(TYPE_T_OPEN_SESSION_REQ, NULL);
     TOpenSessionResp *open_resp = g_object_new(TYPE_T_OPEN_SESSION_RESP, NULL);
@@ -75,13 +110,24 @@ int hive_connect(argus_dbc_t *dbc,
                      NULL);
     }
 
-    /* Set initial database via configuration */
-    if (database && *database) {
+    /* Set initial database and app name via configuration */
+    if ((database && *database) || (dbc->app_name && dbc->app_name[0])) {
         GHashTable *config = g_hash_table_new_full(
             g_str_hash, g_str_equal, g_free, g_free);
-        g_hash_table_insert(config,
-                            g_strdup("use:database"),
-                            g_strdup(database));
+
+        if (database && *database) {
+            g_hash_table_insert(config,
+                                g_strdup("use:database"),
+                                g_strdup(database));
+        }
+
+        if (dbc->app_name && dbc->app_name[0]) {
+            g_hash_table_insert(config,
+                                g_strdup("hive.query.source"),
+                                g_strdup(dbc->app_name));
+            ARGUS_LOG_DEBUG("Hive: Set application name to %s", dbc->app_name);
+        }
+
         g_object_set(open_req, "configuration", config, NULL);
         /* config ownership transferred to open_req */
     }

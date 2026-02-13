@@ -35,6 +35,19 @@ SQLRETURN argus_alloc_dbc(argus_env_t *env, argus_dbc_t **out)
     dbc->autocommit         = SQL_AUTOCOMMIT_ON;
     argus_diag_clear(&dbc->diag);
 
+    /* Initialize SSL/TLS defaults */
+    dbc->ssl_enabled        = false;
+    dbc->ssl_verify         = true;  /* Verify SSL certs by default */
+
+    /* Initialize additional connection parameters */
+    dbc->fetch_buffer_size  = 0;     /* 0 means use backend default */
+    dbc->retry_count        = 0;     /* No retries by default */
+    dbc->retry_delay_sec    = 2;     /* 2 second delay between retries */
+    dbc->socket_timeout_sec = 0;     /* 0 means no timeout */
+    dbc->connect_timeout_sec = 0;
+    dbc->query_timeout_sec  = 0;
+    dbc->log_level          = -1;    /* -1 means not set (use global) */
+
     *out = dbc;
     return SQL_SUCCESS;
 }
@@ -91,6 +104,17 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     free(dbc->auth_mechanism);
     free(dbc->backend_name);
     free(dbc->current_catalog);
+
+    /* Free SSL/TLS fields */
+    free(dbc->ssl_cert_file);
+    free(dbc->ssl_key_file);
+    free(dbc->ssl_ca_file);
+
+    /* Free additional connection parameters */
+    free(dbc->app_name);
+    free(dbc->http_path);
+    free(dbc->log_file);
+
     free(dbc);
     return SQL_SUCCESS;
 }

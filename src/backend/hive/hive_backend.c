@@ -22,6 +22,9 @@ int hive_get_operation_status(argus_backend_conn_t conn,
 void hive_close_operation(argus_backend_conn_t conn,
                            argus_backend_op_t op);
 
+int hive_cancel(argus_backend_conn_t conn,
+                argus_backend_op_t op);
+
 int hive_fetch_results(argus_backend_conn_t conn,
                        argus_backend_op_t op,
                        int max_rows,
@@ -63,6 +66,7 @@ static const argus_backend_t hive_backend = {
     .execute               = hive_execute,
     .get_operation_status  = hive_get_operation_status,
     .close_operation       = hive_close_operation,
+    .cancel                = hive_cancel,
     .fetch_results         = hive_fetch_results,
     .get_result_metadata   = hive_get_result_metadata,
     .get_tables            = hive_get_tables,

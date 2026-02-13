@@ -1,5 +1,6 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
+#include "argus/log.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -27,9 +28,17 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
     stmt->row_count       = -1;
     argus_row_cache_clear(&stmt->row_cache);
 
+    /* Log query (truncate if very long) */
+    if (strlen(query) > 100) {
+        ARGUS_LOG_DEBUG("Executing query: %.100s...", query);
+    } else {
+        ARGUS_LOG_DEBUG("Executing query: %s", query);
+    }
+
     /* Execute via backend */
     int rc = dbc->backend->execute(dbc->backend_conn, query, &stmt->op);
     if (rc != 0) {
+        ARGUS_LOG_ERROR("Query execution failed: rc=%d, query=%.100s", rc, query);
         if (stmt->diag.count == 0) {
             argus_set_error(&stmt->diag, "HY000",
                             "[Argus] Backend execution failed", 0);
@@ -38,6 +47,7 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
     }
 
     stmt->executed = true;
+    ARGUS_LOG_DEBUG("Query executed successfully");
 
     /* Try to get result metadata */
     if (dbc->backend->get_result_metadata) {
@@ -48,6 +58,7 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
         if (rc == 0 && ncols > 0) {
             stmt->num_cols = ncols;
             stmt->metadata_fetched = true;
+            ARGUS_LOG_TRACE("Retrieved metadata: %d columns", ncols);
         }
     }
 
@@ -183,14 +194,38 @@ SQLRETURN SQL_API SQLNativeSql(
     return SQL_SUCCESS;
 }
 
-/* ── ODBC API: SQLCancel (stub) ──────────────────────────────── */
+/* ── ODBC API: SQLCancel ─────────────────────────────────────── */
 
 SQLRETURN SQL_API SQLCancel(SQLHSTMT StatementHandle)
 {
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
-    /* Cancel not supported yet - just return success */
+    argus_diag_clear(&stmt->diag);
+
+    /* Check if there's an active operation to cancel */
+    if (!stmt->op || !stmt->executed) {
+        /* Nothing to cancel */
+        return SQL_SUCCESS;
+    }
+
+    argus_dbc_t *dbc = stmt->dbc;
+    if (!dbc || !dbc->backend || !dbc->backend->cancel) {
+        return argus_set_error(&stmt->diag, "HYC00",
+                               "[Argus] Cancel not supported by backend", 0);
+    }
+
+    ARGUS_LOG_INFO("Cancelling statement operation");
+
+    /* Call backend cancel function */
+    int rc = dbc->backend->cancel(dbc->backend_conn, stmt->op);
+    if (rc != 0) {
+        ARGUS_LOG_ERROR("Cancel operation failed: rc=%d", rc);
+        return argus_set_error(&stmt->diag, "HY008",
+                               "[Argus] Operation cancelled", 0);
+    }
+
+    ARGUS_LOG_DEBUG("Operation cancelled successfully");
     return SQL_SUCCESS;
 }
 

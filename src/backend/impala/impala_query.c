@@ -126,6 +126,39 @@ int impala_get_operation_status(argus_backend_conn_t raw_conn,
     return 0;
 }
 
+/* ── Cancel a running operation ──────────────────────────────── */
+
+int impala_cancel(argus_backend_conn_t raw_conn,
+                  argus_backend_op_t raw_op)
+{
+    impala_conn_t *conn = (impala_conn_t *)raw_conn;
+    impala_operation_t *op = (impala_operation_t *)raw_op;
+    if (!conn || !op || !op->op_handle) return -1;
+
+    GError *error = NULL;
+
+    TCancelOperationReq *req = g_object_new(
+        TYPE_T_CANCEL_OPERATION_REQ, NULL);
+    g_object_set(req, "operationHandle", op->op_handle, NULL);
+
+    TCancelOperationResp *resp = g_object_new(
+        TYPE_T_CANCEL_OPERATION_RESP, NULL);
+
+    gboolean ok = t_c_l_i_service_client_cancel_operation(
+        conn->client, &resp, req, &error);
+
+    if (!ok || !resp) {
+        if (error) g_error_free(error);
+        g_object_unref(req);
+        if (resp) g_object_unref(resp);
+        return -1;
+    }
+
+    g_object_unref(req);
+    g_object_unref(resp);
+    return 0;
+}
+
 /* ── Close an operation ───────────────────────────────────────── */
 
 void impala_close_operation(argus_backend_conn_t raw_conn,

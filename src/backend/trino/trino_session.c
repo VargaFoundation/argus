@@ -1,9 +1,44 @@
 #include "trino_internal.h"
 #include "argus/handle.h"
 #include "argus/error.h"
+#include "argus/log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+/* ── Helper: Apply SSL and timeout settings to curl ─────────────── */
+
+static void trino_apply_curl_settings(trino_conn_t *conn, CURL *curl)
+{
+    /* SSL/TLS settings */
+    if (conn->ssl_enabled) {
+        if (conn->ssl_verify) {
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+        } else {
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+        }
+
+        if (conn->ssl_cert_file) {
+            curl_easy_setopt(curl, CURLOPT_SSLCERT, conn->ssl_cert_file);
+        }
+        if (conn->ssl_key_file) {
+            curl_easy_setopt(curl, CURLOPT_SSLKEY, conn->ssl_key_file);
+        }
+        if (conn->ssl_ca_file) {
+            curl_easy_setopt(curl, CURLOPT_CAINFO, conn->ssl_ca_file);
+        }
+    }
+
+    /* Timeout settings */
+    if (conn->connect_timeout_sec > 0) {
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, (long)conn->connect_timeout_sec);
+    }
+    if (conn->query_timeout_sec > 0) {
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)conn->query_timeout_sec);
+    }
+}
 
 /* ── CURL write callback ─────────────────────────────────────── */
 
@@ -32,6 +67,7 @@ int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
     CURL *curl = conn->curl;
 
     curl_easy_reset(curl);
+    trino_apply_curl_settings(conn, curl);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
@@ -62,6 +98,7 @@ int trino_http_get(trino_conn_t *conn, const char *url,
     CURL *curl = conn->curl;
 
     curl_easy_reset(curl);
+    trino_apply_curl_settings(conn, curl);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
@@ -90,6 +127,7 @@ int trino_http_delete(trino_conn_t *conn, const char *url)
     CURL *curl = conn->curl;
 
     curl_easy_reset(curl);
+    trino_apply_curl_settings(conn, curl);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
@@ -116,10 +154,24 @@ int trino_connect(argus_dbc_t *dbc,
         return -1;
     }
 
-    /* Build base URL */
+    /* Copy SSL/TLS settings from DBC */
+    conn->ssl_enabled = dbc->ssl_enabled;
+    conn->ssl_verify = dbc->ssl_verify;
+    if (dbc->ssl_cert_file) conn->ssl_cert_file = strdup(dbc->ssl_cert_file);
+    if (dbc->ssl_key_file) conn->ssl_key_file = strdup(dbc->ssl_key_file);
+    if (dbc->ssl_ca_file) conn->ssl_ca_file = strdup(dbc->ssl_ca_file);
+
+    /* Copy timeout settings */
+    conn->connect_timeout_sec = dbc->connect_timeout_sec;
+    conn->query_timeout_sec = dbc->query_timeout_sec;
+
+    /* Build base URL (use https:// if SSL enabled) */
     char url_buf[512];
-    snprintf(url_buf, sizeof(url_buf), "http://%s:%d", host, port);
+    const char *scheme = conn->ssl_enabled ? "https" : "http";
+    snprintf(url_buf, sizeof(url_buf), "%s://%s:%d", scheme, host, port);
     conn->base_url = strdup(url_buf);
+
+    ARGUS_LOG_DEBUG("Trino base URL: %s (SSL=%d)", conn->base_url, conn->ssl_enabled);
 
     conn->user = strdup(username && *username ? username : "argus");
     conn->catalog = strdup(database && *database ? database : "hive");
@@ -149,6 +201,13 @@ int trino_connect(argus_dbc_t *dbc,
 
     snprintf(header_buf, sizeof(header_buf), "X-Trino-Schema: %s", conn->schema);
     conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+
+    /* Add application name if specified */
+    if (dbc->app_name && dbc->app_name[0]) {
+        snprintf(header_buf, sizeof(header_buf), "X-Trino-Source: %s", dbc->app_name);
+        conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+        ARGUS_LOG_DEBUG("Trino application name: %s", dbc->app_name);
+    }
 
     /* Verify connectivity with a lightweight request */
     trino_response_t resp = {0};
@@ -209,5 +268,11 @@ void trino_disconnect(argus_backend_conn_t raw_conn)
     free(conn->user);
     free(conn->catalog);
     free(conn->schema);
+
+    /* Free SSL/TLS fields */
+    free(conn->ssl_cert_file);
+    free(conn->ssl_key_file);
+    free(conn->ssl_ca_file);
+
     free(conn);
 }

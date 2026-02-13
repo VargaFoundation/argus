@@ -22,6 +22,14 @@ static argus_dbc_t *create_test_dbc(void)
     dbc->host = strdup("testhost");
     dbc->database = strdup("testdb");
     dbc->username = strdup("testuser");
+    dbc->backend_name = strdup("hive");
+
+    /* Initialize backends and set backend for DBMS name test */
+    extern void argus_backends_init(void);
+    extern const argus_backend_t *argus_backend_find(const char *name);
+    argus_backends_init();
+    dbc->backend = argus_backend_find("hive");
+
     return dbc;
 }
 
