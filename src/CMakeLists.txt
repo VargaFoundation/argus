@@ -77,6 +77,7 @@ if(ARGUS_BUILD_TRINO)
         backend/trino/trino_fetch.c
         backend/trino/trino_metadata.c
         backend/trino/trino_types.c
+        backend/trino/trino_spooling.c
     )
     list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
         ${CMAKE_CURRENT_SOURCE_DIR}/backend/trino

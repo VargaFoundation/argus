@@ -65,6 +65,7 @@ struct argus_dbc {
     int          connect_timeout_sec;
     int          query_timeout_sec;
     char        *http_path;
+    int          trino_protocol_version;  /* 1 = v1 (default), 2 = v2 spooling */
     int          log_level;
     char        *log_file;
 };
