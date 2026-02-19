@@ -165,6 +165,10 @@ int trino_connect(argus_dbc_t *dbc,
     conn->connect_timeout_sec = dbc->connect_timeout_sec;
     conn->query_timeout_sec = dbc->query_timeout_sec;
 
+    /* Copy protocol version (default to v1 if not set) */
+    conn->protocol_version = dbc->trino_protocol_version > 0
+                             ? dbc->trino_protocol_version : 1;
+
     /* Build base URL (use https:// if SSL enabled) */
     char url_buf[512];
     const char *scheme = conn->ssl_enabled ? "https" : "http";
@@ -207,6 +211,14 @@ int trino_connect(argus_dbc_t *dbc,
         snprintf(header_buf, sizeof(header_buf), "X-Trino-Source: %s", dbc->app_name);
         conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
         ARGUS_LOG_DEBUG("Trino application name: %s", dbc->app_name);
+    }
+
+    /* Add v2 spooling capability header if protocol version is 2 */
+    if (conn->protocol_version == 2) {
+        conn->default_headers = curl_slist_append(
+            conn->default_headers,
+            "X-Trino-Client-Capabilities: CLIENT_OUTCOME_URI");
+        ARGUS_LOG_DEBUG("Trino v2 spooling protocol enabled");
     }
 
     /* Verify connectivity with a lightweight request */

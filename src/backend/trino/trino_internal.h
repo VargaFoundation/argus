@@ -26,6 +26,9 @@ typedef struct trino_conn {
     /* Timeout settings */
     int                 connect_timeout_sec;
     int                 query_timeout_sec;
+
+    /* Protocol version: 1 = v1, 2 = v2 spooling */
+    int                 protocol_version;
 } trino_conn_t;
 
 /* Trino operation state */
@@ -35,6 +38,7 @@ typedef struct trino_operation {
     bool                has_result_set;
     bool                metadata_fetched;
     bool                finished;
+    bool                spooling_active;  /* true if server responded with v2 data format */
 
     /* Cached column metadata */
     argus_column_desc_t *columns;
@@ -78,5 +82,19 @@ int trino_parse_columns(JsonNode *columns_node,
 int trino_parse_data(JsonNode *data_node,
                      argus_row_cache_t *cache,
                      int num_cols);
+
+/* v2 spooling: parse segments from data object */
+int trino_parse_spooled_data(trino_conn_t *conn, JsonObject *data_obj,
+                             argus_row_cache_t *cache, int num_cols);
+
+/* v2 spooling: fetch a spooled segment by URI */
+int trino_fetch_segment(trino_conn_t *conn, const char *uri,
+                        trino_response_t *resp);
+
+/* v2 spooling: acknowledge a spooled segment */
+void trino_ack_segment(trino_conn_t *conn, const char *ack_uri);
+
+/* Base64 decode helper */
+unsigned char *trino_base64_decode(const char *input, size_t *out_len);
 
 #endif /* ARGUS_TRINO_INTERNAL_H */

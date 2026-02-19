@@ -221,8 +221,17 @@ int trino_fetch_results(argus_backend_conn_t raw_conn,
         /* Parse data if present */
         if (json_object_has_member(obj, "data")) {
             JsonNode *data_node = json_object_get_member(obj, "data");
-            trino_parse_data(data_node, cache,
-                             op->num_cols > 0 ? op->num_cols : 1);
+            int ncols = op->num_cols > 0 ? op->num_cols : 1;
+
+            if (JSON_NODE_HOLDS_ARRAY(data_node)) {
+                /* v1 format: flat array of arrays */
+                trino_parse_data(data_node, cache, ncols);
+            } else if (JSON_NODE_HOLDS_OBJECT(data_node)) {
+                /* v2 format: spooled segments object */
+                JsonObject *data_obj = json_node_get_object(data_node);
+                op->spooling_active = true;
+                trino_parse_spooled_data(conn, data_obj, cache, ncols);
+            }
 
             if (!op->next_uri)
                 cache->exhausted = true;
