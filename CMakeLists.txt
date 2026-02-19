@@ -49,8 +49,29 @@ else()
     message(STATUS "Trino backend: DISABLED (install libcurl-dev and libjson-glib-dev to enable)")
 endif()
 
-if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO)
-    message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino).")
+# Optional: Phoenix backend dependencies (same as Trino: libcurl + json-glib)
+if(LIBCURL_FOUND AND JSON_GLIB_FOUND)
+    set(ARGUS_BUILD_PHOENIX ON)
+    message(STATUS "Phoenix backend: ENABLED (libcurl + json-glib found)")
+else()
+    set(ARGUS_BUILD_PHOENIX OFF)
+    message(STATUS "Phoenix backend: DISABLED (install libcurl-dev and libjson-glib-dev to enable)")
+endif()
+
+# Optional: Kudu backend dependencies (libkudu_client C++ library)
+find_library(KUDU_CLIENT_LIB kudu_client)
+find_path(KUDU_CLIENT_INCLUDE kudu/client/client.h)
+
+if(KUDU_CLIENT_LIB AND KUDU_CLIENT_INCLUDE)
+    set(ARGUS_BUILD_KUDU ON)
+    message(STATUS "Kudu backend: ENABLED (libkudu_client found)")
+else()
+    set(ARGUS_BUILD_KUDU OFF)
+    message(STATUS "Kudu backend: DISABLED (install libkudu-client-dev to enable)")
+endif()
+
+if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO AND NOT ARGUS_BUILD_PHOENIX AND NOT ARGUS_BUILD_KUDU)
+    message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino/Phoenix) or libkudu_client (for Kudu).")
 endif()
 
 # POSIX extensions needed for strdup/strndup in C11 mode
