@@ -94,6 +94,57 @@ if(ARGUS_BUILD_TRINO)
     list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_TRINO)
 endif()
 
+# Conditionally add Phoenix backend (requires libcurl + json-glib, same as Trino)
+if(ARGUS_BUILD_PHOENIX)
+    list(APPEND ARGUS_SOURCES
+        backend/phoenix/phoenix_backend.c
+        backend/phoenix/phoenix_session.c
+        backend/phoenix/phoenix_query.c
+        backend/phoenix/phoenix_fetch.c
+        backend/phoenix/phoenix_metadata.c
+        backend/phoenix/phoenix_types.c
+    )
+    list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend/phoenix
+        ${LIBCURL_INCLUDE_DIRS}
+        ${JSON_GLIB_INCLUDE_DIRS}
+    )
+    list(APPEND ARGUS_LINK_LIBS
+        ${LIBCURL_LIBRARIES}
+        ${JSON_GLIB_LIBRARIES}
+    )
+    list(APPEND ARGUS_LINK_DIRS
+        ${LIBCURL_LIBRARY_DIRS}
+        ${JSON_GLIB_LIBRARY_DIRS}
+    )
+    list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_PHOENIX)
+endif()
+
+# Conditionally add Kudu backend (requires libkudu_client C++ library)
+if(ARGUS_BUILD_KUDU)
+    enable_language(CXX)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+    list(APPEND ARGUS_SOURCES
+        backend/kudu/kudu_backend.c
+        backend/kudu/kudu_types.c
+        backend/kudu/kudu_sql_parser.c
+        backend/kudu/kudu_fetch.c
+        backend/kudu/kudu_session.cpp
+        backend/kudu/kudu_query.cpp
+        backend/kudu/kudu_metadata.cpp
+    )
+    list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend/kudu
+        ${KUDU_CLIENT_INCLUDE}
+    )
+    list(APPEND ARGUS_LINK_LIBS
+        ${KUDU_CLIENT_LIB}
+    )
+    list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_KUDU)
+endif()
+
 add_library(argus_odbc ${ARGUS_SOURCES})
 
 target_include_directories(argus_odbc

@@ -37,6 +37,15 @@ if(ARGUS_BUILD_TRINO)
     argus_add_unit_test(test_trino_types unit/test_trino_types.c)
 endif()
 
+if(ARGUS_BUILD_PHOENIX)
+    argus_add_unit_test(test_phoenix_types unit/test_phoenix_types.c)
+endif()
+
+if(ARGUS_BUILD_KUDU)
+    argus_add_unit_test(test_kudu_types unit/test_kudu_types.c)
+    argus_add_unit_test(test_kudu_sql_parser unit/test_kudu_sql_parser.c)
+endif()
+
 # Integration tests (optional)
 if(BUILD_INTEGRATION_TESTS)
     function(argus_add_integration_test name source)
