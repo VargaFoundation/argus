@@ -1,10 +1,12 @@
-name: CI
+name: Release
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   build-linux:
@@ -30,7 +32,7 @@ jobs:
             libjson-glib-dev
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -38,28 +40,24 @@ jobs:
       - name: Unit Tests
         run: cd build && ctest --output-on-failure -L unit
 
-      - name: Check shared library exports
-        run: |
-          nm -D build/src/libargus_odbc.so | grep ' T SQL' | head -20
-          echo "---"
-          echo "Total exported SQL functions:"
-          nm -D build/src/libargus_odbc.so | grep -c ' T SQL'
-
       - name: Package tar.gz
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p staging/argus-odbc/lib
           mkdir -p staging/argus-odbc/include/argus
           cp build/src/libargus_odbc.so staging/argus-odbc/lib/
           cp include/argus/*.h staging/argus-odbc/include/argus/
           cp scripts/install_dsn.sh staging/argus-odbc/
           chmod +x staging/argus-odbc/install_dsn.sh
-          tar -czf argus-odbc-linux-x64.tar.gz -C staging argus-odbc
+          cp LICENSE staging/argus-odbc/
+          cp README.md staging/argus-odbc/
+          tar -czf argus-odbc-${VERSION}-linux-x64.tar.gz -C staging argus-odbc
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: argus-odbc-linux
-          path: argus-odbc-linux-x64.tar.gz
+          name: release-linux
+          path: argus-odbc-*-linux-x64.tar.gz
 
   build-macos:
     runs-on: macos-latest
@@ -88,28 +86,25 @@ jobs:
       - name: Unit Tests
         run: cd build && ctest --output-on-failure -L unit
 
-      - name: Check shared library exports
-        run: |
-          nm -gU build/src/libargus_odbc.dylib | grep ' _SQL' | head -20
-          echo "---"
-          echo "Total exported SQL functions:"
-          nm -gU build/src/libargus_odbc.dylib | grep -c ' _SQL'
-
       - name: Package tar.gz
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCH="$(uname -m)"
           mkdir -p staging/argus-odbc/lib
           mkdir -p staging/argus-odbc/include/argus
           cp build/src/libargus_odbc.dylib staging/argus-odbc/lib/
           cp include/argus/*.h staging/argus-odbc/include/argus/
           cp scripts/install_dsn_macos.sh staging/argus-odbc/
           chmod +x staging/argus-odbc/install_dsn_macos.sh
-          tar -czf argus-odbc-macos-$(uname -m).tar.gz -C staging argus-odbc
+          cp LICENSE staging/argus-odbc/
+          cp README.md staging/argus-odbc/
+          tar -czf argus-odbc-${VERSION}-macos-${ARCH}.tar.gz -C staging argus-odbc
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: argus-odbc-macos
-          path: argus-odbc-macos-*.tar.gz
+          name: release-macos
+          path: argus-odbc-*-macos-*.tar.gz
 
   build-windows:
     runs-on: windows-latest
@@ -157,7 +152,6 @@ jobs:
         run: |
           mkdir -p installer/staging
           cp build/src/libargus_odbc.dll installer/staging/argus_odbc.dll
-          # Bundle runtime dependencies
           for dll in libcurl-4.dll libglib-2.0-0.dll libgobject-2.0-0.dll \
                      libjson-glib-1.0-0.dll libgio-2.0-0.dll libgmodule-2.0-0.dll \
                      libintl-8.dll libiconv-2.dll libffi-8.dll libz1.dll \
@@ -170,7 +164,6 @@ jobs:
               cp "$src" installer/staging/
             fi
           done
-          ls -la installer/staging/
 
       - name: Build NSIS installer
         run: |
@@ -188,8 +181,36 @@ jobs:
           & $signtool sign /f $certPath /p $env:CODESIGN_PASSWORD /fd SHA256 /tr http://timestamp.sectigo.com /td SHA256 "installer\staging\argus-odbc-installer.exe"
           Remove-Item $certPath
 
-      - name: Upload installer
+      - name: Rename installer with version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cp installer/staging/argus-odbc-installer.exe argus-odbc-${VERSION}-windows-x64-installer.exe
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: argus-odbc-installer
-          path: installer/staging/argus-odbc-installer.exe
+          name: release-windows
+          path: argus-odbc-*-windows-x64-installer.exe
+
+  release:
+    needs: [build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            artifacts/argus-odbc-*

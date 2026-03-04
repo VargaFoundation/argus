@@ -28,7 +28,28 @@ if(WIN32)
             "/ucrt64/lib"
             "/mingw64/lib"
     )
+elseif(APPLE)
+    # macOS: Homebrew installs unixODBC to different prefixes depending
+    # on architecture. Apple Silicon uses /opt/homebrew, Intel uses /usr/local.
+    find_path(ODBC_INCLUDE_DIR
+        NAMES sql.h sqlext.h
+        PATHS
+            /opt/homebrew/opt/unixodbc/include
+            /opt/homebrew/include
+            /usr/local/opt/unixodbc/include
+            /usr/local/include
+    )
+
+    find_library(ODBC_LIBRARY
+        NAMES odbc
+        PATHS
+            /opt/homebrew/opt/unixodbc/lib
+            /opt/homebrew/lib
+            /usr/local/opt/unixodbc/lib
+            /usr/local/lib
+    )
 else()
+    # Linux and other POSIX systems
     find_path(ODBC_INCLUDE_DIR
         NAMES sql.h sqlext.h
         PATHS
