@@ -27,6 +27,10 @@ RequestExecutionLevel admin
 Section "Argus ODBC Driver" SecDriver
     SectionIn RO
 
+    ; Force 64-bit registry view so the driver is visible to 64-bit
+    ; applications (PowerBI, Excel, odbcad32.exe, etc.)
+    SetRegView 64
+
     SetOutPath "$INSTDIR"
 
     ; Copy driver DLL and all bundled dependencies
@@ -36,20 +40,27 @@ Section "Argus ODBC Driver" SecDriver
     ; Store install directory
     WriteRegStr HKLM "Software\Argus ODBC Driver" "InstallDir" "$INSTDIR"
 
-    ; ── Register ODBC driver ──────────────────────────────────────
+    ; ── Register ODBC driver (64-bit registry) ────────────────────
     ; Driver registration in ODBCINST.INI registry keys
     WriteRegStr HKLM "SOFTWARE\ODBC\ODBCINST.INI\Argus ODBC Driver" \
         "Driver" "$INSTDIR\argus_odbc.dll"
     WriteRegStr HKLM "SOFTWARE\ODBC\ODBCINST.INI\Argus ODBC Driver" \
         "Setup" "$INSTDIR\argus_odbc.dll"
     WriteRegStr HKLM "SOFTWARE\ODBC\ODBCINST.INI\Argus ODBC Driver" \
-        "Description" "Argus ODBC Driver for Hive, Impala, and Trino"
+        "Description" "Argus ODBC Driver for Hive, Impala, Trino, Phoenix, and Kudu"
     WriteRegDWORD HKLM "SOFTWARE\ODBC\ODBCINST.INI\Argus ODBC Driver" \
         "UsageCount" 1
 
     ; Add to the installed drivers list
     WriteRegStr HKLM "SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers" \
         "Argus ODBC Driver" "Installed"
+
+    ; ── Start Menu shortcuts ──────────────────────────────────────
+    CreateDirectory "$SMPROGRAMS\Argus ODBC Driver"
+    CreateShortcut "$SMPROGRAMS\Argus ODBC Driver\ODBC Data Sources.lnk" \
+        "$WINDIR\System32\odbcad32.exe"
+    CreateShortcut "$SMPROGRAMS\Argus ODBC Driver\Uninstall.lnk" \
+        "$INSTDIR\uninstall.exe"
 
     ; ── Create uninstaller ────────────────────────────────────────
     WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -71,10 +82,18 @@ SectionEnd
 
 ; ── Uninstall Section ────────────────────────────────────────────
 Section "Uninstall"
+    ; Force 64-bit registry view for cleanup
+    SetRegView 64
+
     ; Remove ODBC driver registration
     DeleteRegKey HKLM "SOFTWARE\ODBC\ODBCINST.INI\Argus ODBC Driver"
     DeleteRegValue HKLM "SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers" \
         "Argus ODBC Driver"
+
+    ; Remove Start Menu shortcuts
+    Delete "$SMPROGRAMS\Argus ODBC Driver\ODBC Data Sources.lnk"
+    Delete "$SMPROGRAMS\Argus ODBC Driver\Uninstall.lnk"
+    RMDir "$SMPROGRAMS\Argus ODBC Driver"
 
     ; Remove files
     Delete "$INSTDIR\*.dll"
