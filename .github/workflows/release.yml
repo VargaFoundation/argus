@@ -183,7 +183,7 @@ jobs:
       - name: Build NSIS installer
         run: |
           cd installer/staging
-          makensis -NOCD ../argus-odbc.nsi
+          makensis -NOCD -DVERSION=${GITHUB_REF_NAME#v} ../argus-odbc.nsi
 
       - name: Sign installer
         if: env.SIGN_ENABLED != ''

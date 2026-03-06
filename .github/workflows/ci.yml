@@ -187,7 +187,8 @@ jobs:
       - name: Build NSIS installer
         run: |
           cd installer/staging
-          makensis -NOCD ../argus-odbc.nsi
+          VERSION=$(grep 'project(argus VERSION' ../../CMakeLists.txt | sed 's/.*VERSION \([^ )]*\).*/\1/')
+          makensis -NOCD -DVERSION=$VERSION ../argus-odbc.nsi
 
       - name: Sign installer
         if: ${{ vars.AZURE_SIGNING_ACCOUNT != '' }}
