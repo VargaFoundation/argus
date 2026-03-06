@@ -110,6 +110,9 @@ jobs:
     runs-on: windows-latest
     environment: main
 
+    env:
+      SIGN_ENABLED: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+
     defaults:
       run:
         shell: msys2 {0}
@@ -162,7 +165,7 @@ jobs:
           done
 
       - name: Sign driver DLL
-        if: ${{ secrets.AZURE_SIGNING_ACCOUNT != '' }}
+        if: env.SIGN_ENABLED != ''
         uses: azure/trusted-signing-action@v0.5.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -183,7 +186,7 @@ jobs:
           makensis -NOCD ../argus-odbc.nsi
 
       - name: Sign installer
-        if: ${{ secrets.AZURE_SIGNING_ACCOUNT != '' }}
+        if: env.SIGN_ENABLED != ''
         uses: azure/trusted-signing-action@v0.5.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
