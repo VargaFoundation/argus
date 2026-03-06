@@ -1,0 +1,30 @@
+#include <winresrc.h>
+
+VS_VERSION_INFO VERSIONINFO
+    FILEVERSION    @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+    PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+    FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+    FILEFLAGS      0x0L
+    FILEOS         VOS_NT_WINDOWS32
+    FILETYPE       VFT_DLL
+    FILESUBTYPE    VFT2_DRV_INSTALLABLE
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Varga Foundation"
+            VALUE "FileDescription",  "Argus ODBC Driver"
+            VALUE "FileVersion",      "@PROJECT_VERSION@"
+            VALUE "InternalName",     "argus_odbc"
+            VALUE "LegalCopyright",   "Copyright (C) Varga Foundation"
+            VALUE "OriginalFilename", "argus_odbc.dll"
+            VALUE "ProductName",      "Argus ODBC Driver"
+            VALUE "ProductVersion",   "@PROJECT_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0
+    END
+END

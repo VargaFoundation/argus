@@ -146,6 +146,16 @@ if(ARGUS_BUILD_KUDU)
     list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_KUDU)
 endif()
 
+# Windows version resource (embeds version/company info in the DLL)
+if(WIN32)
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/version.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/version.rc"
+        @ONLY
+    )
+    list(APPEND ARGUS_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/version.rc")
+endif()
+
 add_library(argus_odbc ${ARGUS_SOURCES})
 
 target_include_directories(argus_odbc

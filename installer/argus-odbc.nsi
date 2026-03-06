@@ -4,8 +4,15 @@
 !include "MUI2.nsh"
 !include "x64.nsh"
 
+; ── Version ──────────────────────────────────────────────────────
+; Pass -DVERSION=x.y.z on the makensis command line to set the version.
+; Falls back to "0.0.0" if not provided.
+!ifndef VERSION
+    !define VERSION "0.0.0"
+!endif
+
 ; ── General ──────────────────────────────────────────────────────
-Name "Argus ODBC Driver"
+Name "Argus ODBC Driver ${VERSION}"
 OutFile "argus-odbc-installer.exe"
 InstallDir "$PROGRAMFILES64\Argus ODBC Driver"
 InstallDirRegKey HKLM "Software\Argus ODBC Driver" "InstallDir"
@@ -48,6 +55,8 @@ Section "Argus ODBC Driver" SecDriver
         "Setup" "$INSTDIR\argus_odbc.dll"
     WriteRegStr HKLM "SOFTWARE\ODBC\ODBCINST.INI\Argus ODBC Driver" \
         "Description" "Argus ODBC Driver for Hive, Impala, Trino, Phoenix, and Kudu"
+    WriteRegStr HKLM "SOFTWARE\ODBC\ODBCINST.INI\Argus ODBC Driver" \
+        "CompanyName" "Varga Foundation"
     WriteRegDWORD HKLM "SOFTWARE\ODBC\ODBCINST.INI\Argus ODBC Driver" \
         "UsageCount" 1
 
@@ -73,7 +82,9 @@ Section "Argus ODBC Driver" SecDriver
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ArgusODBC" \
         "InstallLocation" "$INSTDIR"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ArgusODBC" \
-        "Publisher" "Argus Project"
+        "Publisher" "Varga Foundation"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ArgusODBC" \
+        "DisplayVersion" "${VERSION}"
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ArgusODBC" \
         "NoModify" 1
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ArgusODBC" \
