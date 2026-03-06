@@ -110,10 +110,6 @@ jobs:
     runs-on: windows-latest
     environment: main
 
-    env:
-      CODESIGN_CERT: ${{ secrets.CODESIGN_CERT }}
-      CODESIGN_PASSWORD: ${{ secrets.CODESIGN_PASSWORD }}
-
     defaults:
       run:
         shell: msys2 {0}
@@ -165,21 +161,42 @@ jobs:
             fi
           done
 
+      - name: Sign driver DLL
+        if: ${{ secrets.AZURE_SIGNING_ACCOUNT != '' }}
+        uses: azure/trusted-signing-action@v0.5.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          files-folder: installer/staging
+          files-folder-filter: dll
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
       - name: Build NSIS installer
         run: |
           cd installer/staging
           makensis -NOCD ../argus-odbc.nsi
 
       - name: Sign installer
-        if: env.CODESIGN_CERT != ''
-        shell: powershell
-        run: |
-          $certBytes = [Convert]::FromBase64String($env:CODESIGN_CERT)
-          $certPath = "$env:RUNNER_TEMP\codesign.pfx"
-          [IO.File]::WriteAllBytes($certPath, $certBytes)
-          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match "x64" } | Select-Object -First 1 -ExpandProperty FullName
-          & $signtool sign /f $certPath /p $env:CODESIGN_PASSWORD /fd SHA256 /tr http://timestamp.sectigo.com /td SHA256 "installer\staging\argus-odbc-installer.exe"
-          Remove-Item $certPath
+        if: ${{ secrets.AZURE_SIGNING_ACCOUNT != '' }}
+        uses: azure/trusted-signing-action@v0.5.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          files-folder: installer/staging
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
       - name: Rename installer with version
         run: |
