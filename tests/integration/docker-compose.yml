@@ -19,3 +19,15 @@ services:
       timeout: 10s
       retries: 12
       start_period: 30s
+
+  trino:
+    image: trinodb/trino:latest
+    container_name: argus-trino
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
