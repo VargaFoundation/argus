@@ -1,0 +1,79 @@
+name: Bug Report
+description: Report a bug in the Argus ODBC Driver
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Connect with '...'
+        2. Execute '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Linux
+        - macOS
+        - Windows
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options:
+        - Hive
+        - Impala
+        - Trino
+        - Phoenix
+        - Kudu
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Argus Version
+      placeholder: "e.g. 0.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: connection_string
+    attributes:
+      label: Connection String (without credentials)
+      placeholder: "HOST=...;PORT=...;Backend=...;Database=..."
+    validations:
+      required: false

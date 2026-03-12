@@ -53,11 +53,32 @@ jobs:
           cp README.md staging/argus-odbc/
           tar -czf argus-odbc-${VERSION}-linux-x64.tar.gz -C staging argus-odbc
 
-      - name: Upload artifact
+      - name: Upload tar.gz
         uses: actions/upload-artifact@v4
         with:
           name: release-linux
           path: argus-odbc-*-linux-x64.tar.gz
+
+      - name: Install RPM tools
+        run: sudo apt-get install -y rpm
+
+      - name: Package .deb
+        run: bash packaging/build-deb.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Package .rpm
+        run: bash packaging/build-rpm.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-deb
+          path: argus-odbc_*.deb
+
+      - name: Upload .rpm
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-rpm
+          path: argus-odbc-*.rpm
 
   build-macos:
     runs-on: macos-latest
@@ -100,11 +121,20 @@ jobs:
           cp README.md staging/argus-odbc/
           tar -czf argus-odbc-${VERSION}-macos-${ARCH}.tar.gz -C staging argus-odbc
 
-      - name: Upload artifact
+      - name: Upload tar.gz
         uses: actions/upload-artifact@v4
         with:
           name: release-macos
           path: argus-odbc-*-macos-*.tar.gz
+
+      - name: Package .pkg
+        run: bash packaging/build-macos-pkg.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Upload .pkg
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-pkg
+          path: argus-odbc-*.pkg
 
   build-windows:
     runs-on: windows-latest

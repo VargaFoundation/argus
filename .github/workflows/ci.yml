@@ -30,13 +30,26 @@ jobs:
             libjson-glib-dev
 
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="--coverage"
 
       - name: Build
         run: cmake --build build -j$(nproc)
 
       - name: Unit Tests
         run: cd build && ctest --output-on-failure -L unit
+
+      - name: Coverage report
+        run: |
+          sudo apt-get install -y lcov
+          lcov --capture --directory build --output-file coverage.info --no-external
+          lcov --remove coverage.info '*/tests/*' --output-file coverage.info
+          lcov --list coverage.info
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.info
+          fail_ci_if_error: false
 
       - name: Check shared library exports
         run: |
@@ -55,11 +68,32 @@ jobs:
           chmod +x staging/argus-odbc/install_dsn.sh
           tar -czf argus-odbc-linux-x64.tar.gz -C staging argus-odbc
 
-      - name: Upload artifact
+      - name: Upload tar.gz
         uses: actions/upload-artifact@v4
         with:
           name: argus-odbc-linux
           path: argus-odbc-linux-x64.tar.gz
+
+      - name: Install RPM tools
+        run: sudo apt-get install -y rpm
+
+      - name: Package .deb
+        run: bash packaging/build-deb.sh
+
+      - name: Package .rpm
+        run: bash packaging/build-rpm.sh
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-odbc-deb
+          path: argus-odbc_*.deb
+
+      - name: Upload .rpm
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-odbc-rpm
+          path: argus-odbc-*.rpm
 
   build-macos:
     runs-on: macos-latest
@@ -105,11 +139,20 @@ jobs:
           chmod +x staging/argus-odbc/install_dsn_macos.sh
           tar -czf argus-odbc-macos-$(uname -m).tar.gz -C staging argus-odbc
 
-      - name: Upload artifact
+      - name: Upload tar.gz
         uses: actions/upload-artifact@v4
         with:
           name: argus-odbc-macos
           path: argus-odbc-macos-*.tar.gz
+
+      - name: Package .pkg
+        run: bash packaging/build-macos-pkg.sh
+
+      - name: Upload .pkg
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-odbc-pkg
+          path: argus-odbc-*.pkg
 
   build-windows:
     runs-on: windows-latest
@@ -211,3 +254,55 @@ jobs:
         with:
           name: argus-odbc-installer
           path: installer/staging/argus-odbc-installer.exe
+
+  integration-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            unixodbc-dev \
+            libglib2.0-dev \
+            libthrift-c-glib-dev \
+            thrift-compiler \
+            libcmocka-dev \
+            libcurl4-openssl-dev \
+            libjson-glib-dev
+
+      - name: Start services
+        run: docker compose -f tests/integration/docker-compose.yml up -d
+
+      - name: Configure
+        run: cmake -B build -DBUILD_INTEGRATION_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for HiveServer2..."
+          timeout 180 bash -c 'until docker inspect --format="{{.State.Health.Status}}" argus-hiveserver2 2>/dev/null | grep -q healthy; do sleep 5; done'
+          echo "HiveServer2 is ready"
+          echo "Waiting for Trino..."
+          timeout 120 bash -c 'until docker inspect --format="{{.State.Health.Status}}" argus-trino 2>/dev/null | grep -q healthy; do sleep 5; done'
+          echo "Trino is ready"
+
+      - name: Integration Tests
+        env:
+          HIVE_HOST: localhost
+          HIVE_PORT: "10000"
+          TRINO_HOST: localhost
+          TRINO_PORT: "8080"
+        run: cd build && ctest --output-on-failure -L integration
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f tests/integration/docker-compose.yml down
