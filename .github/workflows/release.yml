@@ -206,11 +206,27 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           cp installer/staging/argus-odbc-installer.exe argus-odbc-${VERSION}-windows-x64-installer.exe
 
+      - name: Package Intune .intunewin
+        shell: pwsh
+        run: |
+          $VERSION = "$env:GITHUB_REF_NAME" -replace '^v',''
+          # Copy Intune scripts into staging
+          Copy-Item installer/intune/*.ps1 installer/staging/
+          # Download IntuneWinAppUtil
+          $intuneToolUrl = "https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool/raw/master/IntuneWinAppUtil.exe"
+          Invoke-WebRequest -Uri $intuneToolUrl -OutFile IntuneWinAppUtil.exe
+          # Generate .intunewin package
+          .\IntuneWinAppUtil.exe -c installer\staging -s argus-odbc-installer.exe -o . -q
+          # Rename with version
+          Move-Item argus-odbc-installer.intunewin "argus-odbc-${VERSION}-windows-x64.intunewin"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-windows
-          path: argus-odbc-*-windows-x64-installer.exe
+          path: |
+            argus-odbc-*-windows-x64-installer.exe
+            argus-odbc-*-windows-x64.intunewin
 
   release:
     needs: [build-linux, build-macos, build-windows]

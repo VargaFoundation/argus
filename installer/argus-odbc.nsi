@@ -23,6 +23,8 @@ RequestExecutionLevel admin
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
+!define MUI_FINISHPAGE_RUN "$WINDIR\System32\odbcad32.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "Open ODBC Data Source Administrator to create a DSN"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
