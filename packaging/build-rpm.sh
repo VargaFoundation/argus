@@ -22,13 +22,13 @@ mkdir -p "$RPMBUILD_DIR"/{BUILD,RPMS,SOURCES,SPECS,SRPMS,BUILDROOT}
 
 # Create tarball for rpmbuild
 TARBALL_DIR="argus-odbc-${VERSION}"
-mkdir -p "/tmp/${TARBALL_DIR}"
-mkdir -p "/tmp/${TARBALL_DIR}/lib"
-mkdir -p "/tmp/${TARBALL_DIR}/include/argus"
-cp "$BUILD_DIR/src/libargus_odbc.so" "/tmp/${TARBALL_DIR}/lib/"
-cp "$PROJECT_DIR/include/argus/"*.h "/tmp/${TARBALL_DIR}/include/argus/"
-tar -czf "$RPMBUILD_DIR/SOURCES/argus-odbc-${VERSION}.tar.gz" -C /tmp "$TARBALL_DIR"
-rm -rf "/tmp/${TARBALL_DIR}"
+RPMSRC_DIR="${PROJECT_DIR}/_rpmsrc"
+mkdir -p "${RPMSRC_DIR}/${TARBALL_DIR}/lib"
+mkdir -p "${RPMSRC_DIR}/${TARBALL_DIR}/include/argus"
+cp "$BUILD_DIR/src/libargus_odbc.so" "${RPMSRC_DIR}/${TARBALL_DIR}/lib/"
+cp "$PROJECT_DIR/include/argus/"*.h "${RPMSRC_DIR}/${TARBALL_DIR}/include/argus/"
+tar -czf "$RPMBUILD_DIR/SOURCES/argus-odbc-${VERSION}.tar.gz" -C "$RPMSRC_DIR" "$TARBALL_DIR"
+rm -rf "$RPMSRC_DIR"
 
 # Copy spec file
 cp "$SCRIPT_DIR/argus-odbc.spec" "$RPMBUILD_DIR/SPECS/"
