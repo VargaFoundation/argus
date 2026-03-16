@@ -12,6 +12,9 @@ set(ARGUS_SOURCES
     odbc/attr.c
     odbc/util.c
     odbc/log.c
+    odbc/unicode.c
+    odbc/desc.c
+    odbc/pool.c
     backend/backend.c
 )
 

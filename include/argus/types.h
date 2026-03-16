@@ -68,7 +68,10 @@ void argus_row_cache_free(argus_row_cache_t *cache);
 /* Clear cache contents but keep allocated memory */
 void argus_row_cache_clear(argus_row_cache_t *cache);
 
-/* Parameter binding for SQLBindParameter (future use) */
+/* Maximum number of bound parameters */
+#define ARGUS_MAX_PARAMS 256
+
+/* Parameter binding for SQLBindParameter */
 typedef struct argus_param_binding {
     SQLSMALLINT  io_type;
     SQLSMALLINT  value_type;

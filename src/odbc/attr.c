@@ -191,6 +191,17 @@ SQLRETURN SQL_API SQLGetConnectAttr(
         if (StringLength) *StringLength = sizeof(SQLUINTEGER);
         return SQL_SUCCESS;
 
+    /* Driver-specific metrics */
+    case ARGUS_ATTR_CONNECT_TIME_MS:
+        if (Value) *(double *)Value = dbc->connect_time_ms;
+        if (StringLength) *StringLength = sizeof(double);
+        return SQL_SUCCESS;
+
+    case ARGUS_ATTR_ERRORS_TOTAL:
+        if (Value) *(SQLULEN *)Value = (SQLULEN)dbc->errors_total;
+        if (StringLength) *StringLength = sizeof(SQLULEN);
+        return SQL_SUCCESS;
+
     case SQL_ATTR_ASYNC_ENABLE:
         if (Value) *(SQLUINTEGER *)Value = SQL_ASYNC_ENABLE_OFF;
         if (StringLength) *StringLength = sizeof(SQLUINTEGER);
@@ -366,6 +377,22 @@ SQLRETURN SQL_API SQLGetStmtAttr(
         if (StringLength) *StringLength = sizeof(SQLULEN);
         return SQL_SUCCESS;
 
+    /* Driver-specific metrics */
+    case ARGUS_ATTR_EXECUTE_TIME_MS:
+        if (Value) *(double *)Value = stmt->execute_time_ms;
+        if (StringLength) *StringLength = sizeof(double);
+        return SQL_SUCCESS;
+
+    case ARGUS_ATTR_ROWS_FETCHED:
+        if (Value) *(SQLULEN *)Value = (SQLULEN)stmt->rows_fetched_total;
+        if (StringLength) *StringLength = sizeof(SQLULEN);
+        return SQL_SUCCESS;
+
+    case ARGUS_ATTR_ERRORS_TOTAL:
+        if (Value) *(SQLULEN *)Value = (SQLULEN)stmt->errors_total;
+        if (StringLength) *StringLength = sizeof(SQLULEN);
+        return SQL_SUCCESS;
+
     default:
         if (Value && BufferLength >= (SQLINTEGER)sizeof(SQLULEN))
             *(SQLULEN *)Value = 0;
@@ -436,7 +463,13 @@ SQLRETURN SQL_API SQLCopyDesc(
     SQLHDESC SourceDescHandle,
     SQLHDESC TargetDescHandle)
 {
-    (void)SourceDescHandle;
     (void)TargetDescHandle;
+
+    /* Use the source handle to post a diagnostic if it's a valid stmt */
+    argus_stmt_t *stmt = (argus_stmt_t *)SourceDescHandle;
+    if (argus_valid_stmt(stmt)) {
+        return argus_set_error(&stmt->diag, "HYC00",
+                               "[Argus] SQLCopyDesc not implemented", 0);
+    }
     return SQL_ERROR;
 }
