@@ -368,7 +368,6 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_MAX_INDEX_SIZE:
         return set_uinteger_info(0, InfoValue, StringLength);
 
-    case SQL_NUMERIC_FUNCTIONS + 1000: /* placeholder to avoid empty default */
     default:
         /* Return empty/zero for unknown info types */
         if (InfoValue && BufferLength > 0)
@@ -444,7 +443,14 @@ SQLRETURN SQL_API SQLGetFunctions(
         SET_FUNC(SQL_API_SQLGETDESCFIELD);
         SET_FUNC(SQL_API_SQLSETDESCFIELD);
         SET_FUNC(SQL_API_SQLGETDESCREC);
-        SET_FUNC(SQL_API_SQLCOPYDESC);
+        SET_FUNC(SQL_API_SQLTABLEPRIVILEGES);
+        SET_FUNC(SQL_API_SQLCOLUMNPRIVILEGES);
+        SET_FUNC(SQL_API_SQLBROWSECONNECT);
+        SET_FUNC(SQL_API_SQLPARAMDATA);
+        SET_FUNC(SQL_API_SQLPUTDATA);
+        SET_FUNC(SQL_API_SQLGETCURSORNAME);
+        SET_FUNC(SQL_API_SQLSETCURSORNAME);
+        SET_FUNC(SQL_API_SQLERROR);
 
         #undef SET_FUNC
         return SQL_SUCCESS;
@@ -477,6 +483,18 @@ SQLRETURN SQL_API SQLGetFunctions(
         Supported[SQL_API_SQLGETINFO]      = SQL_TRUE;
         Supported[SQL_API_SQLGETFUNCTIONS] = SQL_TRUE;
         Supported[SQL_API_SQLERROR]        = SQL_TRUE;
+        Supported[SQL_API_SQLSPECIALCOLUMNS] = SQL_TRUE;
+        Supported[SQL_API_SQLPRIMARYKEYS]    = SQL_TRUE;
+        Supported[SQL_API_SQLFOREIGNKEYS]    = SQL_TRUE;
+        Supported[SQL_API_SQLPROCEDURES]     = SQL_TRUE;
+        Supported[SQL_API_SQLPROCEDURECOLUMNS] = SQL_TRUE;
+        Supported[SQL_API_SQLTABLEPRIVILEGES] = SQL_TRUE;
+        Supported[SQL_API_SQLCOLUMNPRIVILEGES] = SQL_TRUE;
+        Supported[SQL_API_SQLBROWSECONNECT]  = SQL_TRUE;
+        Supported[SQL_API_SQLPARAMDATA]      = SQL_TRUE;
+        Supported[SQL_API_SQLPUTDATA]        = SQL_TRUE;
+        Supported[SQL_API_SQLGETCURSORNAME]  = SQL_TRUE;
+        Supported[SQL_API_SQLSETCURSORNAME]  = SQL_TRUE;
         return SQL_SUCCESS;
     }
 
@@ -526,7 +544,16 @@ SQLRETURN SQL_API SQLGetFunctions(
     case SQL_API_SQLGETDESCFIELD:
     case SQL_API_SQLSETDESCFIELD:
     case SQL_API_SQLGETDESCREC:
-    case SQL_API_SQLCOPYDESC:
+    case SQL_API_SQLTABLEPRIVILEGES:
+    case SQL_API_SQLCOLUMNPRIVILEGES:
+    case SQL_API_SQLPROCEDURES:
+    case SQL_API_SQLPROCEDURECOLUMNS:
+    case SQL_API_SQLBROWSECONNECT:
+    case SQL_API_SQLPARAMDATA:
+    case SQL_API_SQLPUTDATA:
+    case SQL_API_SQLGETCURSORNAME:
+    case SQL_API_SQLSETCURSORNAME:
+    case SQL_API_SQLERROR:
         *Supported = SQL_TRUE;
         break;
     default:

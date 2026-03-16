@@ -18,6 +18,8 @@ static SQLRETURN catalog_dispatch(argus_stmt_t *stmt)
             stmt->dbc->backend_conn, stmt->op,
             stmt->columns, &ncols);
         if (rc == 0 && ncols > 0) {
+            /* Validate minimum column count for known catalog functions */
+            if (ncols > ARGUS_MAX_COLUMNS) ncols = ARGUS_MAX_COLUMNS;
             stmt->num_cols = ncols;
             stmt->metadata_fetched = true;
         }
@@ -180,8 +182,8 @@ static void setup_statistics_metadata(argus_stmt_t *stmt)
         {"ORDINAL_POSITION", SQL_SMALLINT, 5},
         {"COLUMN_NAME",      SQL_VARCHAR, 128},
         {"ASC_OR_DESC",      SQL_CHAR, 1},
-        {"CARDINALITY",      SQL_INTEGER, 10},
-        {"PAGES",            SQL_INTEGER, 10},
+        {"CARDINALITY",      SQL_BIGINT, 20},
+        {"PAGES",            SQL_BIGINT, 20},
         {"FILTER_CONDITION", SQL_VARCHAR, 128},
     };
 

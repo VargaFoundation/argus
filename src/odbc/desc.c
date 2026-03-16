@@ -16,7 +16,7 @@ extern SQLSMALLINT argus_copy_string(const char *src,
 
 /* ── Descriptor signature and types ──────────────────────────── */
 
-#define ARGUS_DESC_SIGNATURE 0x41524744U  /* 'ARGD' - same as DBC, but distinct */
+#define ARGUS_DESC_SIGNATURE 0x41524758U  /* 'ARGX' - unique descriptor signature */
 
 typedef enum {
     ARGUS_DESC_IRD = 0,  /* Implementation Row Descriptor */
@@ -53,8 +53,6 @@ SQLRETURN SQL_API SQLGetDescField(
     SQLINTEGER  BufferLength,
     SQLINTEGER *StringLength)
 {
-    (void)BufferLength;
-
     /*
      * The Driver Manager may pass a descriptor handle directly.
      * Since we don't allocate explicit descriptors, this is called
@@ -248,23 +246,61 @@ SQLRETURN SQL_API SQLSetDescField(
     SQLPOINTER  Value,
     SQLINTEGER  BufferLength)
 {
-    (void)RecNumber;
-    (void)FieldIdentifier;
-    (void)Value;
     (void)BufferLength;
 
+    if (!argus_valid_stmt((SQLHANDLE)DescriptorHandle)) {
+        return SQL_INVALID_HANDLE;
+    }
+
+    argus_stmt_t *stmt = (argus_stmt_t *)DescriptorHandle;
+
     /*
-     * Implicit descriptors are read-only for IRD/IPD.
-     * ARD/APD could be set, but we handle bindings via SQLBindCol
-     * and SQLBindParameter directly.
+     * For implicit descriptors routed through a statement handle,
+     * we accept basic ARD/APD field modifications that BI tools need.
+     * IRD fields remain read-only.
      */
-    if (argus_valid_stmt((SQLHANDLE)DescriptorHandle)) {
-        argus_stmt_t *stmt = (argus_stmt_t *)DescriptorHandle;
+    switch (FieldIdentifier) {
+    case SQL_DESC_COUNT:
+        /* Allow setting descriptor count (ARD/APD) */
+        return SQL_SUCCESS;
+
+    case SQL_DESC_TYPE:
+    case SQL_DESC_CONCISE_TYPE:
+    case SQL_DESC_DATA_PTR:
+    case SQL_DESC_OCTET_LENGTH_PTR:
+    case SQL_DESC_INDICATOR_PTR:
+    case SQL_DESC_LENGTH:
+    case SQL_DESC_PRECISION:
+    case SQL_DESC_SCALE:
+    case SQL_DESC_OCTET_LENGTH:
+        /*
+         * Accept these for ARD/APD. We route actual binding
+         * through SQLBindCol/SQLBindParameter, so store minimally.
+         */
+        if (RecNumber >= 1 && RecNumber <= ARGUS_MAX_COLUMNS) {
+            if (FieldIdentifier == SQL_DESC_DATA_PTR) {
+                int idx = RecNumber - 1;
+                if (Value) {
+                    stmt->bindings[idx].target_value = Value;
+                    stmt->bindings[idx].bound = true;
+                } else {
+                    stmt->bindings[idx].bound = false;
+                }
+            }
+            if (FieldIdentifier == SQL_DESC_TYPE ||
+                FieldIdentifier == SQL_DESC_CONCISE_TYPE) {
+                int idx = RecNumber - 1;
+                stmt->bindings[idx].target_type =
+                    (SQLSMALLINT)(intptr_t)Value;
+            }
+        }
+        return SQL_SUCCESS;
+
+    default:
         return argus_set_error(&stmt->diag, "HY016",
                                "[Argus] Cannot modify an implementation row descriptor",
                                0);
     }
-    return SQL_ERROR;
 }
 
 /* ── ODBC API: SQLGetDescRec ─────────────────────────────────── */
