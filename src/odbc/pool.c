@@ -34,17 +34,17 @@ static struct {
     argus_pool_entry_t entries[ARGUS_POOL_MAX_TOTAL];
     int                count;
     GMutex             mutex;
-    bool               initialized;
+    gsize              init_once;
 } g_pool;
 
-/* ── Internal: initialize pool (called once) ──────────────────── */
+/* ── Internal: initialize pool (called once, thread-safe) ────── */
 
 static void pool_ensure_init(void)
 {
-    if (!g_pool.initialized) {
+    if (g_once_init_enter(&g_pool.init_once)) {
         g_mutex_init(&g_pool.mutex);
         g_pool.count = 0;
-        g_pool.initialized = true;
+        g_once_init_leave(&g_pool.init_once, 1);
     }
 }
 
@@ -78,6 +78,27 @@ argus_backend_conn_t argus_pool_acquire(
         argus_pool_entry_t *e = &g_pool.entries[i];
         if (!e->in_use &&
             pool_entry_matches(e, host, port, backend_name, username)) {
+
+            /* Liveness check: if backend supports is_alive, verify */
+            if (e->backend && e->backend->is_alive &&
+                !e->backend->is_alive(e->conn)) {
+                ARGUS_LOG_DEBUG("Pool: stale connection to %s:%d, evicting",
+                                host, port);
+                if (e->backend->disconnect)
+                    e->backend->disconnect(e->conn);
+                free(e->host);
+                free(e->backend_name);
+                free(e->username);
+                g_pool.count--;
+                if (i < g_pool.count) {
+                    memmove(&g_pool.entries[i],
+                            &g_pool.entries[i + 1],
+                            (size_t)(g_pool.count - i) * sizeof(argus_pool_entry_t));
+                }
+                i--;
+                continue;
+            }
+
             e->in_use = true;
             e->last_used = g_get_monotonic_time();
             if (out_backend) *out_backend = e->backend;
@@ -145,26 +166,30 @@ void argus_pool_release(
         }
     }
 
-    /* Pool is full or per-key limit reached: actually disconnect */
+    /* Pool is full or per-key limit reached: disconnect outside mutex */
     ARGUS_LOG_DEBUG("Pool: full, disconnecting %s:%d", host, port);
+    g_mutex_unlock(&g_pool.mutex);
+
     if (backend && conn) {
         backend->disconnect(conn);
     }
-
-    g_mutex_unlock(&g_pool.mutex);
 }
 
 /* ── Public: cleanup all pooled connections ──────────────────── */
 
 void argus_pool_cleanup(void)
 {
-    if (!g_pool.initialized) return;
+    if (!g_pool.init_once) return;
 
     g_mutex_lock(&g_pool.mutex);
 
     for (int i = 0; i < g_pool.count; i++) {
         argus_pool_entry_t *e = &g_pool.entries[i];
-        if (!e->in_use && e->backend && e->conn) {
+        if (e->in_use) {
+            /* Skip freeing strings for in-use entries; mark for later */
+            continue;
+        }
+        if (e->backend && e->conn) {
             e->backend->disconnect(e->conn);
         }
         free(e->host);
@@ -174,15 +199,13 @@ void argus_pool_cleanup(void)
     g_pool.count = 0;
 
     g_mutex_unlock(&g_pool.mutex);
-    g_mutex_clear(&g_pool.mutex);
-    g_pool.initialized = false;
 }
 
 /* ── Public: evict idle connections older than max_idle_sec ──── */
 
 void argus_pool_evict_idle(int max_idle_sec)
 {
-    if (!g_pool.initialized) return;
+    if (!g_pool.init_once) return;
 
     g_mutex_lock(&g_pool.mutex);
 

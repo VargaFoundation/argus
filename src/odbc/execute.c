@@ -34,14 +34,14 @@ static int count_param_markers(const char *sql)
 
 static char *sql_escape_string(const char *value, size_t len)
 {
-    /* Count single quotes to determine output size */
-    size_t num_quotes = 0;
+    /* Count characters that need escaping to determine output size */
+    size_t num_special = 0;
     for (size_t i = 0; i < len; i++) {
-        if (value[i] == '\'') num_quotes++;
+        if (value[i] == '\'' || value[i] == '\\') num_special++;
     }
 
     /* Output: quote + escaped_data + quote + NUL */
-    size_t out_len = 1 + len + num_quotes + 1 + 1;
+    size_t out_len = 1 + len + num_special + 1 + 1;
     char *out = malloc(out_len);
     if (!out) return NULL;
 
@@ -232,6 +232,72 @@ static char *render_param(const argus_param_binding_t *param)
         *dst = '\0';
         return out;
     }
+
+    case SQL_C_NUMERIC: {
+        /* Convert SQL_NUMERIC_STRUCT 128-bit LE value to decimal string */
+        const SQL_NUMERIC_STRUCT *ns =
+            (const SQL_NUMERIC_STRUCT *)param->value;
+        unsigned long long low = 0, high = 0;
+        memcpy(&low, ns->val, 8);
+        memcpy(&high, ns->val + 8, 8);
+
+        /* Build digit string from 128-bit value */
+        char digits[42];
+        int dpos = 0;
+        if (low == 0 && high == 0) {
+            digits[dpos++] = '0';
+        } else {
+            /* Divide 128-bit value by 10 repeatedly */
+            unsigned long long h = high, l = low;
+            while (h > 0 || l > 0) {
+                /* 128-bit division by 10 */
+                unsigned long long rem = h % 10;
+                h = h / 10;
+                unsigned long long tmp = (rem << 32) | (l >> 32);
+                unsigned long long q_hi32 = tmp / 10;
+                rem = tmp % 10;
+                tmp = (rem << 32) | (l & 0xFFFFFFFFULL);
+                unsigned long long q_lo32 = tmp / 10;
+                rem = tmp % 10;
+                l = (q_hi32 << 32) | q_lo32;
+                digits[dpos++] = (char)('0' + rem);
+            }
+        }
+        /* digits[] is reversed; build output */
+        char buf[64];
+        char *dst = buf;
+        if (!ns->sign) *dst++ = '-';
+        int scale = (int)ns->scale;
+        if (scale >= dpos) {
+            *dst++ = '0';
+            *dst++ = '.';
+            for (int z = 0; z < scale - dpos; z++) *dst++ = '0';
+            for (int i = dpos - 1; i >= 0; i--) *dst++ = digits[i];
+        } else {
+            for (int i = dpos - 1; i >= 0; i--) {
+                if (i == scale - 1 && scale > 0) *dst++ = '.';
+                *dst++ = digits[i];
+            }
+        }
+        *dst = '\0';
+        return strdup(buf);
+    }
+
+    case SQL_C_INTERVAL_YEAR:
+    case SQL_C_INTERVAL_MONTH:
+    case SQL_C_INTERVAL_DAY:
+    case SQL_C_INTERVAL_HOUR:
+    case SQL_C_INTERVAL_MINUTE:
+    case SQL_C_INTERVAL_SECOND:
+    case SQL_C_INTERVAL_YEAR_TO_MONTH:
+    case SQL_C_INTERVAL_DAY_TO_HOUR:
+    case SQL_C_INTERVAL_DAY_TO_MINUTE:
+    case SQL_C_INTERVAL_DAY_TO_SECOND:
+    case SQL_C_INTERVAL_HOUR_TO_MINUTE:
+    case SQL_C_INTERVAL_HOUR_TO_SECOND:
+    case SQL_C_INTERVAL_MINUTE_TO_SECOND:
+        /* Interval types not supported — render as NULL */
+        return strdup("NULL");
 
     default:
         /* Treat as string */

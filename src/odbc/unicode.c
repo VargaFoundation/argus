@@ -128,9 +128,21 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLExecDirectW(
     SQLWCHAR *StatementText,
     SQLINTEGER TextLength)
 {
-    SQLSMALLINT wlen = (TextLength == SQL_NTS)
-                       ? SQL_NTS : (SQLSMALLINT)TextLength;
-    char *utf8 = wchar_to_utf8(StatementText, wlen);
+    char *utf8 = NULL;
+    if (TextLength == SQL_NTS) {
+        utf8 = wchar_to_utf8(StatementText, SQL_NTS);
+    } else {
+        /* TextLength is in characters; wchar_to_utf8 expects glong count */
+        if (!StatementText) {
+            utf8 = NULL;
+        } else {
+            GError *err = NULL;
+            utf8 = (char *)g_utf16_to_utf8(
+                (const gunichar2 *)StatementText, (glong)TextLength,
+                NULL, NULL, &err);
+            if (err) { g_error_free(err); utf8 = NULL; }
+        }
+    }
 
     SQLRETURN ret = SQLExecDirect(
         StatementHandle,
@@ -148,9 +160,20 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLPrepareW(
     SQLWCHAR *StatementText,
     SQLINTEGER TextLength)
 {
-    SQLSMALLINT wlen = (TextLength == SQL_NTS)
-                       ? SQL_NTS : (SQLSMALLINT)TextLength;
-    char *utf8 = wchar_to_utf8(StatementText, wlen);
+    char *utf8 = NULL;
+    if (TextLength == SQL_NTS) {
+        utf8 = wchar_to_utf8(StatementText, SQL_NTS);
+    } else {
+        if (!StatementText) {
+            utf8 = NULL;
+        } else {
+            GError *err = NULL;
+            utf8 = (char *)g_utf16_to_utf8(
+                (const gunichar2 *)StatementText, (glong)TextLength,
+                NULL, NULL, &err);
+            if (err) { g_error_free(err); utf8 = NULL; }
+        }
+    }
 
     SQLRETURN ret = SQLPrepare(
         StatementHandle,
@@ -191,9 +214,10 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLGetDiagRecW(
             SQLSMALLINT wlen = utf8_to_wchar(
                 msg_buf, msg_len,
                 MessageText, BufferLength);
-            if (TextLength) *TextLength = wlen;
+            if (TextLength)
+                *TextLength = (SQLSMALLINT)(wlen * (SQLSMALLINT)sizeof(SQLWCHAR));
         } else if (TextLength) {
-            *TextLength = msg_len;
+            *TextLength = (SQLSMALLINT)(msg_len * (SQLSMALLINT)sizeof(SQLWCHAR));
         }
     }
 
@@ -470,9 +494,10 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLNativeSqlW(
         SQLSMALLINT wout = utf8_to_wchar(
             out_buf, (SQLSMALLINT)out_len,
             OutStatementText, (SQLSMALLINT)BufferLength);
-        if (TextLength2Ptr) *TextLength2Ptr = (SQLINTEGER)wout;
+        if (TextLength2Ptr)
+            *TextLength2Ptr = (SQLINTEGER)(wout * (SQLSMALLINT)sizeof(SQLWCHAR));
     } else if (TextLength2Ptr) {
-        *TextLength2Ptr = out_len;
+        *TextLength2Ptr = (SQLINTEGER)(out_len * (SQLINTEGER)sizeof(SQLWCHAR));
     }
 
     return ret;
@@ -532,8 +557,13 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLSetConnectAttrW(
     SQLINTEGER StringLength)
 {
     /* String attributes need conversion */
-    if (Attribute == SQL_ATTR_CURRENT_CATALOG && Value && StringLength > 0) {
-        SQLSMALLINT wlen = (SQLSMALLINT)(StringLength / (SQLINTEGER)sizeof(SQLWCHAR));
+    if (Attribute == SQL_ATTR_CURRENT_CATALOG && Value &&
+        (StringLength > 0 || StringLength == SQL_NTS)) {
+        SQLSMALLINT wlen;
+        if (StringLength == SQL_NTS)
+            wlen = SQL_NTS;
+        else
+            wlen = (SQLSMALLINT)(StringLength / (SQLINTEGER)sizeof(SQLWCHAR));
         char *utf8 = wchar_to_utf8((SQLWCHAR *)Value, wlen);
         SQLRETURN ret = SQLSetConnectAttr(
             ConnectionHandle, Attribute,
@@ -607,9 +637,10 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLErrorW(
             SQLSMALLINT wlen = utf8_to_wchar(
                 msg_buf, msg_len,
                 MessageText, BufferLength);
-            if (TextLength) *TextLength = wlen;
+            if (TextLength)
+                *TextLength = (SQLSMALLINT)(wlen * (SQLSMALLINT)sizeof(SQLWCHAR));
         } else if (TextLength) {
-            *TextLength = msg_len;
+            *TextLength = (SQLSMALLINT)(msg_len * (SQLSMALLINT)sizeof(SQLWCHAR));
         }
     }
 

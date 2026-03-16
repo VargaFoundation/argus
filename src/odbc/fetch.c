@@ -221,9 +221,16 @@ static SQLRETURN convert_cell_to_target(
     }
 
     case SQL_C_BIT: {
-        long val = strtol(cell->data, NULL, 10);
+        unsigned char bit_val;
+        if (g_ascii_strcasecmp(cell->data, "true") == 0) {
+            bit_val = 1;
+        } else if (g_ascii_strcasecmp(cell->data, "false") == 0) {
+            bit_val = 0;
+        } else {
+            bit_val = strtol(cell->data, NULL, 10) ? 1 : 0;
+        }
         if (target_value)
-            *(unsigned char *)target_value = val ? 1 : 0;
+            *(unsigned char *)target_value = bit_val;
         if (str_len_or_ind)
             *str_len_or_ind = 1;
         return SQL_SUCCESS;
@@ -250,6 +257,15 @@ static SQLRETURN convert_cell_to_target(
         size_t utf16_bytes = (size_t)items_written * sizeof(SQLWCHAR);
         if (str_len_or_ind)
             *str_len_or_ind = (SQLLEN)utf16_bytes;
+
+        if (target_value && buffer_length > 0 &&
+            buffer_length < (SQLLEN)sizeof(SQLWCHAR)) {
+            /* Buffer too small for even one character + NUL */
+            g_free(utf16);
+            argus_diag_push(diag, "01004",
+                            "[Argus] String data, right truncated", 0);
+            return SQL_SUCCESS_WITH_INFO;
+        }
 
         if (target_value && buffer_length >= (SQLLEN)sizeof(SQLWCHAR)) {
             size_t max_chars = (size_t)(buffer_length / (SQLLEN)sizeof(SQLWCHAR)) - 1;
@@ -389,7 +405,7 @@ static SQLRETURN convert_cell_to_target(
         if (*p == '-' || *p == '+') p++;
 
         /* Parse digits and build 128-bit little-endian value */
-        unsigned long long low = 0, high = 0;
+        __uint128_t val128 = 0;
         int scale = 0;
         bool past_decimal = false;
         while (*p) {
@@ -397,12 +413,7 @@ static SQLRETURN convert_cell_to_target(
                 past_decimal = true;
             } else if (*p >= '0' && *p <= '9') {
                 int digit = *p - '0';
-                /* Multiply by 10 and add digit */
-                unsigned long long new_low = low * 10 + digit;
-                unsigned long long new_high = high * 10;
-                if (new_low < low) new_high++; /* carry */
-                low = new_low;
-                high = new_high;
+                val128 = val128 * 10 + (unsigned)digit;
                 if (past_decimal) scale++;
             }
             p++;
@@ -411,8 +422,12 @@ static SQLRETURN convert_cell_to_target(
         /* Store in little-endian format */
         num.precision = 38;
         num.scale = (SQLSCHAR)scale;
-        memcpy(num.val, &low, 8);
-        memcpy(num.val + 8, &high, 8);
+        {
+            unsigned long long low_part  = (unsigned long long)val128;
+            unsigned long long high_part = (unsigned long long)(val128 >> 64);
+            memcpy(num.val, &low_part, 8);
+            memcpy(num.val + 8, &high_part, 8);
+        }
 
         if (target_value)
             *(SQL_NUMERIC_STRUCT *)target_value = num;

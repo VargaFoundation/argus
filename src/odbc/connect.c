@@ -272,12 +272,35 @@ SQLRETURN SQL_API SQLDriverConnect(
     /* Connect */
     SQLRETURN ret = do_connect(dbc);
 
-    /* Build output connection string */
+    /* Build output connection string with password masked */
     if (OutConnectionString && BufferLength > 0) {
-        SQLSMALLINT out_len = argus_copy_string(conn_str,
-                                                 OutConnectionString,
-                                                 BufferLength);
-        if (StringLength2Ptr) *StringLength2Ptr = out_len;
+        /* Mask PWD= value in connection string for security */
+        char *masked = strdup(conn_str);
+        if (masked) {
+            char *p = masked;
+            while (*p) {
+                if ((p == masked || *(p - 1) == ';') &&
+                    (strncasecmp(p, "PWD=", 4) == 0 ||
+                     strncasecmp(p, "PASSWORD=", 9) == 0)) {
+                    char *val = strchr(p, '=');
+                    if (val) {
+                        val++;
+                        char *val_end = strchr(val, ';');
+                        if (!val_end) val_end = val + strlen(val);
+                        for (char *c = val; c < val_end; c++)
+                            *c = '*';
+                        p = val_end;
+                        continue;
+                    }
+                }
+                p++;
+            }
+            SQLSMALLINT out_len = argus_copy_string(masked,
+                                                     OutConnectionString,
+                                                     BufferLength);
+            if (StringLength2Ptr) *StringLength2Ptr = out_len;
+            free(masked);
+        }
     } else if (StringLength2Ptr) {
         *StringLength2Ptr = (SQLSMALLINT)strlen(conn_str);
     }

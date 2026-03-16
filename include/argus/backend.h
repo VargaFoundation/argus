@@ -36,6 +36,9 @@ typedef struct argus_backend {
 
     void (*disconnect)(argus_backend_conn_t conn);
 
+    /* Connection liveness check (optional, may be NULL) */
+    bool (*is_alive)(argus_backend_conn_t conn);
+
     /* Query execution */
     int (*execute)(argus_backend_conn_t conn,
                    const char *query,
