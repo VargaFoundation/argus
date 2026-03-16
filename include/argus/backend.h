@@ -91,6 +91,21 @@ typedef struct argus_backend {
 
     int (*get_catalogs)(argus_backend_conn_t conn,
                         argus_backend_op_t *out_op);
+
+    /* Extended catalog operations (optional, may be NULL) */
+    int (*get_primary_keys)(argus_backend_conn_t conn,
+                            const char *catalog,
+                            const char *schema,
+                            const char *table_name,
+                            argus_backend_op_t *out_op);
+
+    int (*get_statistics)(argus_backend_conn_t conn,
+                          const char *catalog,
+                          const char *schema,
+                          const char *table_name,
+                          unsigned short unique,
+                          unsigned short reserved,
+                          argus_backend_op_t *out_op);
 } argus_backend_t;
 
 /* Backend registry */

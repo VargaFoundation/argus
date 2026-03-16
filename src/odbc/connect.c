@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <glib.h>
 
 #ifdef _WIN32
 #define strcasecmp _stricmp
@@ -57,9 +58,26 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
     const char *db   = dbc->database ? dbc->database : "default";
     const char *auth = dbc->auth_mechanism ? dbc->auth_mechanism : "NOSASL";
 
+    /* Try pool first if connection pooling is enabled */
+    if (dbc->env && dbc->env->connection_pooling != SQL_CP_OFF) {
+        const argus_backend_t *pooled_backend = NULL;
+        argus_backend_conn_t pooled_conn = argus_pool_acquire(
+            host, port, backend_name, user, &pooled_backend);
+        if (pooled_conn) {
+            dbc->backend_conn = pooled_conn;
+            dbc->backend = pooled_backend;
+            dbc->connected = true;
+            dbc->pooled = true;
+            dbc->connect_time_ms = 0.0;
+            ARGUS_LOG_INFO("Acquired pooled connection to %s:%d", host, port);
+            return SQL_SUCCESS;
+        }
+    }
+
     /* Retry logic: try up to (1 + retry_count) times */
     int max_attempts = 1 + (dbc->retry_count > 0 ? dbc->retry_count : 0);
     int rc = -1;
+    gint64 connect_start = g_get_monotonic_time();
 
     for (int attempt = 1; attempt <= max_attempts; attempt++) {
         if (attempt > 1) {
@@ -76,8 +94,12 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
                               &dbc->backend_conn);
         if (rc == 0) {
             /* Success */
-            ARGUS_LOG_INFO("Connected successfully to %s backend at %s:%d (attempt %d/%d)",
-                           backend_name, host, port, attempt, max_attempts);
+            gint64 connect_end = g_get_monotonic_time();
+            dbc->connect_time_ms = (double)(connect_end - connect_start) / 1000.0;
+            ARGUS_LOG_INFO("Connected successfully to %s backend at %s:%d "
+                           "(attempt %d/%d, %.1f ms)",
+                           backend_name, host, port, attempt, max_attempts,
+                           dbc->connect_time_ms);
             dbc->connected = true;
             return SQL_SUCCESS;
         }
@@ -313,12 +335,22 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC ConnectionHandle)
                    dbc->backend ? dbc->backend->name : "unknown");
 
     if (dbc->backend && dbc->backend_conn) {
-        dbc->backend->disconnect(dbc->backend_conn);
+        /* Return to pool if pooling is enabled */
+        if (dbc->env && dbc->env->connection_pooling != SQL_CP_OFF) {
+            const char *host = dbc->host ? dbc->host : "localhost";
+            const char *user = dbc->username ? dbc->username : "";
+            const char *bname = dbc->backend_name ? dbc->backend_name : "";
+            argus_pool_release(host, dbc->port, bname, user,
+                               dbc->backend, dbc->backend_conn);
+        } else {
+            dbc->backend->disconnect(dbc->backend_conn);
+        }
     }
 
     dbc->backend_conn = NULL;
     dbc->backend      = NULL;
     dbc->connected    = false;
+    dbc->pooled       = false;
 
     ARGUS_LOG_DEBUG("Disconnected successfully");
     return SQL_SUCCESS;

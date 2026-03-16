@@ -1,5 +1,6 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
+#include "argus/log.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -139,11 +140,24 @@ void argus_stmt_reset(argus_stmt_t *stmt)
 
     argus_row_cache_free(&stmt->row_cache);
     argus_row_cache_init(&stmt->row_cache);
+
+    /* Reset parameter bindings */
+    memset(stmt->param_bindings, 0, sizeof(stmt->param_bindings));
+    stmt->num_param_bindings = 0;
 }
 
 SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
 {
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
+
+    /* Log metrics at INFO level before cleanup */
+    if (stmt->rows_fetched_total > 0 || stmt->execute_time_ms > 0) {
+        ARGUS_LOG_INFO("Statement metrics: execute=%.1f ms, "
+                       "rows_fetched=%lu, errors=%lu",
+                       stmt->execute_time_ms,
+                       stmt->rows_fetched_total,
+                       stmt->errors_total);
+    }
 
     argus_stmt_reset(stmt);
     stmt->signature = 0;
@@ -219,7 +233,8 @@ SQLRETURN SQL_API SQLFreeStmt(
         return SQL_SUCCESS;
 
     case SQL_RESET_PARAMS:
-        /* No-op for now (no parameter binding support yet) */
+        memset(stmt->param_bindings, 0, sizeof(stmt->param_bindings));
+        stmt->num_param_bindings = 0;
         return SQL_SUCCESS;
 
     default:

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <math.h>
+#include <glib.h>
 
 extern SQLSMALLINT argus_copy_string(const char *src,
                                       SQLCHAR *dst, SQLSMALLINT dst_len);
@@ -229,25 +230,44 @@ static SQLRETURN convert_cell_to_target(
     }
 
     case SQL_C_WCHAR: {
-        /* UTF-8 to UTF-16LE conversion */
+        /* UTF-8 to UTF-16 conversion using GLib */
+        GError *err = NULL;
+        glong items_written = 0;
+        gunichar2 *utf16 = g_utf8_to_utf16(
+            cell->data, (glong)cell->data_len,
+            NULL, &items_written, &err);
+
+        if (!utf16) {
+            if (err) {
+                argus_set_error(diag, "22018",
+                                "[Argus] Invalid UTF-8 data", 0);
+                g_error_free(err);
+            }
+            return SQL_ERROR;
+        }
+
+        /* str_len_or_ind = total byte count of UTF-16 data (excl NUL) */
+        size_t utf16_bytes = (size_t)items_written * sizeof(SQLWCHAR);
         if (str_len_or_ind)
-            *str_len_or_ind = (SQLLEN)(cell->data_len * 2);
+            *str_len_or_ind = (SQLLEN)utf16_bytes;
 
-        if (target_value && buffer_length >= 2) {
-            /* Simple conversion: treat as UTF-8 to wide char */
-            size_t max_chars = (size_t)(buffer_length / 2) - 1;
-            size_t copy = cell->data_len < max_chars ? cell->data_len : max_chars;
+        if (target_value && buffer_length >= (SQLLEN)sizeof(SQLWCHAR)) {
+            size_t max_chars = (size_t)(buffer_length / (SQLLEN)sizeof(SQLWCHAR)) - 1;
+            size_t copy_chars = (size_t)items_written < max_chars
+                                ? (size_t)items_written : max_chars;
             SQLWCHAR *dst = (SQLWCHAR *)target_value;
-            for (size_t i = 0; i < copy; i++)
-                dst[i] = (SQLWCHAR)(unsigned char)cell->data[i];
-            dst[copy] = 0;
+            memcpy(dst, utf16, copy_chars * sizeof(SQLWCHAR));
+            dst[copy_chars] = 0;
 
-            if (cell->data_len > max_chars) {
+            if ((size_t)items_written > max_chars) {
+                g_free(utf16);
                 argus_diag_push(diag, "01004",
                                 "[Argus] String data, right truncated", 0);
                 return SQL_SUCCESS_WITH_INFO;
             }
         }
+
+        g_free(utf16);
         return SQL_SUCCESS;
     }
 
@@ -453,8 +473,10 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
     if (!stmt->fetch_started ||
         stmt->row_cache.current_row >= stmt->row_cache.num_rows) {
 
-        if (stmt->row_cache.exhausted && stmt->fetch_started)
+        if (stmt->row_cache.exhausted && stmt->fetch_started) {
+            stmt->row_count = (SQLLEN)stmt->rows_fetched_total;
             return SQL_NO_DATA;
+        }
 
         SQLRETURN rc = fetch_batch(stmt);
         if (rc != SQL_SUCCESS) return rc;
@@ -462,8 +484,10 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
         stmt->fetch_started = true;
         stmt->row_cache.current_row = 0;
 
-        if (stmt->row_cache.num_rows == 0)
+        if (stmt->row_cache.num_rows == 0) {
+            stmt->row_count = (SQLLEN)stmt->rows_fetched_total;
             return SQL_NO_DATA;
+        }
     }
 
     /* Get current row */
@@ -490,9 +514,10 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
             return SQL_ERROR;
     }
 
-    /* Update rows fetched pointer */
+    /* Update rows fetched pointer and metrics */
     if (stmt->rows_fetched_ptr)
         *(stmt->rows_fetched_ptr) = 1;
+    stmt->rows_fetched_total++;
 
     return final_ret;
 }
@@ -813,31 +838,3 @@ SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT StatementHandle)
     return SQL_SUCCESS;
 }
 
-/* ── ODBC API: SQLBindParameter ──────────────────────────────── */
-
-SQLRETURN SQL_API SQLBindParameter(
-    SQLHSTMT     StatementHandle,
-    SQLUSMALLINT ParameterNumber,
-    SQLSMALLINT  InputOutputType,
-    SQLSMALLINT  ValueType,
-    SQLSMALLINT  ParameterType,
-    SQLULEN      ColumnSize,
-    SQLSMALLINT  DecimalDigits,
-    SQLPOINTER   ParameterValuePtr,
-    SQLLEN       BufferLength,
-    SQLLEN      *StrLen_or_IndPtr)
-{
-    (void)ParameterNumber;
-    (void)InputOutputType;
-    (void)ValueType;
-    (void)ParameterType;
-    (void)ColumnSize;
-    (void)DecimalDigits;
-    (void)ParameterValuePtr;
-    (void)BufferLength;
-    (void)StrLen_or_IndPtr;
-
-    argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
-    if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
-    return argus_set_not_implemented(&stmt->diag, "SQLBindParameter");
-}

@@ -11,6 +11,12 @@
 #include "argus/types.h"
 #include "argus/backend.h"
 
+/* Driver-specific attribute IDs for metrics (base > 65536 to avoid ODBC range) */
+#define ARGUS_ATTR_CONNECT_TIME_MS  65537
+#define ARGUS_ATTR_EXECUTE_TIME_MS  65538
+#define ARGUS_ATTR_ROWS_FETCHED     65539
+#define ARGUS_ATTR_ERRORS_TOTAL     65540
+
 /* Handle type signatures for runtime type checking */
 #define ARGUS_ENV_SIGNATURE  0x41524745U  /* 'ARGE' */
 #define ARGUS_DBC_SIGNATURE  0x41524744U  /* 'ARGD' */
@@ -32,6 +38,7 @@ struct argus_dbc {
     const argus_backend_t  *backend;
     argus_backend_conn_t    backend_conn;
     bool                    connected;
+    bool                    pooled;     /* true if connection came from pool */
 
     /* Connection attributes */
     SQLUINTEGER  login_timeout;
@@ -68,6 +75,10 @@ struct argus_dbc {
     int          trino_protocol_version;  /* 1 = v1 (default), 2 = v2 spooling */
     int          log_level;
     char        *log_file;
+
+    /* Metrics */
+    double       connect_time_ms;       /* last connect duration */
+    unsigned long errors_total;         /* total error count */
 };
 
 /* Statement handle */
@@ -97,12 +108,21 @@ struct argus_stmt {
     /* Column bindings */
     argus_col_binding_t     bindings[ARGUS_MAX_COLUMNS];
 
+    /* Parameter bindings */
+    argus_param_binding_t   param_bindings[ARGUS_MAX_PARAMS];
+    int                     num_param_bindings;
+
     /* Statement attributes */
     SQLULEN                 max_rows;
     SQLULEN                 query_timeout;
     SQLULEN                 row_array_size;
     SQLULEN                *rows_fetched_ptr;
     SQLUSMALLINT           *row_status_ptr;
+
+    /* Metrics */
+    double                  execute_time_ms;    /* last execute duration */
+    unsigned long           rows_fetched_total; /* cumulative rows fetched */
+    unsigned long           errors_total;       /* total errors on this stmt */
 };
 
 /* Handle validation */
@@ -125,5 +145,22 @@ SQLRETURN argus_free_env(argus_env_t *env);
 SQLRETURN argus_free_dbc(argus_dbc_t *dbc);
 SQLRETURN argus_free_stmt(argus_stmt_t *stmt);
 void argus_stmt_reset(argus_stmt_t *stmt);
+
+/* Connection pool */
+argus_backend_conn_t argus_pool_acquire(
+    const char *host, int port,
+    const char *backend_name,
+    const char *username,
+    const argus_backend_t **out_backend);
+
+void argus_pool_release(
+    const char *host, int port,
+    const char *backend_name,
+    const char *username,
+    const argus_backend_t *backend,
+    argus_backend_conn_t conn);
+
+void argus_pool_cleanup(void);
+void argus_pool_evict_idle(int max_idle_sec);
 
 #endif /* ARGUS_HANDLE_H */

@@ -353,4 +353,147 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLCopyDesc(
     SQLHDESC SourceDescHandle,
     SQLHDESC TargetDescHandle);
 
+/* Descriptors */
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetDescField(
+    SQLHDESC    DescriptorHandle,
+    SQLSMALLINT RecNumber,
+    SQLSMALLINT FieldIdentifier,
+    SQLPOINTER  Value,
+    SQLINTEGER  BufferLength,
+    SQLINTEGER *StringLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetDescField(
+    SQLHDESC    DescriptorHandle,
+    SQLSMALLINT RecNumber,
+    SQLSMALLINT FieldIdentifier,
+    SQLPOINTER  Value,
+    SQLINTEGER  BufferLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetDescRec(
+    SQLHDESC     DescriptorHandle,
+    SQLSMALLINT  RecNumber,
+    SQLCHAR     *Name,
+    SQLSMALLINT  BufferLength,
+    SQLSMALLINT *StringLengthPtr,
+    SQLSMALLINT *TypePtr,
+    SQLSMALLINT *SubTypePtr,
+    SQLLEN      *LengthPtr,
+    SQLSMALLINT *PrecisionPtr,
+    SQLSMALLINT *ScalePtr,
+    SQLSMALLINT *NullablePtr);
+
+/* ── Unicode (W) variants ────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLDriverConnectW(
+    SQLHDBC      ConnectionHandle,
+    SQLHWND      WindowHandle,
+    SQLWCHAR    *InConnectionString, SQLSMALLINT StringLength1,
+    SQLWCHAR    *OutConnectionString, SQLSMALLINT BufferLength,
+    SQLSMALLINT *StringLength2Ptr,
+    SQLUSMALLINT DriverCompletion);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLConnectW(
+    SQLHDBC   ConnectionHandle,
+    SQLWCHAR *ServerName,      SQLSMALLINT NameLength1,
+    SQLWCHAR *UserName,        SQLSMALLINT NameLength2,
+    SQLWCHAR *Authentication,  SQLSMALLINT NameLength3);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLExecDirectW(
+    SQLHSTMT  StatementHandle,
+    SQLWCHAR *StatementText,
+    SQLINTEGER TextLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLPrepareW(
+    SQLHSTMT  StatementHandle,
+    SQLWCHAR *StatementText,
+    SQLINTEGER TextLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetDiagRecW(
+    SQLSMALLINT HandleType,
+    SQLHANDLE   Handle,
+    SQLSMALLINT RecNumber,
+    SQLWCHAR   *Sqlstate,
+    SQLINTEGER *NativeError,
+    SQLWCHAR   *MessageText,
+    SQLSMALLINT BufferLength,
+    SQLSMALLINT *TextLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetDiagFieldW(
+    SQLSMALLINT HandleType,
+    SQLHANDLE   Handle,
+    SQLSMALLINT RecNumber,
+    SQLSMALLINT DiagIdentifier,
+    SQLPOINTER  DiagInfo,
+    SQLSMALLINT BufferLength,
+    SQLSMALLINT *StringLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLColAttributeW(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT ColumnNumber,
+    SQLUSMALLINT FieldIdentifier,
+    SQLPOINTER   CharacterAttribute,
+    SQLSMALLINT  BufferLength,
+    SQLSMALLINT *StringLength,
+    SQLLEN      *NumericAttribute);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLDescribeColW(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT ColumnNumber,
+    SQLWCHAR    *ColumnName, SQLSMALLINT BufferLength,
+    SQLSMALLINT *NameLengthPtr,
+    SQLSMALLINT *DataTypePtr,
+    SQLULEN     *ColumnSizePtr,
+    SQLSMALLINT *DecimalDigitsPtr,
+    SQLSMALLINT *NullablePtr);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetInfoW(
+    SQLHDBC      ConnectionHandle,
+    SQLUSMALLINT InfoType,
+    SQLPOINTER   InfoValue,
+    SQLSMALLINT  BufferLength,
+    SQLSMALLINT *StringLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLTablesW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CatalogName, SQLSMALLINT NameLength1,
+    SQLWCHAR  *SchemaName,  SQLSMALLINT NameLength2,
+    SQLWCHAR  *TableName,   SQLSMALLINT NameLength3,
+    SQLWCHAR  *TableType,   SQLSMALLINT NameLength4);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLColumnsW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CatalogName, SQLSMALLINT NameLength1,
+    SQLWCHAR  *SchemaName,  SQLSMALLINT NameLength2,
+    SQLWCHAR  *TableName,   SQLSMALLINT NameLength3,
+    SQLWCHAR  *ColumnName,  SQLSMALLINT NameLength4);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLNativeSqlW(
+    SQLHDBC    ConnectionHandle,
+    SQLWCHAR  *InStatementText,  SQLINTEGER TextLength1,
+    SQLWCHAR  *OutStatementText, SQLINTEGER BufferLength,
+    SQLINTEGER *TextLength2Ptr);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetConnectAttrW(
+    SQLHDBC    ConnectionHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER StringLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetConnectAttrW(
+    SQLHDBC    ConnectionHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER BufferLength,
+    SQLINTEGER *StringLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLErrorW(
+    SQLHENV   EnvironmentHandle,
+    SQLHDBC   ConnectionHandle,
+    SQLHSTMT  StatementHandle,
+    SQLWCHAR *Sqlstate,
+    SQLINTEGER *NativeError,
+    SQLWCHAR *MessageText,
+    SQLSMALLINT BufferLength,
+    SQLSMALLINT *TextLength);
+
 #endif /* ARGUS_ODBC_API_H */
