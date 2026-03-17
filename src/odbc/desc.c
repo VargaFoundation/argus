@@ -64,7 +64,6 @@ SQLRETURN SQL_API SQLGetDescField(
      * We detect this via the signature.
      */
     argus_stmt_t *stmt = NULL;
-    argus_desc_type_t desc_type = ARGUS_DESC_IRD;
 
     /* Check if it's actually a statement handle (implicit descriptor) */
     if (argus_valid_stmt((SQLHANDLE)DescriptorHandle)) {
@@ -142,8 +141,8 @@ SQLRETURN SQL_API SQLGetDescField(
         return SQL_SUCCESS;
 
     case SQL_DESC_UNSIGNED:
-        if (Value) *(SQLINTEGER *)Value = SQL_FALSE;
-        if (StringLength) *StringLength = sizeof(SQLINTEGER);
+        if (Value) *(SQLSMALLINT *)Value = SQL_FALSE;
+        if (StringLength) *StringLength = sizeof(SQLSMALLINT);
         return SQL_SUCCESS;
 
     case SQL_DESC_AUTO_UNIQUE_VALUE:
@@ -246,7 +245,7 @@ SQLRETURN SQL_API SQLSetDescField(
     SQLPOINTER  Value,
     SQLINTEGER  BufferLength)
 {
-    (void)BufferLength;
+    (void)BufferLength; /* No string descriptor fields handled yet */
 
     if (!argus_valid_stmt((SQLHANDLE)DescriptorHandle)) {
         return SQL_INVALID_HANDLE;

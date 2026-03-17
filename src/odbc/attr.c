@@ -135,8 +135,8 @@ SQLRETURN SQL_API SQLSetConnectAttr(
         return SQL_SUCCESS;
 
     default:
-        /* Accept unknown attributes silently for compatibility */
-        return SQL_SUCCESS;
+        return argus_set_error(&dbc->diag, "HY092",
+                               "[Argus] Invalid attribute identifier", 0);
     }
 }
 
@@ -272,8 +272,8 @@ SQLRETURN SQL_API SQLSetStmtAttr(
         return SQL_SUCCESS;
 
     default:
-        /* Accept unknown attributes silently */
-        return SQL_SUCCESS;
+        return argus_set_error(&stmt->diag, "HY092",
+                               "[Argus] Invalid attribute identifier", 0);
     }
 }
 

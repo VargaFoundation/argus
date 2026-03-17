@@ -174,9 +174,12 @@ SQLRETURN SQL_API SQLGetDiagField(
 
     switch (DiagIdentifier) {
     case SQL_DIAG_SQLSTATE:
-        if (DiagInfo) {
-            strncpy((char *)DiagInfo, (const char *)rec->sqlstate,
-                    BufferLength > 0 ? (size_t)BufferLength : 0);
+        if (DiagInfo && BufferLength > 0) {
+            SQLSMALLINT state_len = (SQLSMALLINT)strlen((const char *)rec->sqlstate);
+            SQLSMALLINT copy = state_len < (BufferLength - 1)
+                               ? state_len : (BufferLength - 1);
+            memcpy(DiagInfo, rec->sqlstate, (size_t)copy);
+            ((char *)DiagInfo)[copy] = '\0';
         }
         if (StringLength)
             *StringLength = (SQLSMALLINT)strlen((const char *)rec->sqlstate);

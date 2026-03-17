@@ -34,6 +34,11 @@ static int count_param_markers(const char *sql)
 
 static char *sql_escape_string(const char *value, size_t len)
 {
+    /* Reject embedded NUL bytes to prevent SQL injection via truncation */
+    for (size_t i = 0; i < len; i++) {
+        if (value[i] == '\0') return NULL;
+    }
+
     /* Count characters that need escaping to determine output size */
     size_t num_special = 0;
     for (size_t i = 0; i < len; i++) {
@@ -84,7 +89,7 @@ static char *render_param(const argus_param_binding_t *param)
             len = (size_t)*param->str_len_or_ind;
         else
             len = strlen(str);
-        return sql_escape_string(str, len);
+        return sql_escape_string(str, len); /* NULL if embedded NUL byte */
     }
 
     case SQL_C_WCHAR: {
@@ -296,8 +301,8 @@ static char *render_param(const argus_param_binding_t *param)
     case SQL_C_INTERVAL_HOUR_TO_MINUTE:
     case SQL_C_INTERVAL_HOUR_TO_SECOND:
     case SQL_C_INTERVAL_MINUTE_TO_SECOND:
-        /* Interval types not supported — render as NULL */
-        return strdup("NULL");
+        /* Interval types not supported — return NULL to propagate HYC00 */
+        return NULL;
 
     default:
         /* Treat as string */
@@ -340,8 +345,9 @@ static char *substitute_params(const char *sql,
         }
         rendered[i] = render_param(&params[i]);
         if (!rendered[i]) {
-            argus_set_error(diag, "HY001",
-                            "[Argus] Memory allocation failed", 0);
+            argus_set_error(diag, "HYC00",
+                            "[Argus] Unsupported parameter type or "
+                            "invalid parameter value", 0);
             for (int j = 0; j < i; j++) free(rendered[j]);
             free(rendered);
             return NULL;
@@ -449,6 +455,8 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
             dbc->backend_conn, stmt->op,
             stmt->columns, &ncols);
         if (rc == 0 && ncols > 0) {
+            if (ncols > ARGUS_MAX_COLUMNS)
+                ncols = ARGUS_MAX_COLUMNS;
             stmt->num_cols = ncols;
             stmt->metadata_fetched = true;
             ARGUS_LOG_TRACE("Retrieved metadata: %d columns", ncols);

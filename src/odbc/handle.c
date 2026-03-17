@@ -1,5 +1,6 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
+#include "argus/compat.h"
 #include "argus/log.h"
 #include <stdlib.h>
 #include <string.h>
@@ -100,7 +101,7 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     dbc->signature = 0;
     free(dbc->host);
     free(dbc->username);
-    free(dbc->password);
+    argus_secure_free(dbc->password);
     free(dbc->database);
     free(dbc->auth_mechanism);
     free(dbc->backend_name);

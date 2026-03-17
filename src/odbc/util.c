@@ -156,6 +156,8 @@ SQLSMALLINT argus_copy_string(const char *src,
         memcpy(dst, src, copy_len);
         dst[copy_len] = '\0';
     }
+    if (src_len > 32767)
+        return 32767; /* SQLSMALLINT_MAX — avoid signed overflow */
     return (SQLSMALLINT)src_len;
 }
 
