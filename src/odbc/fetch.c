@@ -83,6 +83,8 @@ static SQLRETURN fetch_batch(argus_stmt_t *stmt)
     }
 
     if (num_cols > 0 && !stmt->metadata_fetched) {
+        if (num_cols > ARGUS_MAX_COLUMNS)
+            num_cols = ARGUS_MAX_COLUMNS;
         stmt->num_cols = num_cols;
         stmt->metadata_fetched = true;
     }
@@ -353,6 +355,11 @@ static SQLRETURN convert_cell_to_target(
             return argus_set_error(diag, "22007",
                                    "[Argus] Invalid date format", 0);
         }
+        if (date.month < 1 || date.month > 12 ||
+            date.day < 1 || date.day > 31) {
+            return argus_set_error(diag, "22007",
+                                   "[Argus] Date value out of range", 0);
+        }
         if (target_value)
             *(SQL_DATE_STRUCT *)target_value = date;
         if (str_len_or_ind)
@@ -367,6 +374,10 @@ static SQLRETURN convert_cell_to_target(
                    &time.hour, &time.minute, &time.second) != 3) {
             return argus_set_error(diag, "22007",
                                    "[Argus] Invalid time format", 0);
+        }
+        if (time.hour > 23 || time.minute > 59 || time.second > 59) {
+            return argus_set_error(diag, "22007",
+                                   "[Argus] Time value out of range", 0);
         }
         if (target_value)
             *(SQL_TIME_STRUCT *)target_value = time;
@@ -386,6 +397,12 @@ static SQLRETURN convert_cell_to_target(
             return argus_set_error(diag, "22007",
                                    "[Argus] Invalid timestamp format", 0);
         }
+        if (ts.month < 1 || ts.month > 12 ||
+            ts.day < 1 || ts.day > 31 ||
+            ts.hour > 23 || ts.minute > 59 || ts.second > 59) {
+            return argus_set_error(diag, "22007",
+                                   "[Argus] Timestamp value out of range", 0);
+        }
         if (target_value)
             *(SQL_TIMESTAMP_STRUCT *)target_value = ts;
         if (str_len_or_ind)
@@ -404,30 +421,56 @@ static SQLRETURN convert_cell_to_target(
         num.sign = (*p == '-') ? 0 : 1;
         if (*p == '-' || *p == '+') p++;
 
-        /* Parse digits and build 128-bit little-endian value */
-        __uint128_t val128 = 0;
+        /* Parse digits and build 128-bit little-endian value.
+         * Use two 64-bit halves for MSVC portability (__uint128_t
+         * is a GCC/Clang extension not available on Windows). */
+        unsigned long long lo = 0, hi = 0;
         int scale = 0;
+        int total_digits = 0;
         bool past_decimal = false;
         while (*p) {
             if (*p == '.') {
                 past_decimal = true;
             } else if (*p >= '0' && *p <= '9') {
-                int digit = *p - '0';
-                val128 = val128 * 10 + (unsigned)digit;
+                unsigned digit = (unsigned)(*p - '0');
+                /* Multiply (hi:lo) by 10 and add digit */
+                unsigned long long lo_x10, carry;
+#if defined(__GNUC__) || defined(__clang__)
+                {
+                    unsigned __int128 full = (unsigned __int128)lo * 10;
+                    lo_x10 = (unsigned long long)full;
+                    carry   = (unsigned long long)(full >> 64);
+                }
+#else
+                /* Manual 64×64→128 via 32-bit halves (MSVC path) */
+                {
+                    unsigned long long a_lo = lo & 0xFFFFFFFFULL;
+                    unsigned long long a_hi = lo >> 32;
+                    unsigned long long r0 = a_lo * 10;
+                    unsigned long long r1 = a_hi * 10 + (r0 >> 32);
+                    lo_x10 = (r0 & 0xFFFFFFFFULL) | ((r1 & 0xFFFFFFFFULL) << 32);
+                    carry  = r1 >> 32;
+                }
+#endif
+                /* Check for 128-bit overflow: hi*10 + carry must fit */
+                if (hi > (0xFFFFFFFFFFFFFFFFULL - carry) / 10) {
+                    return argus_set_error(diag, "22003",
+                                           "[Argus] Numeric value out of range", 0);
+                }
+                hi = hi * 10 + carry;
+                lo = lo_x10 + digit;
+                if (lo < lo_x10) hi++;  /* addition carry */
+                total_digits++;
                 if (past_decimal) scale++;
             }
             p++;
         }
 
         /* Store in little-endian format */
-        num.precision = 38;
+        num.precision = (SQLCHAR)(total_digits > 0 ? total_digits : 1);
         num.scale = (SQLSCHAR)scale;
-        {
-            unsigned long long low_part  = (unsigned long long)val128;
-            unsigned long long high_part = (unsigned long long)(val128 >> 64);
-            memcpy(num.val, &low_part, 8);
-            memcpy(num.val + 8, &high_part, 8);
-        }
+        memcpy(num.val, &lo, 8);
+        memcpy(num.val + 8, &hi, 8);
 
         if (target_value)
             *(SQL_NUMERIC_STRUCT *)target_value = num;

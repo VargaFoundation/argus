@@ -1,6 +1,7 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
 #include "argus/backend.h"
+#include "argus/compat.h"
 #include "argus/log.h"
 #include <stdlib.h>
 #include <string.h>
@@ -8,11 +9,9 @@
 #include <glib.h>
 
 #ifdef _WIN32
-#define strcasecmp _stricmp
 #include <windows.h>
 #define sleep_seconds(n) Sleep((n) * 1000)
 #else
-#include <strings.h>  /* for strcasecmp */
 #include <unistd.h>
 #define sleep_seconds(n) sleep(n)
 #endif

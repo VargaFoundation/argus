@@ -72,6 +72,11 @@ argus_backend_conn_t argus_pool_acquire(
 {
     pool_ensure_init();
 
+    /* Collect stale connections to disconnect outside the mutex */
+    typedef struct { const argus_backend_t *b; argus_backend_conn_t c; } stale_t;
+    stale_t stale_list[ARGUS_POOL_MAX_TOTAL];
+    int stale_count = 0;
+
     g_mutex_lock(&g_pool.mutex);
 
     for (int i = 0; i < g_pool.count; i++) {
@@ -84,8 +89,12 @@ argus_backend_conn_t argus_pool_acquire(
                 !e->backend->is_alive(e->conn)) {
                 ARGUS_LOG_DEBUG("Pool: stale connection to %s:%d, evicting",
                                 host, port);
-                if (e->backend->disconnect)
-                    e->backend->disconnect(e->conn);
+                /* Save for disconnect after unlock */
+                if (stale_count < ARGUS_POOL_MAX_TOTAL) {
+                    stale_list[stale_count].b = e->backend;
+                    stale_list[stale_count].c = e->conn;
+                    stale_count++;
+                }
                 free(e->host);
                 free(e->backend_name);
                 free(e->username);
@@ -105,11 +114,22 @@ argus_backend_conn_t argus_pool_acquire(
             ARGUS_LOG_DEBUG("Pool: reusing connection to %s:%d (backend=%s)",
                             host, port, backend_name);
             g_mutex_unlock(&g_pool.mutex);
+            /* Disconnect stale connections found before the match */
+            for (int s = 0; s < stale_count; s++) {
+                if (stale_list[s].b && stale_list[s].b->disconnect)
+                    stale_list[s].b->disconnect(stale_list[s].c);
+            }
             return e->conn;
         }
     }
 
     g_mutex_unlock(&g_pool.mutex);
+
+    /* Disconnect stale connections outside the mutex */
+    for (int s = 0; s < stale_count; s++) {
+        if (stale_list[s].b && stale_list[s].b->disconnect)
+            stale_list[s].b->disconnect(stale_list[s].c);
+    }
     return NULL;
 }
 
@@ -151,9 +171,20 @@ void argus_pool_release(
         if (key_count < ARGUS_POOL_MAX_PER_KEY) {
             argus_pool_entry_t *e = &g_pool.entries[g_pool.count];
             e->host = strdup(host);
-            e->port = port;
             e->backend_name = strdup(backend_name);
             e->username = strdup(username ? username : "");
+            if (!e->host || !e->backend_name || !e->username) {
+                free(e->host);
+                free(e->backend_name);
+                free(e->username);
+                memset(e, 0, sizeof(*e));
+                ARGUS_LOG_ERROR("Pool: strdup failed, disconnecting");
+                g_mutex_unlock(&g_pool.mutex);
+                if (backend && backend->disconnect && conn)
+                    backend->disconnect(conn);
+                return;
+            }
+            e->port = port;
             e->backend = backend;
             e->conn = conn;
             e->in_use = false;
@@ -170,7 +201,7 @@ void argus_pool_release(
     ARGUS_LOG_DEBUG("Pool: full, disconnecting %s:%d", host, port);
     g_mutex_unlock(&g_pool.mutex);
 
-    if (backend && conn) {
+    if (backend && backend->disconnect && conn) {
         backend->disconnect(conn);
     }
 }
@@ -183,10 +214,14 @@ void argus_pool_cleanup(void)
 
     g_mutex_lock(&g_pool.mutex);
 
+    int kept = 0;
     for (int i = 0; i < g_pool.count; i++) {
         argus_pool_entry_t *e = &g_pool.entries[i];
         if (e->in_use) {
-            /* Skip freeing strings for in-use entries; mark for later */
+            /* Preserve in-use entries by compacting them */
+            if (kept != i)
+                g_pool.entries[kept] = *e;
+            kept++;
             continue;
         }
         if (e->backend && e->conn) {
@@ -196,7 +231,7 @@ void argus_pool_cleanup(void)
         free(e->backend_name);
         free(e->username);
     }
-    g_pool.count = 0;
+    g_pool.count = kept;
 
     g_mutex_unlock(&g_pool.mutex);
 }

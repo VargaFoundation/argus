@@ -10,6 +10,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <windows.h>
 
 /* Case-insensitive string comparison */
 #define strcasecmp  _stricmp
@@ -34,10 +35,28 @@ static inline char *strndup(const char *s, size_t n)
     return copy;
 }
 
+/* Secure memory zeroing before free (for credentials) */
+static inline void argus_secure_free(char *p)
+{
+    if (p) {
+        SecureZeroMemory(p, strlen(p));
+        free(p);
+    }
+}
+
 #else /* POSIX */
 
 #include <strings.h>
 #include <string.h>
+
+/* Secure memory zeroing before free (for credentials) */
+static inline void argus_secure_free(char *p)
+{
+    if (p) {
+        explicit_bzero(p, strlen(p));
+        free(p);
+    }
+}
 
 #endif /* _WIN32 */
 

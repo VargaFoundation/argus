@@ -72,7 +72,7 @@ static SQLSMALLINT utf8_to_wchar(const SQLCHAR *utf8, SQLSMALLINT utf8_len,
     SQLSMALLINT total_chars = (SQLSMALLINT)items_written;
 
     if (out && out_buf_len > 0) {
-        SQLSMALLINT max_chars = (SQLSMALLINT)(out_buf_len / (SQLSMALLINT)sizeof(SQLWCHAR)) - 1;
+        SQLSMALLINT max_chars = (SQLSMALLINT)((size_t)out_buf_len / sizeof(SQLWCHAR)) - 1;
         if (max_chars < 0) max_chars = 0;
         SQLSMALLINT copy = total_chars < max_chars ? total_chars : max_chars;
         memcpy(out, utf16, (size_t)copy * sizeof(SQLWCHAR));
@@ -115,7 +115,9 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLDriverConnectW(
                                            OutConnectionString, BufferLength);
         if (StringLength2Ptr) *StringLength2Ptr = wlen;
     } else if (StringLength2Ptr) {
-        *StringLength2Ptr = out_len;
+        /* Measure character count by converting without output buffer */
+        SQLSMALLINT wlen = utf8_to_wchar(out_buf, out_len, NULL, 0);
+        *StringLength2Ptr = wlen;
     }
 
     return ret;
@@ -215,9 +217,11 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLGetDiagRecW(
                 msg_buf, msg_len,
                 MessageText, BufferLength);
             if (TextLength)
-                *TextLength = (SQLSMALLINT)(wlen * (SQLSMALLINT)sizeof(SQLWCHAR));
+                *TextLength = wlen; /* ODBC spec: character count */
         } else if (TextLength) {
-            *TextLength = (SQLSMALLINT)(msg_len * (SQLSMALLINT)sizeof(SQLWCHAR));
+            SQLSMALLINT wlen = utf8_to_wchar(
+                msg_buf, msg_len, NULL, 0);
+            *TextLength = wlen;
         }
     }
 
@@ -475,9 +479,16 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLNativeSqlW(
     SQLWCHAR  *OutStatementText, SQLINTEGER BufferLength,
     SQLINTEGER *TextLength2Ptr)
 {
-    SQLSMALLINT wlen = (TextLength1 == SQL_NTS)
-                       ? SQL_NTS : (SQLSMALLINT)TextLength1;
-    char *utf8_in = wchar_to_utf8(InStatementText, wlen);
+    char *utf8_in = NULL;
+    if (TextLength1 == SQL_NTS) {
+        utf8_in = wchar_to_utf8(InStatementText, SQL_NTS);
+    } else if (InStatementText) {
+        GError *err = NULL;
+        utf8_in = (char *)g_utf16_to_utf8(
+            (const gunichar2 *)InStatementText, (glong)TextLength1,
+            NULL, NULL, &err);
+        if (err) { g_error_free(err); utf8_in = NULL; }
+    }
 
     SQLCHAR out_buf[4096];
     SQLINTEGER out_len = 0;
@@ -495,9 +506,11 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLNativeSqlW(
             out_buf, (SQLSMALLINT)out_len,
             OutStatementText, (SQLSMALLINT)BufferLength);
         if (TextLength2Ptr)
-            *TextLength2Ptr = (SQLINTEGER)(wout * (SQLSMALLINT)sizeof(SQLWCHAR));
+            *TextLength2Ptr = (SQLINTEGER)wout; /* character count */
     } else if (TextLength2Ptr) {
-        *TextLength2Ptr = (SQLINTEGER)(out_len * (SQLINTEGER)sizeof(SQLWCHAR));
+        SQLSMALLINT wout = utf8_to_wchar(
+            out_buf, (SQLSMALLINT)out_len, NULL, 0);
+        *TextLength2Ptr = (SQLINTEGER)wout;
     }
 
     return ret;
@@ -638,9 +651,11 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLErrorW(
                 msg_buf, msg_len,
                 MessageText, BufferLength);
             if (TextLength)
-                *TextLength = (SQLSMALLINT)(wlen * (SQLSMALLINT)sizeof(SQLWCHAR));
+                *TextLength = wlen; /* ODBC spec: character count */
         } else if (TextLength) {
-            *TextLength = (SQLSMALLINT)(msg_len * (SQLSMALLINT)sizeof(SQLWCHAR));
+            SQLSMALLINT wlen = utf8_to_wchar(
+                msg_buf, msg_len, NULL, 0);
+            *TextLength = wlen;
         }
     }
 
