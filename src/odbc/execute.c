@@ -426,6 +426,10 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
         ARGUS_LOG_DEBUG("Executing query: %s", query);
     }
 
+    /* Propagate query timeout to backend if set */
+    if (stmt->query_timeout > 0 && dbc->query_timeout_sec == 0)
+        dbc->query_timeout_sec = (int)stmt->query_timeout;
+
     /* Execute via backend with timing */
     gint64 exec_start = g_get_monotonic_time();
     int rc = dbc->backend->execute(dbc->backend_conn, query, &stmt->op);
@@ -768,6 +772,38 @@ SQLRETURN SQL_API SQLBindParameter(
 
     ARGUS_LOG_DEBUG("Bound parameter %d: value_type=%d, param_type=%d",
                     ParameterNumber, ValueType, ParameterType);
+
+    return SQL_SUCCESS;
+}
+
+/* ── ODBC API: SQLDescribeParam ──────────────────────────────── */
+
+SQLRETURN SQL_API SQLDescribeParam(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT ParameterNumber,
+    SQLSMALLINT *DataTypePtr,
+    SQLULEN     *ParameterSizePtr,
+    SQLSMALLINT *DecimalDigitsPtr,
+    SQLSMALLINT *NullablePtr)
+{
+    argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
+
+    argus_diag_clear(&stmt->diag);
+
+    if (ParameterNumber < 1) {
+        return argus_set_error(&stmt->diag, "07009",
+                               "[Argus] Invalid parameter number", 0);
+    }
+
+    /*
+     * Return a generic description (SQL_VARCHAR) since we cannot
+     * determine parameter types without server-side prepare support.
+     */
+    if (DataTypePtr)      *DataTypePtr      = SQL_VARCHAR;
+    if (ParameterSizePtr) *ParameterSizePtr = 255;
+    if (DecimalDigitsPtr) *DecimalDigitsPtr  = 0;
+    if (NullablePtr)      *NullablePtr       = SQL_NULLABLE;
 
     return SQL_SUCCESS;
 }

@@ -132,7 +132,6 @@ SQLRETURN SQL_API SQLDriverConnect(
     SQLUSMALLINT DriverCompletion)
 {
     (void)WindowHandle;
-    (void)DriverCompletion;
 
     argus_dbc_t *dbc = (argus_dbc_t *)ConnectionHandle;
     if (!argus_valid_dbc(dbc)) return SQL_INVALID_HANDLE;
@@ -142,6 +141,12 @@ SQLRETURN SQL_API SQLDriverConnect(
     if (dbc->connected) {
         return argus_set_error(&dbc->diag, "08002",
                                "[Argus] Already connected", 0);
+    }
+
+    /* Reject SQL_DRIVER_PROMPT — we have no UI dialog */
+    if (DriverCompletion == SQL_DRIVER_PROMPT) {
+        return argus_set_error(&dbc->diag, "HY000",
+                               "[Argus] Driver does not support prompting", 0);
     }
 
     /* Get the connection string */
@@ -267,6 +272,14 @@ SQLRETURN SQL_API SQLDriverConnect(
     }
 
     argus_conn_params_free(&params);
+
+    /* For SQL_DRIVER_COMPLETE[_REQUIRED], verify HOST is present */
+    if ((DriverCompletion == SQL_DRIVER_COMPLETE ||
+         DriverCompletion == SQL_DRIVER_COMPLETE_REQUIRED) && !dbc->host) {
+        free(conn_str);
+        return argus_set_error(&dbc->diag, "01S00",
+                               "[Argus] HOST parameter required", 0);
+    }
 
     /* Connect */
     SQLRETURN ret = do_connect(dbc);

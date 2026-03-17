@@ -302,6 +302,49 @@ SQLRETURN SQL_API SQLSetDescField(
     }
 }
 
+/* ── ODBC API: SQLSetDescRec ─────────────────────────────────── */
+
+SQLRETURN SQL_API SQLSetDescRec(
+    SQLHDESC     DescriptorHandle,
+    SQLSMALLINT  RecNumber,
+    SQLSMALLINT  Type,
+    SQLSMALLINT  SubType,
+    SQLLEN       Length,
+    SQLSMALLINT  Precision,
+    SQLSMALLINT  Scale,
+    SQLPOINTER   DataPtr,
+    SQLLEN      *StringLengthPtr,
+    SQLLEN      *IndicatorPtr)
+{
+    (void)SubType;
+    (void)Precision;
+    (void)Scale;
+
+    if (!argus_valid_stmt((SQLHANDLE)DescriptorHandle)) {
+        return SQL_INVALID_HANDLE;
+    }
+
+    argus_stmt_t *stmt = (argus_stmt_t *)DescriptorHandle;
+
+    if (RecNumber < 1 || RecNumber > ARGUS_MAX_COLUMNS) {
+        return argus_set_error(&stmt->diag, "07009",
+                               "[Argus] Invalid descriptor index", 0);
+    }
+
+    int idx = RecNumber - 1;
+
+    /* Update ARD binding */
+    stmt->bindings[idx].target_type    = Type;
+    stmt->bindings[idx].target_value   = DataPtr;
+    stmt->bindings[idx].buffer_length  = Length;
+    stmt->bindings[idx].str_len_or_ind = StringLengthPtr;
+    stmt->bindings[idx].bound          = (DataPtr != NULL);
+
+    (void)IndicatorPtr; /* We use StringLengthPtr as combined indicator */
+
+    return SQL_SUCCESS;
+}
+
 /* ── ODBC API: SQLGetDescRec ─────────────────────────────────── */
 
 SQLRETURN SQL_API SQLGetDescRec(
