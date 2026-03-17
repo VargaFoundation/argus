@@ -412,11 +412,12 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
         dbc->backend->close_operation(dbc->backend_conn, stmt->op);
         stmt->op = NULL;
     }
-    stmt->executed        = false;
-    stmt->num_cols        = 0;
-    stmt->metadata_fetched = false;
-    stmt->fetch_started   = false;
-    stmt->row_count       = -1;
+    stmt->executed          = false;
+    stmt->num_cols          = 0;
+    stmt->metadata_fetched  = false;
+    stmt->fetch_started     = false;
+    stmt->row_count         = -1;
+    stmt->rows_fetched_total = 0;
     argus_row_cache_clear(&stmt->row_cache);
 
     /* Log query (truncate if very long) */

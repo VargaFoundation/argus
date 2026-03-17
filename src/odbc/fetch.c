@@ -512,21 +512,10 @@ static SQLRETURN convert_cell_to_target(
     }
 }
 
-/* ── ODBC API: SQLFetch ──────────────────────────────────────── */
+/* ── Internal: fetch a single row into bound columns ──────────── */
 
-SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
+static SQLRETURN fetch_single_row(argus_stmt_t *stmt, SQLULEN rowset_idx)
 {
-    argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
-    if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
-
-    argus_diag_clear(&stmt->diag);
-
-    if (!stmt->executed) {
-        return argus_set_error(&stmt->diag, "HY010",
-                               "[Argus] Function sequence error: not executed",
-                               0);
-    }
-
     /* Check SQL_ATTR_MAX_ROWS limit */
     if (stmt->max_rows > 0 && stmt->rows_fetched_total >= stmt->max_rows) {
         stmt->row_count = (SQLLEN)stmt->rows_fetched_total;
@@ -567,10 +556,23 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
         argus_col_binding_t *bind = &stmt->bindings[col];
         argus_cell_t *cell = &row->cells[col];
 
+        /*
+         * For block cursors (row_array_size > 1), offset the target
+         * pointer by rowset_idx * buffer_length for column-wise binding.
+         */
+        SQLPOINTER target = bind->target_value;
+        SQLLEN *ind_ptr = bind->str_len_or_ind;
+        if (rowset_idx > 0 && target) {
+            target = (char *)target + rowset_idx * bind->buffer_length;
+            if (ind_ptr)
+                ind_ptr = (SQLLEN *)((char *)ind_ptr +
+                           rowset_idx * sizeof(SQLLEN));
+        }
+
         SQLRETURN ret = convert_cell_to_target(
             cell, bind->target_type,
-            bind->target_value, bind->buffer_length,
-            bind->str_len_or_ind, &stmt->diag);
+            target, bind->buffer_length,
+            ind_ptr, &stmt->diag);
 
         if (ret == SQL_SUCCESS_WITH_INFO)
             final_ret = SQL_SUCCESS_WITH_INFO;
@@ -578,12 +580,67 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
             return SQL_ERROR;
     }
 
-    /* Update rows fetched pointer, row status, and metrics */
-    if (stmt->rows_fetched_ptr)
-        *(stmt->rows_fetched_ptr) = 1;
-    if (stmt->row_status_ptr)
-        stmt->row_status_ptr[0] = SQL_ROW_SUCCESS;
     stmt->rows_fetched_total++;
+    return final_ret;
+}
+
+/* ── ODBC API: SQLFetch ──────────────────────────────────────── */
+
+SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
+{
+    argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
+
+    argus_diag_clear(&stmt->diag);
+
+    if (!stmt->executed) {
+        return argus_set_error(&stmt->diag, "HY010",
+                               "[Argus] Function sequence error: not executed",
+                               0);
+    }
+
+    SQLULEN array_size = stmt->row_array_size > 0 ? stmt->row_array_size : 1;
+    SQLULEN rows_fetched = 0;
+    SQLRETURN final_ret = SQL_SUCCESS;
+
+    for (SQLULEN i = 0; i < array_size; i++) {
+        SQLRETURN ret = fetch_single_row(stmt, i);
+
+        if (ret == SQL_NO_DATA) {
+            if (stmt->row_status_ptr)
+                stmt->row_status_ptr[i] = SQL_ROW_NOROW;
+            break;
+        }
+
+        if (ret == SQL_ERROR) {
+            if (stmt->row_status_ptr)
+                stmt->row_status_ptr[i] = SQL_ROW_ERROR;
+            final_ret = SQL_ERROR;
+            break;
+        }
+
+        if (stmt->row_status_ptr)
+            stmt->row_status_ptr[i] = SQL_ROW_SUCCESS;
+        if (ret == SQL_SUCCESS_WITH_INFO) {
+            if (stmt->row_status_ptr)
+                stmt->row_status_ptr[i] = SQL_ROW_SUCCESS_WITH_INFO;
+            final_ret = SQL_SUCCESS_WITH_INFO;
+        }
+        rows_fetched++;
+    }
+
+    /* Fill remaining status slots with SQL_ROW_NOROW */
+    if (stmt->row_status_ptr) {
+        for (SQLULEN i = rows_fetched; i < array_size; i++)
+            stmt->row_status_ptr[i] = SQL_ROW_NOROW;
+    }
+
+    /* Update rows fetched pointer */
+    if (stmt->rows_fetched_ptr)
+        *(stmt->rows_fetched_ptr) = rows_fetched;
+
+    if (rows_fetched == 0)
+        return SQL_NO_DATA;
 
     return final_ret;
 }

@@ -2,6 +2,18 @@
 #include "argus/odbc_api.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+
+/* Fallback defines for datetime subcodes */
+#ifndef SQL_CODE_DATE
+#define SQL_CODE_DATE       1
+#endif
+#ifndef SQL_CODE_TIMESTAMP
+#define SQL_CODE_TIMESTAMP  3
+#endif
+#ifndef SQL_DATETIME
+#define SQL_DATETIME        9
+#endif
 
 extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
 
@@ -128,6 +140,232 @@ SQLRETURN SQL_API SQLColumns(
     return catalog_dispatch(stmt);
 }
 
+/* ── Built-in type info for SQLGetTypeInfo fallback ──────────── */
+
+typedef struct {
+    const char  *type_name;
+    SQLSMALLINT  data_type;
+    SQLINTEGER   column_size;
+    const char  *literal_prefix;
+    const char  *literal_suffix;
+    const char  *create_params;
+    SQLSMALLINT  nullable;
+    SQLSMALLINT  case_sensitive;
+    SQLSMALLINT  searchable;
+    SQLSMALLINT  unsigned_attr;
+    SQLSMALLINT  fixed_prec_scale;
+    SQLSMALLINT  auto_unique;
+    const char  *local_type_name;
+    SQLSMALLINT  min_scale;
+    SQLSMALLINT  max_scale;
+    SQLSMALLINT  sql_data_type;
+    SQLSMALLINT  sql_datetime_sub;
+    SQLINTEGER   num_prec_radix;
+    SQLSMALLINT  interval_precision;
+} builtin_type_info_t;
+
+static const builtin_type_info_t builtin_types[] = {
+    {"VARCHAR",   SQL_VARCHAR,        65535, "'",  "'",  "max length",
+     SQL_NULLABLE, SQL_TRUE,  SQL_SEARCHABLE, -1, SQL_FALSE, -1,
+     "VARCHAR",  0, 0, SQL_VARCHAR, 0, 0, 0},
+    {"CHAR",      SQL_CHAR,           255,   "'",  "'",  "length",
+     SQL_NULLABLE, SQL_TRUE,  SQL_SEARCHABLE, -1, SQL_FALSE, -1,
+     "CHAR",     0, 0, SQL_CHAR, 0, 0, 0},
+    {"INTEGER",   SQL_INTEGER,        10,    NULL, NULL, NULL,
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, SQL_FALSE, SQL_FALSE, SQL_FALSE,
+     "INTEGER",  0, 0, SQL_INTEGER, 0, 10, 0},
+    {"BIGINT",    SQL_BIGINT,         19,    NULL, NULL, NULL,
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, SQL_FALSE, SQL_FALSE, SQL_FALSE,
+     "BIGINT",   0, 0, SQL_BIGINT, 0, 10, 0},
+    {"SMALLINT",  SQL_SMALLINT,       5,     NULL, NULL, NULL,
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, SQL_FALSE, SQL_FALSE, SQL_FALSE,
+     "SMALLINT", 0, 0, SQL_SMALLINT, 0, 10, 0},
+    {"TINYINT",   SQL_TINYINT,        3,     NULL, NULL, NULL,
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, SQL_FALSE, SQL_FALSE, SQL_FALSE,
+     "TINYINT",  0, 0, SQL_TINYINT, 0, 10, 0},
+    {"FLOAT",     SQL_FLOAT,          15,    NULL, NULL, NULL,
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, SQL_FALSE, SQL_FALSE, SQL_FALSE,
+     "FLOAT",    0, 0, SQL_FLOAT, 0, 2, 0},
+    {"DOUBLE",    SQL_DOUBLE,         15,    NULL, NULL, NULL,
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, SQL_FALSE, SQL_FALSE, SQL_FALSE,
+     "DOUBLE",   0, 0, SQL_DOUBLE, 0, 2, 0},
+    {"REAL",      SQL_REAL,           7,     NULL, NULL, NULL,
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, SQL_FALSE, SQL_FALSE, SQL_FALSE,
+     "REAL",     0, 0, SQL_REAL, 0, 2, 0},
+    {"DECIMAL",   SQL_DECIMAL,        38,    NULL, NULL, "precision,scale",
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, SQL_FALSE, SQL_FALSE, SQL_FALSE,
+     "DECIMAL",  0, 38, SQL_DECIMAL, 0, 10, 0},
+    {"BOOLEAN",   SQL_BIT,            1,     NULL, NULL, NULL,
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, -1, SQL_FALSE, -1,
+     "BOOLEAN",  0, 0, SQL_BIT, 0, 0, 0},
+    {"DATE",      SQL_TYPE_DATE,      10,    "'",  "'",  NULL,
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, -1, SQL_FALSE, -1,
+     "DATE",     0, 0, SQL_DATETIME, SQL_CODE_DATE, 0, 0},
+    {"TIMESTAMP", SQL_TYPE_TIMESTAMP, 26,    "'",  "'",  NULL,
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, -1, SQL_FALSE, -1,
+     "TIMESTAMP",0, 6, SQL_DATETIME, SQL_CODE_TIMESTAMP, 0, 0},
+    {"BINARY",    SQL_BINARY,         65535, "X'", "'",  "max length",
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, -1, SQL_FALSE, -1,
+     "BINARY",   0, 0, SQL_BINARY, 0, 0, 0},
+    {"LONGVARCHAR", SQL_LONGVARCHAR,  2147483647, "'", "'", NULL,
+     SQL_NULLABLE, SQL_TRUE,  SQL_SEARCHABLE, -1, SQL_FALSE, -1,
+     "STRING",   0, 0, SQL_LONGVARCHAR, 0, 0, 0},
+};
+
+#define BUILTIN_TYPE_COUNT (sizeof(builtin_types) / sizeof(builtin_types[0]))
+
+static void setup_type_info_metadata(argus_stmt_t *stmt)
+{
+    static const struct {
+        const char *name;
+        SQLSMALLINT sql_type;
+        SQLULEN size;
+    } ti_cols[] = {
+        {"TYPE_NAME",          SQL_VARCHAR,  128},
+        {"DATA_TYPE",          SQL_SMALLINT, 5},
+        {"COLUMN_SIZE",        SQL_INTEGER,  10},
+        {"LITERAL_PREFIX",     SQL_VARCHAR,  128},
+        {"LITERAL_SUFFIX",     SQL_VARCHAR,  128},
+        {"CREATE_PARAMS",      SQL_VARCHAR,  128},
+        {"NULLABLE",           SQL_SMALLINT, 5},
+        {"CASE_SENSITIVE",     SQL_SMALLINT, 5},
+        {"SEARCHABLE",         SQL_SMALLINT, 5},
+        {"UNSIGNED_ATTRIBUTE", SQL_SMALLINT, 5},
+        {"FIXED_PREC_SCALE",   SQL_SMALLINT, 5},
+        {"AUTO_UNIQUE_VALUE",  SQL_SMALLINT, 5},
+        {"LOCAL_TYPE_NAME",    SQL_VARCHAR,  128},
+        {"MINIMUM_SCALE",      SQL_SMALLINT, 5},
+        {"MAXIMUM_SCALE",      SQL_SMALLINT, 5},
+        {"SQL_DATA_TYPE",      SQL_SMALLINT, 5},
+        {"SQL_DATETIME_SUB",   SQL_SMALLINT, 5},
+        {"NUM_PREC_RADIX",     SQL_INTEGER,  10},
+        {"INTERVAL_PRECISION", SQL_SMALLINT, 5},
+    };
+
+    stmt->num_cols = 19;
+    stmt->metadata_fetched = true;
+    for (int i = 0; i < 19; i++) {
+        strncpy((char *)stmt->columns[i].name, ti_cols[i].name,
+                ARGUS_MAX_COLUMN_NAME - 1);
+        stmt->columns[i].name_len = (SQLSMALLINT)strlen(ti_cols[i].name);
+        stmt->columns[i].sql_type = ti_cols[i].sql_type;
+        stmt->columns[i].column_size = ti_cols[i].size;
+        stmt->columns[i].decimal_digits = 0;
+        stmt->columns[i].nullable = SQL_NULLABLE;
+    }
+}
+
+static void add_type_row(argus_row_cache_t *cache, int row_idx,
+                          const builtin_type_info_t *t)
+{
+    argus_row_t *row = &cache->rows[row_idx];
+    row->cells = calloc(19, sizeof(argus_cell_t));
+    if (!row->cells) return;
+
+    /* Helper macro: set a string cell */
+    #define SET_STR(idx, val) do { \
+        if (val) { \
+            row->cells[idx].data = strdup(val); \
+            row->cells[idx].data_len = strlen(val); \
+            row->cells[idx].is_null = false; \
+        } else { \
+            row->cells[idx].data = NULL; \
+            row->cells[idx].data_len = 0; \
+            row->cells[idx].is_null = true; \
+        } \
+    } while (0)
+
+    /* Helper macro: set an integer cell */
+    #define SET_INT(idx, val) do { \
+        char buf[32]; \
+        snprintf(buf, sizeof(buf), "%d", (int)(val)); \
+        row->cells[idx].data = strdup(buf); \
+        row->cells[idx].data_len = strlen(buf); \
+        row->cells[idx].is_null = false; \
+    } while (0)
+
+    /* Helper macro: set nullable smallint (-1 means NULL) */
+    #define SET_NSINT(idx, val) do { \
+        if ((val) == -1) { \
+            row->cells[idx].data = NULL; \
+            row->cells[idx].data_len = 0; \
+            row->cells[idx].is_null = true; \
+        } else { \
+            SET_INT(idx, val); \
+        } \
+    } while (0)
+
+    SET_STR(0, t->type_name);           /* TYPE_NAME */
+    SET_INT(1, t->data_type);            /* DATA_TYPE */
+    SET_INT(2, t->column_size);          /* COLUMN_SIZE */
+    SET_STR(3, t->literal_prefix);       /* LITERAL_PREFIX */
+    SET_STR(4, t->literal_suffix);       /* LITERAL_SUFFIX */
+    SET_STR(5, t->create_params);        /* CREATE_PARAMS */
+    SET_INT(6, t->nullable);             /* NULLABLE */
+    SET_INT(7, t->case_sensitive);        /* CASE_SENSITIVE */
+    SET_INT(8, t->searchable);           /* SEARCHABLE */
+    SET_NSINT(9, t->unsigned_attr);      /* UNSIGNED_ATTRIBUTE */
+    SET_INT(10, t->fixed_prec_scale);     /* FIXED_PREC_SCALE */
+    SET_NSINT(11, t->auto_unique);        /* AUTO_UNIQUE_VALUE */
+    SET_STR(12, t->local_type_name);     /* LOCAL_TYPE_NAME */
+    SET_INT(13, t->min_scale);            /* MINIMUM_SCALE */
+    SET_INT(14, t->max_scale);            /* MAXIMUM_SCALE */
+    SET_INT(15, t->sql_data_type);        /* SQL_DATA_TYPE */
+    SET_INT(16, t->sql_datetime_sub);     /* SQL_DATETIME_SUB */
+    if (t->num_prec_radix > 0)
+        SET_INT(17, t->num_prec_radix);   /* NUM_PREC_RADIX */
+    else {
+        row->cells[17].data = NULL;
+        row->cells[17].data_len = 0;
+        row->cells[17].is_null = true;
+    }
+    SET_INT(18, t->interval_precision);   /* INTERVAL_PRECISION */
+
+    #undef SET_STR
+    #undef SET_INT
+    #undef SET_NSINT
+}
+
+static SQLRETURN builtin_get_type_info(argus_stmt_t *stmt,
+                                        SQLSMALLINT DataType)
+{
+    stmt->executed = true;
+    setup_type_info_metadata(stmt);
+
+    /* Count matching types */
+    size_t count = 0;
+    for (size_t i = 0; i < BUILTIN_TYPE_COUNT; i++) {
+        if (DataType == SQL_ALL_TYPES || builtin_types[i].data_type == DataType)
+            count++;
+    }
+
+    if (count == 0) {
+        stmt->row_cache.exhausted = true;
+        return SQL_SUCCESS;
+    }
+
+    /* Allocate rows */
+    stmt->row_cache.rows = calloc(count, sizeof(argus_row_t));
+    if (!stmt->row_cache.rows) {
+        stmt->row_cache.exhausted = true;
+        return SQL_SUCCESS;
+    }
+    stmt->row_cache.num_rows = count;
+    stmt->row_cache.num_cols = 19;
+    stmt->row_cache.current_row = 0;
+    stmt->row_cache.exhausted = true; /* all data in one batch */
+
+    int row_idx = 0;
+    for (size_t i = 0; i < BUILTIN_TYPE_COUNT; i++) {
+        if (DataType == SQL_ALL_TYPES || builtin_types[i].data_type == DataType) {
+            add_type_row(&stmt->row_cache, row_idx, &builtin_types[i]);
+            row_idx++;
+        }
+    }
+
+    return SQL_SUCCESS;
+}
+
 /* ── ODBC API: SQLGetTypeInfo ────────────────────────────────── */
 
 SQLRETURN SQL_API SQLGetTypeInfo(
@@ -146,21 +384,20 @@ SQLRETURN SQL_API SQLGetTypeInfo(
                                "[Argus] Connection not open", 0);
     }
 
-    if (!dbc->backend->get_type_info) {
-        return argus_set_not_implemented(&stmt->diag, "SQLGetTypeInfo");
+    /* If backend implements get_type_info, delegate */
+    if (dbc->backend->get_type_info) {
+        int rc = dbc->backend->get_type_info(
+            dbc->backend_conn, DataType, &stmt->op);
+
+        if (rc == 0)
+            return catalog_dispatch(stmt);
+
+        /* Backend failed — fall through to built-in */
+        argus_diag_clear(&stmt->diag);
     }
 
-    int rc = dbc->backend->get_type_info(
-        dbc->backend_conn, DataType, &stmt->op);
-
-    if (rc != 0) {
-        if (stmt->diag.count == 0)
-            argus_set_error(&stmt->diag, "HY000",
-                            "[Argus] Failed to get type info", 0);
-        return SQL_ERROR;
-    }
-
-    return catalog_dispatch(stmt);
+    /* Built-in fallback with standard SQL types */
+    return builtin_get_type_info(stmt, DataType);
 }
 
 /* ── Helper: setup standard SQLStatistics result metadata ────── */

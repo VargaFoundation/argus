@@ -942,3 +942,112 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLErrorW(
 
     return ret;
 }
+
+/* ── SQLGetCursorNameW ───────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetCursorNameW(
+    SQLHSTMT    StatementHandle,
+    SQLWCHAR   *CursorName,
+    SQLSMALLINT BufferLength,
+    SQLSMALLINT *NameLengthPtr)
+{
+    SQLCHAR name_buf[256];
+    SQLSMALLINT name_len = 0;
+
+    SQLRETURN ret = SQLGetCursorName(StatementHandle,
+                                      name_buf, sizeof(name_buf), &name_len);
+    if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+        SQLSMALLINT wlen = utf8_to_wchar(name_buf, name_len,
+                                          CursorName, BufferLength);
+        if (NameLengthPtr) *NameLengthPtr = wlen;
+    }
+    return ret;
+}
+
+/* ── SQLSetCursorNameW ───────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetCursorNameW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CursorName,
+    SQLSMALLINT NameLength)
+{
+    char *utf8 = wchar_to_utf8(CursorName, NameLength);
+    SQLRETURN ret = SQLSetCursorName(StatementHandle,
+                                      (SQLCHAR *)utf8,
+                                      utf8 ? SQL_NTS : 0);
+    g_free(utf8);
+    return ret;
+}
+
+/* ── SQLBrowseConnectW ───────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLBrowseConnectW(
+    SQLHDBC     ConnectionHandle,
+    SQLWCHAR   *InConnectionString,
+    SQLSMALLINT StringLength1,
+    SQLWCHAR   *OutConnectionString,
+    SQLSMALLINT BufferLength,
+    SQLSMALLINT *StringLength2Ptr)
+{
+    char *in_utf8 = wchar_to_utf8(InConnectionString, StringLength1);
+
+    SQLCHAR out_buf[2048];
+    SQLSMALLINT out_len = 0;
+
+    SQLRETURN ret = SQLBrowseConnect(
+        ConnectionHandle,
+        (SQLCHAR *)in_utf8, in_utf8 ? SQL_NTS : 0,
+        out_buf, sizeof(out_buf), &out_len);
+
+    g_free(in_utf8);
+
+    if ((ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO ||
+         ret == SQL_NEED_DATA) &&
+        OutConnectionString && BufferLength > 0) {
+        SQLSMALLINT wlen = utf8_to_wchar(out_buf, out_len,
+                                          OutConnectionString, BufferLength);
+        if (StringLength2Ptr) *StringLength2Ptr = wlen;
+    } else if (StringLength2Ptr) {
+        *StringLength2Ptr = 0;
+    }
+
+    return ret;
+}
+
+/* ── SQLNativeSqlW ───────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLNativeSqlW(
+    SQLHDBC     ConnectionHandle,
+    SQLWCHAR   *InStatementText,
+    SQLINTEGER  TextLength1,
+    SQLWCHAR   *OutStatementText,
+    SQLINTEGER  BufferLength,
+    SQLINTEGER *TextLength2Ptr)
+{
+    char *in_utf8 = wchar_to_utf8(InStatementText,
+                                    TextLength1 == SQL_NTS ? SQL_NTS
+                                    : (SQLSMALLINT)TextLength1);
+
+    SQLCHAR out_buf[4096];
+    SQLINTEGER out_len = 0;
+
+    SQLRETURN ret = SQLNativeSql(
+        ConnectionHandle,
+        (SQLCHAR *)in_utf8, in_utf8 ? SQL_NTS : 0,
+        out_buf, sizeof(out_buf), &out_len);
+
+    g_free(in_utf8);
+
+    if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+        if (OutStatementText && BufferLength > 0) {
+            SQLSMALLINT wlen = utf8_to_wchar(
+                out_buf, (SQLSMALLINT)(out_len < 4096 ? out_len : 4095),
+                OutStatementText, (SQLSMALLINT)BufferLength);
+            if (TextLength2Ptr) *TextLength2Ptr = (SQLINTEGER)wlen;
+        } else if (TextLength2Ptr) {
+            *TextLength2Ptr = 0;
+        }
+    }
+
+    return ret;
+}

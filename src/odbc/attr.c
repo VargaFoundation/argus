@@ -353,8 +353,13 @@ SQLRETURN SQL_API SQLGetStmtAttr(
     case SQL_ATTR_IMP_PARAM_DESC:
     case SQL_ATTR_APP_ROW_DESC:
     case SQL_ATTR_APP_PARAM_DESC:
-        /* Descriptor handles not supported */
-        if (Value) *(SQLPOINTER *)Value = NULL;
+        /*
+         * Return the stmt handle itself as the descriptor handle.
+         * Our descriptors are backed by stmt->bindings / stmt->param_bindings,
+         * and SQLSetDescField/SQLGetDescField already accept stmt handles.
+         */
+        if (Value) *(SQLPOINTER *)Value = (SQLPOINTER)stmt;
+        if (StringLength) *StringLength = sizeof(SQLPOINTER);
         return SQL_SUCCESS;
 
     case SQL_ATTR_USE_BOOKMARKS:
