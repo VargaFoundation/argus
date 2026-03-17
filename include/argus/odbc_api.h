@@ -652,4 +652,23 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLErrorW(
     SQLSMALLINT BufferLength,
     SQLSMALLINT *TextLength);
 
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetCursorNameW(
+    SQLHSTMT    StatementHandle,
+    SQLWCHAR   *CursorName,
+    SQLSMALLINT BufferLength,
+    SQLSMALLINT *NameLengthPtr);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetCursorNameW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CursorName,
+    SQLSMALLINT NameLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLBrowseConnectW(
+    SQLHDBC     ConnectionHandle,
+    SQLWCHAR   *InConnectionString,
+    SQLSMALLINT StringLength1,
+    SQLWCHAR   *OutConnectionString,
+    SQLSMALLINT BufferLength,
+    SQLSMALLINT *StringLength2Ptr);
+
 #endif /* ARGUS_ODBC_API_H */

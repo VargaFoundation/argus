@@ -2,6 +2,20 @@
 #include "argus/odbc_api.h"
 #include <string.h>
 
+/* Fallback defines for ODBC macros not present in all implementations */
+#ifndef SQL_DL_SQL92_DATE
+#define SQL_DL_SQL92_DATE       0x00000001L
+#endif
+#ifndef SQL_DL_SQL92_TIMESTAMP
+#define SQL_DL_SQL92_TIMESTAMP  0x00000010L
+#endif
+#ifndef SQL_IS_INSERT_LITERALS
+#define SQL_IS_INSERT_LITERALS  0x00000001L
+#endif
+#ifndef SQL_IS_SELECT_INTO
+#define SQL_IS_SELECT_INTO      0x00000004L
+#endif
+
 extern SQLSMALLINT argus_copy_string(const char *src,
                                       SQLCHAR *dst, SQLSMALLINT dst_len);
 
@@ -370,6 +384,64 @@ SQLRETURN SQL_API SQLGetInfo(
 
     case SQL_MAX_INDEX_SIZE:
         return set_uinteger_info(0, InfoValue, StringLength);
+
+    case SQL_DATA_SOURCE_READ_ONLY:
+        return set_string_info("Y", InfoValue, BufferLength, StringLength);
+
+    case SQL_POS_OPERATIONS:
+        return set_uinteger_info(SQL_POS_POSITION, InfoValue, StringLength);
+
+    case SQL_LOCK_TYPES:
+        return set_uinteger_info(SQL_LCK_NO_CHANGE, InfoValue, StringLength);
+
+    case SQL_POSITIONED_STATEMENTS:
+        return set_uinteger_info(0, InfoValue, StringLength);
+
+    case SQL_SQL92_NUMERIC_VALUE_FUNCTIONS:
+        return set_uinteger_info(0, InfoValue, StringLength);
+
+    case SQL_SQL92_STRING_FUNCTIONS:
+        return set_uinteger_info(
+            SQL_SSF_LOWER | SQL_SSF_UPPER | SQL_SSF_SUBSTRING |
+            SQL_SSF_TRIM_BOTH | SQL_SSF_TRIM_LEADING | SQL_SSF_TRIM_TRAILING,
+            InfoValue, StringLength);
+
+    case SQL_SQL92_DATETIME_FUNCTIONS:
+        return set_uinteger_info(SQL_SDF_CURRENT_DATE | SQL_SDF_CURRENT_TIMESTAMP,
+                                  InfoValue, StringLength);
+
+    case SQL_DATETIME_LITERALS:
+        return set_uinteger_info(
+            SQL_DL_SQL92_DATE | SQL_DL_SQL92_TIMESTAMP,
+            InfoValue, StringLength);
+
+    case SQL_CATALOG_NAME:
+        return set_string_info("Y", InfoValue, BufferLength, StringLength);
+
+    case SQL_COLLATION_SEQ:
+        return set_string_info("", InfoValue, BufferLength, StringLength);
+
+    case SQL_MAX_COLUMNS_IN_INDEX:
+        return set_usmallint_info(0, InfoValue, StringLength);
+
+    case SQL_CREATE_TABLE:
+        return set_uinteger_info(SQL_CT_CREATE_TABLE, InfoValue, StringLength);
+
+    case SQL_CREATE_VIEW:
+        return set_uinteger_info(SQL_CV_CREATE_VIEW, InfoValue, StringLength);
+
+    case SQL_DROP_TABLE:
+        return set_uinteger_info(SQL_DT_DROP_TABLE, InfoValue, StringLength);
+
+    case SQL_DROP_VIEW:
+        return set_uinteger_info(SQL_DV_DROP_VIEW, InfoValue, StringLength);
+
+    case SQL_INDEX_KEYWORDS:
+        return set_uinteger_info(0, InfoValue, StringLength);
+
+    case SQL_INSERT_STATEMENT:
+        return set_uinteger_info(SQL_IS_INSERT_LITERALS | SQL_IS_SELECT_INTO,
+                                  InfoValue, StringLength);
 
     default:
         /* Return empty/zero for unknown info types */

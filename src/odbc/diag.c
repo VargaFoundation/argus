@@ -161,6 +161,21 @@ SQLRETURN SQL_API SQLGetDiagField(
             if (DiagInfo) *(SQLRETURN *)DiagInfo = diag->return_code;
             return SQL_SUCCESS;
 
+        case SQL_DIAG_CURSOR_ROW_COUNT:
+        case SQL_DIAG_ROW_COUNT:
+            if (DiagInfo) *(SQLLEN *)DiagInfo = 0;
+            return SQL_SUCCESS;
+
+        case SQL_DIAG_DYNAMIC_FUNCTION:
+            if (DiagInfo && BufferLength > 0)
+                ((char *)DiagInfo)[0] = '\0';
+            if (StringLength) *StringLength = 0;
+            return SQL_SUCCESS;
+
+        case SQL_DIAG_DYNAMIC_FUNCTION_CODE:
+            if (DiagInfo) *(SQLINTEGER *)DiagInfo = 0;
+            return SQL_SUCCESS;
+
         default:
             return SQL_ERROR;
         }
@@ -199,6 +214,75 @@ SQLRETURN SQL_API SQLGetDiagField(
         }
         return SQL_SUCCESS;
     }
+
+    case SQL_DIAG_CLASS_ORIGIN:
+    case SQL_DIAG_SUBCLASS_ORIGIN: {
+        /*
+         * If SQLSTATE starts with "IM" it's from the Driver Manager,
+         * otherwise from ISO 9075 (standard) or ODBC 3.0 (driver-defined).
+         */
+        const char *origin = "ISO 9075";
+        if (rec->sqlstate[0] == 'I' && rec->sqlstate[1] == 'M')
+            origin = "ODBC 3.0";
+        else if (rec->sqlstate[0] == 'H' && rec->sqlstate[1] == 'Y')
+            origin = "ODBC 3.0";
+        if (DiagInfo && BufferLength > 0) {
+            SQLSMALLINT len = (SQLSMALLINT)strlen(origin);
+            SQLSMALLINT copy = len < (BufferLength - 1) ? len : (BufferLength - 1);
+            memcpy(DiagInfo, origin, (size_t)copy);
+            ((char *)DiagInfo)[copy] = '\0';
+        }
+        if (StringLength) *StringLength = (SQLSMALLINT)strlen(origin);
+        return SQL_SUCCESS;
+    }
+
+    case SQL_DIAG_CONNECTION_NAME: {
+        const char *name = "";
+        if (HandleType == SQL_HANDLE_STMT && argus_valid_stmt(Handle)) {
+            argus_stmt_t *s = (argus_stmt_t *)Handle;
+            if (s->dbc && s->dbc->host)
+                name = s->dbc->host;
+        } else if (HandleType == SQL_HANDLE_DBC && argus_valid_dbc(Handle)) {
+            argus_dbc_t *d = (argus_dbc_t *)Handle;
+            if (d->host) name = d->host;
+        }
+        if (DiagInfo && BufferLength > 0) {
+            SQLSMALLINT len = (SQLSMALLINT)strlen(name);
+            SQLSMALLINT copy = len < (BufferLength - 1) ? len : (BufferLength - 1);
+            memcpy(DiagInfo, name, (size_t)copy);
+            ((char *)DiagInfo)[copy] = '\0';
+        }
+        if (StringLength) *StringLength = (SQLSMALLINT)strlen(name);
+        return SQL_SUCCESS;
+    }
+
+    case SQL_DIAG_SERVER_NAME: {
+        const char *name = "";
+        if (HandleType == SQL_HANDLE_STMT && argus_valid_stmt(Handle)) {
+            argus_stmt_t *s = (argus_stmt_t *)Handle;
+            if (s->dbc && s->dbc->host)
+                name = s->dbc->host;
+        } else if (HandleType == SQL_HANDLE_DBC && argus_valid_dbc(Handle)) {
+            argus_dbc_t *d = (argus_dbc_t *)Handle;
+            if (d->host) name = d->host;
+        }
+        if (DiagInfo && BufferLength > 0) {
+            SQLSMALLINT len = (SQLSMALLINT)strlen(name);
+            SQLSMALLINT copy = len < (BufferLength - 1) ? len : (BufferLength - 1);
+            memcpy(DiagInfo, name, (size_t)copy);
+            ((char *)DiagInfo)[copy] = '\0';
+        }
+        if (StringLength) *StringLength = (SQLSMALLINT)strlen(name);
+        return SQL_SUCCESS;
+    }
+
+    case SQL_DIAG_COLUMN_NUMBER:
+        if (DiagInfo) *(SQLINTEGER *)DiagInfo = -1; /* unknown */
+        return SQL_SUCCESS;
+
+    case SQL_DIAG_ROW_NUMBER:
+        if (DiagInfo) *(SQLLEN *)DiagInfo = -1; /* unknown */
+        return SQL_SUCCESS;
 
     default:
         return SQL_ERROR;
