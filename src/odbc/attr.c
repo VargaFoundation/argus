@@ -457,19 +457,27 @@ SQLRETURN SQL_API SQLSetCursorName(
     return SQL_SUCCESS;
 }
 
-/* ── ODBC API: SQLCopyDesc (stub) ────────────────────────────── */
+/* ── ODBC API: SQLCopyDesc ────────────────────────────────────── */
 
 SQLRETURN SQL_API SQLCopyDesc(
     SQLHDESC SourceDescHandle,
     SQLHDESC TargetDescHandle)
 {
-    (void)TargetDescHandle;
+    argus_stmt_t *src = NULL;
+    argus_stmt_t *dst = NULL;
 
-    /* Use the source handle to post a diagnostic if it's a valid stmt */
-    argus_stmt_t *stmt = (argus_stmt_t *)SourceDescHandle;
-    if (argus_valid_stmt(stmt)) {
-        return argus_set_error(&stmt->diag, "HYC00",
-                               "[Argus] SQLCopyDesc not implemented", 0);
-    }
-    return SQL_ERROR;
+    if (argus_valid_stmt((SQLHANDLE)SourceDescHandle))
+        src = (argus_stmt_t *)SourceDescHandle;
+    else
+        return SQL_INVALID_HANDLE;
+
+    if (argus_valid_stmt((SQLHANDLE)TargetDescHandle))
+        dst = (argus_stmt_t *)TargetDescHandle;
+    else
+        return SQL_INVALID_HANDLE;
+
+    /* Copy column bindings from source to target */
+    memcpy(dst->bindings, src->bindings, sizeof(src->bindings));
+
+    return SQL_SUCCESS;
 }

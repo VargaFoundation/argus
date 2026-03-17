@@ -620,6 +620,287 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLGetConnectAttrW(
                               Value, BufferLength, StringLength);
 }
 
+/* ── SQLGetTypeInfoW ─────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetTypeInfoW(
+    SQLHSTMT    StatementHandle,
+    SQLSMALLINT DataType)
+{
+    /* No string parameters to convert */
+    return SQLGetTypeInfo(StatementHandle, DataType);
+}
+
+/* ── SQLStatisticsW ──────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLStatisticsW(
+    SQLHSTMT     StatementHandle,
+    SQLWCHAR    *CatalogName,  SQLSMALLINT NameLength1,
+    SQLWCHAR    *SchemaName,   SQLSMALLINT NameLength2,
+    SQLWCHAR    *TableName,    SQLSMALLINT NameLength3,
+    SQLUSMALLINT Unique,
+    SQLUSMALLINT Reserved)
+{
+    char *cat = wchar_to_utf8(CatalogName, NameLength1);
+    char *sch = wchar_to_utf8(SchemaName,  NameLength2);
+    char *tbl = wchar_to_utf8(TableName,   NameLength3);
+
+    SQLRETURN ret = SQLStatistics(
+        StatementHandle,
+        (SQLCHAR *)cat, cat ? SQL_NTS : 0,
+        (SQLCHAR *)sch, sch ? SQL_NTS : 0,
+        (SQLCHAR *)tbl, tbl ? SQL_NTS : 0,
+        Unique, Reserved);
+
+    g_free(cat);
+    g_free(sch);
+    g_free(tbl);
+    return ret;
+}
+
+/* ── SQLSpecialColumnsW ──────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSpecialColumnsW(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT IdentifierType,
+    SQLWCHAR    *CatalogName,  SQLSMALLINT NameLength1,
+    SQLWCHAR    *SchemaName,   SQLSMALLINT NameLength2,
+    SQLWCHAR    *TableName,    SQLSMALLINT NameLength3,
+    SQLUSMALLINT Scope,
+    SQLUSMALLINT Nullable)
+{
+    char *cat = wchar_to_utf8(CatalogName, NameLength1);
+    char *sch = wchar_to_utf8(SchemaName,  NameLength2);
+    char *tbl = wchar_to_utf8(TableName,   NameLength3);
+
+    SQLRETURN ret = SQLSpecialColumns(
+        StatementHandle, IdentifierType,
+        (SQLCHAR *)cat, cat ? SQL_NTS : 0,
+        (SQLCHAR *)sch, sch ? SQL_NTS : 0,
+        (SQLCHAR *)tbl, tbl ? SQL_NTS : 0,
+        Scope, Nullable);
+
+    g_free(cat);
+    g_free(sch);
+    g_free(tbl);
+    return ret;
+}
+
+/* ── SQLPrimaryKeysW ─────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLPrimaryKeysW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CatalogName,  SQLSMALLINT NameLength1,
+    SQLWCHAR  *SchemaName,   SQLSMALLINT NameLength2,
+    SQLWCHAR  *TableName,    SQLSMALLINT NameLength3)
+{
+    char *cat = wchar_to_utf8(CatalogName, NameLength1);
+    char *sch = wchar_to_utf8(SchemaName,  NameLength2);
+    char *tbl = wchar_to_utf8(TableName,   NameLength3);
+
+    SQLRETURN ret = SQLPrimaryKeys(
+        StatementHandle,
+        (SQLCHAR *)cat, cat ? SQL_NTS : 0,
+        (SQLCHAR *)sch, sch ? SQL_NTS : 0,
+        (SQLCHAR *)tbl, tbl ? SQL_NTS : 0);
+
+    g_free(cat);
+    g_free(sch);
+    g_free(tbl);
+    return ret;
+}
+
+/* ── SQLForeignKeysW ─────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLForeignKeysW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *PKCatalogName,  SQLSMALLINT NameLength1,
+    SQLWCHAR  *PKSchemaName,   SQLSMALLINT NameLength2,
+    SQLWCHAR  *PKTableName,    SQLSMALLINT NameLength3,
+    SQLWCHAR  *FKCatalogName,  SQLSMALLINT NameLength4,
+    SQLWCHAR  *FKSchemaName,   SQLSMALLINT NameLength5,
+    SQLWCHAR  *FKTableName,    SQLSMALLINT NameLength6)
+{
+    char *pkcat = wchar_to_utf8(PKCatalogName, NameLength1);
+    char *pksch = wchar_to_utf8(PKSchemaName,  NameLength2);
+    char *pktbl = wchar_to_utf8(PKTableName,   NameLength3);
+    char *fkcat = wchar_to_utf8(FKCatalogName, NameLength4);
+    char *fksch = wchar_to_utf8(FKSchemaName,  NameLength5);
+    char *fktbl = wchar_to_utf8(FKTableName,   NameLength6);
+
+    SQLRETURN ret = SQLForeignKeys(
+        StatementHandle,
+        (SQLCHAR *)pkcat, pkcat ? SQL_NTS : 0,
+        (SQLCHAR *)pksch, pksch ? SQL_NTS : 0,
+        (SQLCHAR *)pktbl, pktbl ? SQL_NTS : 0,
+        (SQLCHAR *)fkcat, fkcat ? SQL_NTS : 0,
+        (SQLCHAR *)fksch, fksch ? SQL_NTS : 0,
+        (SQLCHAR *)fktbl, fktbl ? SQL_NTS : 0);
+
+    g_free(pkcat);
+    g_free(pksch);
+    g_free(pktbl);
+    g_free(fkcat);
+    g_free(fksch);
+    g_free(fktbl);
+    return ret;
+}
+
+/* ── SQLProceduresW ──────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLProceduresW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CatalogName,  SQLSMALLINT NameLength1,
+    SQLWCHAR  *SchemaName,   SQLSMALLINT NameLength2,
+    SQLWCHAR  *ProcName,     SQLSMALLINT NameLength3)
+{
+    char *cat  = wchar_to_utf8(CatalogName, NameLength1);
+    char *sch  = wchar_to_utf8(SchemaName,  NameLength2);
+    char *proc = wchar_to_utf8(ProcName,    NameLength3);
+
+    SQLRETURN ret = SQLProcedures(
+        StatementHandle,
+        (SQLCHAR *)cat,  cat  ? SQL_NTS : 0,
+        (SQLCHAR *)sch,  sch  ? SQL_NTS : 0,
+        (SQLCHAR *)proc, proc ? SQL_NTS : 0);
+
+    g_free(cat);
+    g_free(sch);
+    g_free(proc);
+    return ret;
+}
+
+/* ── SQLProcedureColumnsW ────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLProcedureColumnsW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CatalogName,  SQLSMALLINT NameLength1,
+    SQLWCHAR  *SchemaName,   SQLSMALLINT NameLength2,
+    SQLWCHAR  *ProcName,     SQLSMALLINT NameLength3,
+    SQLWCHAR  *ColumnName,   SQLSMALLINT NameLength4)
+{
+    char *cat  = wchar_to_utf8(CatalogName, NameLength1);
+    char *sch  = wchar_to_utf8(SchemaName,  NameLength2);
+    char *proc = wchar_to_utf8(ProcName,    NameLength3);
+    char *col  = wchar_to_utf8(ColumnName,  NameLength4);
+
+    SQLRETURN ret = SQLProcedureColumns(
+        StatementHandle,
+        (SQLCHAR *)cat,  cat  ? SQL_NTS : 0,
+        (SQLCHAR *)sch,  sch  ? SQL_NTS : 0,
+        (SQLCHAR *)proc, proc ? SQL_NTS : 0,
+        (SQLCHAR *)col,  col  ? SQL_NTS : 0);
+
+    g_free(cat);
+    g_free(sch);
+    g_free(proc);
+    g_free(col);
+    return ret;
+}
+
+/* ── SQLTablePrivilegesW ─────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLTablePrivilegesW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CatalogName,  SQLSMALLINT NameLength1,
+    SQLWCHAR  *SchemaName,   SQLSMALLINT NameLength2,
+    SQLWCHAR  *TableName,    SQLSMALLINT NameLength3)
+{
+    char *cat = wchar_to_utf8(CatalogName, NameLength1);
+    char *sch = wchar_to_utf8(SchemaName,  NameLength2);
+    char *tbl = wchar_to_utf8(TableName,   NameLength3);
+
+    SQLRETURN ret = SQLTablePrivileges(
+        StatementHandle,
+        (SQLCHAR *)cat, cat ? SQL_NTS : 0,
+        (SQLCHAR *)sch, sch ? SQL_NTS : 0,
+        (SQLCHAR *)tbl, tbl ? SQL_NTS : 0);
+
+    g_free(cat);
+    g_free(sch);
+    g_free(tbl);
+    return ret;
+}
+
+/* ── SQLColumnPrivilegesW ────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLColumnPrivilegesW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CatalogName,  SQLSMALLINT NameLength1,
+    SQLWCHAR  *SchemaName,   SQLSMALLINT NameLength2,
+    SQLWCHAR  *TableName,    SQLSMALLINT NameLength3,
+    SQLWCHAR  *ColumnName,   SQLSMALLINT NameLength4)
+{
+    char *cat = wchar_to_utf8(CatalogName, NameLength1);
+    char *sch = wchar_to_utf8(SchemaName,  NameLength2);
+    char *tbl = wchar_to_utf8(TableName,   NameLength3);
+    char *col = wchar_to_utf8(ColumnName,  NameLength4);
+
+    SQLRETURN ret = SQLColumnPrivileges(
+        StatementHandle,
+        (SQLCHAR *)cat, cat ? SQL_NTS : 0,
+        (SQLCHAR *)sch, sch ? SQL_NTS : 0,
+        (SQLCHAR *)tbl, tbl ? SQL_NTS : 0,
+        (SQLCHAR *)col, col ? SQL_NTS : 0);
+
+    g_free(cat);
+    g_free(sch);
+    g_free(tbl);
+    g_free(col);
+    return ret;
+}
+
+/* ── SQLSetStmtAttrW ────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetStmtAttrW(
+    SQLHSTMT   StatementHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER StringLength)
+{
+    /* Statement attributes are all numeric — pass through */
+    return SQLSetStmtAttr(StatementHandle, Attribute, Value, StringLength);
+}
+
+/* ── SQLGetStmtAttrW ────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetStmtAttrW(
+    SQLHSTMT   StatementHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER BufferLength,
+    SQLINTEGER *StringLength)
+{
+    /* Statement attributes are all numeric — pass through */
+    return SQLGetStmtAttr(StatementHandle, Attribute, Value,
+                          BufferLength, StringLength);
+}
+
+/* ── SQLSetEnvAttrW ─────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetEnvAttrW(
+    SQLHENV    EnvironmentHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER StringLength)
+{
+    /* Environment attributes are all numeric — pass through */
+    return SQLSetEnvAttr(EnvironmentHandle, Attribute, Value, StringLength);
+}
+
+/* ── SQLGetEnvAttrW ─────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetEnvAttrW(
+    SQLHENV    EnvironmentHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER BufferLength,
+    SQLINTEGER *StringLength)
+{
+    /* Environment attributes are all numeric — pass through */
+    return SQLGetEnvAttr(EnvironmentHandle, Attribute, Value,
+                         BufferLength, StringLength);
+}
+
 /* ── SQLErrorW ───────────────────────────────────────────────── */
 
 ARGUS_EXPORT SQLRETURN SQL_API SQLErrorW(

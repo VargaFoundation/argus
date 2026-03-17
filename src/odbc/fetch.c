@@ -527,6 +527,12 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
                                0);
     }
 
+    /* Check SQL_ATTR_MAX_ROWS limit */
+    if (stmt->max_rows > 0 && stmt->rows_fetched_total >= stmt->max_rows) {
+        stmt->row_count = (SQLLEN)stmt->rows_fetched_total;
+        return SQL_NO_DATA;
+    }
+
     /* Check if we need to fetch a new batch */
     if (!stmt->fetch_started ||
         stmt->row_cache.current_row >= stmt->row_cache.num_rows) {
@@ -572,9 +578,11 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
             return SQL_ERROR;
     }
 
-    /* Update rows fetched pointer and metrics */
+    /* Update rows fetched pointer, row status, and metrics */
     if (stmt->rows_fetched_ptr)
         *(stmt->rows_fetched_ptr) = 1;
+    if (stmt->row_status_ptr)
+        stmt->row_status_ptr[0] = SQL_ROW_SUCCESS;
     stmt->rows_fetched_total++;
 
     return final_ret;
@@ -894,5 +902,114 @@ SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT StatementHandle)
 
     argus_stmt_reset(stmt);
     return SQL_SUCCESS;
+}
+
+/* ── ODBC 2.x: SQLColAttributes (without 'e') ────────────────── */
+
+SQLRETURN SQL_API SQLColAttributes(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT ColumnNumber,
+    SQLUSMALLINT FieldIdentifier,
+    SQLPOINTER   CharacterAttribute,
+    SQLSMALLINT  BufferLength,
+    SQLSMALLINT *StringLength,
+    SQLLEN      *NumericAttribute)
+{
+    /*
+     * ODBC 2.x SQLColAttributes maps to ODBC 3.x SQLColAttribute.
+     * Field identifiers are the same for the fields we support.
+     */
+    return SQLColAttribute(StatementHandle, ColumnNumber, FieldIdentifier,
+                           CharacterAttribute, BufferLength, StringLength,
+                           NumericAttribute);
+}
+
+/* ── ODBC 2.x: SQLExtendedFetch ──────────────────────────────── */
+
+SQLRETURN SQL_API SQLExtendedFetch(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT FetchOrientation,
+    SQLLEN       FetchOffset,
+    SQLULEN     *RowCountPtr,
+    SQLUSMALLINT *RowStatusArray)
+{
+    (void)FetchOffset;
+
+    argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
+
+    /* Only support SQL_FETCH_NEXT (forward-only cursor) */
+    if (FetchOrientation != SQL_FETCH_NEXT) {
+        return argus_set_error(&stmt->diag, "HY106",
+                               "[Argus] Only SQL_FETCH_NEXT is supported", 0);
+    }
+
+    SQLRETURN ret = SQLFetch(StatementHandle);
+
+    if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
+        if (RowCountPtr)
+            *RowCountPtr = 1;
+        if (RowStatusArray)
+            RowStatusArray[0] = SQL_ROW_SUCCESS;
+    }
+
+    return ret;
+}
+
+/* ── SQLSetPos (stub / minimal positioning) ──────────────────── */
+
+SQLRETURN SQL_API SQLSetPos(
+    SQLHSTMT     StatementHandle,
+    SQLSETPOSIROW RowNumber,
+    SQLUSMALLINT Operation,
+    SQLUSMALLINT LockType)
+{
+    (void)RowNumber;
+    (void)LockType;
+
+    argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
+
+    if (Operation == SQL_POSITION) {
+        /* Accept SQL_POSITION for cursor positioning compatibility */
+        return SQL_SUCCESS;
+    }
+
+    return argus_set_error(&stmt->diag, "HYC00",
+                           "[Argus] SQLSetPos operation not supported", 0);
+}
+
+/* ── SQLBulkOperations (stub) ────────────────────────────────── */
+
+SQLRETURN SQL_API SQLBulkOperations(
+    SQLHSTMT    StatementHandle,
+    SQLSMALLINT Operation)
+{
+    (void)Operation;
+
+    argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
+
+    return argus_set_error(&stmt->diag, "HYC00",
+                           "[Argus] SQLBulkOperations not supported", 0);
+}
+
+/* ── ODBC 2.x: SQLSetScrollOptions (stub) ────────────────────── */
+
+SQLRETURN SQL_API SQLSetScrollOptions(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT Concurrency,
+    SQLLEN       KeysetSize,
+    SQLUSMALLINT RowsetSize)
+{
+    (void)Concurrency;
+    (void)KeysetSize;
+    (void)RowsetSize;
+
+    argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
+
+    return argus_set_error(&stmt->diag, "HYC00",
+                           "[Argus] SQLSetScrollOptions not supported", 0);
 }
 

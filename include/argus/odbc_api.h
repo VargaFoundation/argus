@@ -382,6 +382,74 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLGetDescRec(
     SQLSMALLINT *ScalePtr,
     SQLSMALLINT *NullablePtr);
 
+/* Descriptors (continued) */
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetDescRec(
+    SQLHDESC     DescriptorHandle,
+    SQLSMALLINT  RecNumber,
+    SQLSMALLINT  Type,
+    SQLSMALLINT  SubType,
+    SQLLEN       Length,
+    SQLSMALLINT  Precision,
+    SQLSMALLINT  Scale,
+    SQLPOINTER   DataPtr,
+    SQLLEN      *StringLengthPtr,
+    SQLLEN      *IndicatorPtr);
+
+/* ODBC 2.x compatibility functions */
+ARGUS_EXPORT SQLRETURN SQL_API SQLAllocEnv(SQLHENV *EnvironmentHandle);
+ARGUS_EXPORT SQLRETURN SQL_API SQLFreeEnv(SQLHENV EnvironmentHandle);
+ARGUS_EXPORT SQLRETURN SQL_API SQLAllocConnect(
+    SQLHENV  EnvironmentHandle,
+    SQLHDBC *ConnectionHandle);
+ARGUS_EXPORT SQLRETURN SQL_API SQLFreeConnect(SQLHDBC ConnectionHandle);
+ARGUS_EXPORT SQLRETURN SQL_API SQLAllocStmt(
+    SQLHDBC   ConnectionHandle,
+    SQLHSTMT *StatementHandle);
+ARGUS_EXPORT SQLRETURN SQL_API SQLTransact(
+    SQLHENV      EnvironmentHandle,
+    SQLHDBC      ConnectionHandle,
+    SQLUSMALLINT CompletionType);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLColAttributes(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT ColumnNumber,
+    SQLUSMALLINT FieldIdentifier,
+    SQLPOINTER   CharacterAttribute,
+    SQLSMALLINT  BufferLength,
+    SQLSMALLINT *StringLength,
+    SQLLEN      *NumericAttribute);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLExtendedFetch(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT FetchOrientation,
+    SQLLEN       FetchOffset,
+    SQLULEN     *RowCountPtr,
+    SQLUSMALLINT *RowStatusArray);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetPos(
+    SQLHSTMT      StatementHandle,
+    SQLSETPOSIROW RowNumber,
+    SQLUSMALLINT  Operation,
+    SQLUSMALLINT  LockType);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLBulkOperations(
+    SQLHSTMT    StatementHandle,
+    SQLSMALLINT Operation);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetScrollOptions(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT Concurrency,
+    SQLLEN       KeysetSize,
+    SQLUSMALLINT RowsetSize);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLDescribeParam(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT ParameterNumber,
+    SQLSMALLINT *DataTypePtr,
+    SQLULEN     *ParameterSizePtr,
+    SQLSMALLINT *DecimalDigitsPtr,
+    SQLSMALLINT *NullablePtr);
+
 /* ── Unicode (W) variants ────────────────────────────────────── */
 
 ARGUS_EXPORT SQLRETURN SQL_API SQLDriverConnectW(
@@ -481,6 +549,94 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLSetConnectAttrW(
 
 ARGUS_EXPORT SQLRETURN SQL_API SQLGetConnectAttrW(
     SQLHDBC    ConnectionHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER BufferLength,
+    SQLINTEGER *StringLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetTypeInfoW(
+    SQLHSTMT    StatementHandle,
+    SQLSMALLINT DataType);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLStatisticsW(
+    SQLHSTMT     StatementHandle,
+    SQLWCHAR    *CatalogName, SQLSMALLINT NameLength1,
+    SQLWCHAR    *SchemaName,  SQLSMALLINT NameLength2,
+    SQLWCHAR    *TableName,   SQLSMALLINT NameLength3,
+    SQLUSMALLINT Unique,
+    SQLUSMALLINT Reserved);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSpecialColumnsW(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT IdentifierType,
+    SQLWCHAR    *CatalogName, SQLSMALLINT NameLength1,
+    SQLWCHAR    *SchemaName,  SQLSMALLINT NameLength2,
+    SQLWCHAR    *TableName,   SQLSMALLINT NameLength3,
+    SQLUSMALLINT Scope,
+    SQLUSMALLINT Nullable);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLPrimaryKeysW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CatalogName, SQLSMALLINT NameLength1,
+    SQLWCHAR  *SchemaName,  SQLSMALLINT NameLength2,
+    SQLWCHAR  *TableName,   SQLSMALLINT NameLength3);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLForeignKeysW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *PKCatalogName, SQLSMALLINT NameLength1,
+    SQLWCHAR  *PKSchemaName,  SQLSMALLINT NameLength2,
+    SQLWCHAR  *PKTableName,   SQLSMALLINT NameLength3,
+    SQLWCHAR  *FKCatalogName, SQLSMALLINT NameLength4,
+    SQLWCHAR  *FKSchemaName,  SQLSMALLINT NameLength5,
+    SQLWCHAR  *FKTableName,   SQLSMALLINT NameLength6);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLProceduresW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CatalogName, SQLSMALLINT NameLength1,
+    SQLWCHAR  *SchemaName,  SQLSMALLINT NameLength2,
+    SQLWCHAR  *ProcName,    SQLSMALLINT NameLength3);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLProcedureColumnsW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CatalogName, SQLSMALLINT NameLength1,
+    SQLWCHAR  *SchemaName,  SQLSMALLINT NameLength2,
+    SQLWCHAR  *ProcName,    SQLSMALLINT NameLength3,
+    SQLWCHAR  *ColumnName,  SQLSMALLINT NameLength4);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLTablePrivilegesW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CatalogName, SQLSMALLINT NameLength1,
+    SQLWCHAR  *SchemaName,  SQLSMALLINT NameLength2,
+    SQLWCHAR  *TableName,   SQLSMALLINT NameLength3);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLColumnPrivilegesW(
+    SQLHSTMT   StatementHandle,
+    SQLWCHAR  *CatalogName, SQLSMALLINT NameLength1,
+    SQLWCHAR  *SchemaName,  SQLSMALLINT NameLength2,
+    SQLWCHAR  *TableName,   SQLSMALLINT NameLength3,
+    SQLWCHAR  *ColumnName,  SQLSMALLINT NameLength4);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetStmtAttrW(
+    SQLHSTMT   StatementHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER StringLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetStmtAttrW(
+    SQLHSTMT   StatementHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER BufferLength,
+    SQLINTEGER *StringLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetEnvAttrW(
+    SQLHENV    EnvironmentHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER StringLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetEnvAttrW(
+    SQLHENV    EnvironmentHandle,
     SQLINTEGER Attribute,
     SQLPOINTER Value,
     SQLINTEGER BufferLength,

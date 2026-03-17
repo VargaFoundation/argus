@@ -82,6 +82,7 @@ SQLRETURN argus_alloc_stmt(argus_dbc_t *dbc, argus_stmt_t **out)
 SQLRETURN argus_free_env(argus_env_t *env)
 {
     if (!argus_valid_env(env)) return SQL_INVALID_HANDLE;
+    argus_pool_cleanup();
     env->signature = 0;
     free(env);
     return SQL_SUCCESS;
@@ -209,6 +210,64 @@ SQLRETURN SQL_API SQLFreeHandle(
     default:
         return SQL_ERROR;
     }
+}
+
+/* ── ODBC 2.x compatibility: SQLAllocEnv ──────────────────────── */
+
+SQLRETURN SQL_API SQLAllocEnv(SQLHENV *EnvironmentHandle)
+{
+    return SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE,
+                          (SQLHANDLE *)EnvironmentHandle);
+}
+
+/* ── ODBC 2.x compatibility: SQLFreeEnv ──────────────────────── */
+
+SQLRETURN SQL_API SQLFreeEnv(SQLHENV EnvironmentHandle)
+{
+    return SQLFreeHandle(SQL_HANDLE_ENV, (SQLHANDLE)EnvironmentHandle);
+}
+
+/* ── ODBC 2.x compatibility: SQLAllocConnect ─────────────────── */
+
+SQLRETURN SQL_API SQLAllocConnect(
+    SQLHENV  EnvironmentHandle,
+    SQLHDBC *ConnectionHandle)
+{
+    return SQLAllocHandle(SQL_HANDLE_DBC, (SQLHANDLE)EnvironmentHandle,
+                          (SQLHANDLE *)ConnectionHandle);
+}
+
+/* ── ODBC 2.x compatibility: SQLFreeConnect ──────────────────── */
+
+SQLRETURN SQL_API SQLFreeConnect(SQLHDBC ConnectionHandle)
+{
+    return SQLFreeHandle(SQL_HANDLE_DBC, (SQLHANDLE)ConnectionHandle);
+}
+
+/* ── ODBC 2.x compatibility: SQLAllocStmt ────────────────────── */
+
+SQLRETURN SQL_API SQLAllocStmt(
+    SQLHDBC   ConnectionHandle,
+    SQLHSTMT *StatementHandle)
+{
+    return SQLAllocHandle(SQL_HANDLE_STMT, (SQLHANDLE)ConnectionHandle,
+                          (SQLHANDLE *)StatementHandle);
+}
+
+/* ── ODBC 2.x compatibility: SQLTransact ─────────────────────── */
+
+SQLRETURN SQL_API SQLTransact(
+    SQLHENV EnvironmentHandle,
+    SQLHDBC ConnectionHandle,
+    SQLUSMALLINT CompletionType)
+{
+    if (ConnectionHandle && ConnectionHandle != SQL_NULL_HDBC)
+        return SQLEndTran(SQL_HANDLE_DBC, (SQLHANDLE)ConnectionHandle,
+                          (SQLSMALLINT)CompletionType);
+    if (EnvironmentHandle && EnvironmentHandle != SQL_NULL_HENV)
+        return SQLEndTran(SQL_HANDLE_ENV, (SQLHANDLE)EnvironmentHandle,
+                          (SQLSMALLINT)CompletionType);
+    return SQL_INVALID_HANDLE;
 }
 
 /* ── ODBC API: SQLFreeStmt ────────────────────────────────────── */

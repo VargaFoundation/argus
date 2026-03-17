@@ -290,6 +290,9 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_SQL_CONFORMANCE:
         return set_uinteger_info(SQL_SC_SQL92_ENTRY, InfoValue, StringLength);
 
+    case SQL_ODBC_INTERFACE_CONFORMANCE:
+        return set_uinteger_info(SQL_OIC_CORE, InfoValue, StringLength);
+
     case SQL_SQL92_PREDICATES:
         return set_uinteger_info(
             SQL_SP_COMPARISON | SQL_SP_EXISTS | SQL_SP_IN |
@@ -360,7 +363,7 @@ SQLRETURN SQL_API SQLGetInfo(
         return set_uinteger_info(0, InfoValue, StringLength);
 
     case SQL_DESCRIBE_PARAMETER:
-        return set_string_info("N", InfoValue, BufferLength, StringLength);
+        return set_string_info("Y", InfoValue, BufferLength, StringLength);
 
     case SQL_INTEGRITY:
         return set_string_info("N", InfoValue, BufferLength, StringLength);
@@ -451,6 +454,11 @@ SQLRETURN SQL_API SQLGetFunctions(
         SET_FUNC(SQL_API_SQLGETCURSORNAME);
         SET_FUNC(SQL_API_SQLSETCURSORNAME);
         SET_FUNC(SQL_API_SQLERROR);
+        SET_FUNC(SQL_API_SQLCOPYDESC);
+        SET_FUNC(SQL_API_SQLSETDESCREC);
+        SET_FUNC(SQL_API_SQLDESCRIBEPARAM);
+        SET_FUNC(SQL_API_SQLSETPOS);
+        SET_FUNC(SQL_API_SQLBULKOPERATIONS);
 
         #undef SET_FUNC
         return SQL_SUCCESS;
@@ -495,6 +503,8 @@ SQLRETURN SQL_API SQLGetFunctions(
         Supported[SQL_API_SQLPUTDATA]        = SQL_TRUE;
         Supported[SQL_API_SQLGETCURSORNAME]  = SQL_TRUE;
         Supported[SQL_API_SQLSETCURSORNAME]  = SQL_TRUE;
+        Supported[SQL_API_SQLSETPOS]         = SQL_TRUE;
+        Supported[SQL_API_SQLDESCRIBEPARAM]  = SQL_TRUE;
         return SQL_SUCCESS;
     }
 
@@ -554,6 +564,11 @@ SQLRETURN SQL_API SQLGetFunctions(
     case SQL_API_SQLGETCURSORNAME:
     case SQL_API_SQLSETCURSORNAME:
     case SQL_API_SQLERROR:
+    case SQL_API_SQLCOPYDESC:
+    case SQL_API_SQLSETDESCREC:
+    case SQL_API_SQLDESCRIBEPARAM:
+    case SQL_API_SQLSETPOS:
+    case SQL_API_SQLBULKOPERATIONS:
         *Supported = SQL_TRUE;
         break;
     default:
