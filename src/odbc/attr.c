@@ -253,15 +253,27 @@ SQLRETURN SQL_API SQLSetStmtAttr(
         stmt->row_status_ptr = (SQLUSMALLINT *)Value;
         return SQL_SUCCESS;
 
+    case SQL_ATTR_METADATA_ID:
+        stmt->metadata_id = (SQLULEN)(uintptr_t)Value;
+        return SQL_SUCCESS;
+
+    case SQL_ATTR_USE_BOOKMARKS: {
+        SQLULEN bm = (SQLULEN)(uintptr_t)Value;
+        if (bm == SQL_UB_OFF) {
+            stmt->use_bookmarks = SQL_UB_OFF;
+            return SQL_SUCCESS;
+        }
+        return argus_set_error(&stmt->diag, "HYC00",
+                               "[Argus] Bookmarks not supported", 0);
+    }
+
     case SQL_ATTR_CURSOR_TYPE:
     case SQL_ATTR_CONCURRENCY:
     case SQL_ATTR_CURSOR_SCROLLABLE:
     case SQL_ATTR_CURSOR_SENSITIVITY:
-    case SQL_ATTR_USE_BOOKMARKS:
     case SQL_ATTR_NOSCAN:
     case SQL_ATTR_RETRIEVE_DATA:
     case SQL_ATTR_MAX_LENGTH:
-    case SQL_ATTR_METADATA_ID:
     case SQL_ATTR_ASYNC_ENABLE:
     case SQL_ATTR_PARAM_BIND_TYPE:
     case SQL_ATTR_PARAMSET_SIZE:
@@ -363,7 +375,12 @@ SQLRETURN SQL_API SQLGetStmtAttr(
         return SQL_SUCCESS;
 
     case SQL_ATTR_USE_BOOKMARKS:
-        if (Value) *(SQLULEN *)Value = SQL_UB_OFF;
+        if (Value) *(SQLULEN *)Value = stmt->use_bookmarks;
+        if (StringLength) *StringLength = sizeof(SQLULEN);
+        return SQL_SUCCESS;
+
+    case SQL_ATTR_METADATA_ID:
+        if (Value) *(SQLULEN *)Value = stmt->metadata_id;
         if (StringLength) *StringLength = sizeof(SQLULEN);
         return SQL_SUCCESS;
 

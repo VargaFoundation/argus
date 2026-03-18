@@ -194,10 +194,38 @@ SQLRETURN SQL_API SQLGetDescField(
     }
 
     case SQL_DESC_TABLE_NAME:
-    case SQL_DESC_SCHEMA_NAME:
-    case SQL_DESC_CATALOG_NAME:
-    case SQL_DESC_BASE_TABLE_NAME:
-    case SQL_DESC_BASE_COLUMN_NAME:
+    case SQL_DESC_BASE_TABLE_NAME: {
+        SQLSMALLINT len = argus_copy_string(
+            (const char *)col->table_name,
+            (SQLCHAR *)Value, (SQLSMALLINT)BufferLength);
+        if (StringLength) *StringLength = (SQLINTEGER)len;
+        return SQL_SUCCESS;
+    }
+
+    case SQL_DESC_SCHEMA_NAME: {
+        SQLSMALLINT len = argus_copy_string(
+            (const char *)col->schema_name,
+            (SQLCHAR *)Value, (SQLSMALLINT)BufferLength);
+        if (StringLength) *StringLength = (SQLINTEGER)len;
+        return SQL_SUCCESS;
+    }
+
+    case SQL_DESC_CATALOG_NAME: {
+        SQLSMALLINT len = argus_copy_string(
+            (const char *)col->catalog_name,
+            (SQLCHAR *)Value, (SQLSMALLINT)BufferLength);
+        if (StringLength) *StringLength = (SQLINTEGER)len;
+        return SQL_SUCCESS;
+    }
+
+    case SQL_DESC_BASE_COLUMN_NAME: {
+        SQLSMALLINT len = argus_copy_string(
+            (const char *)col->name,
+            (SQLCHAR *)Value, (SQLSMALLINT)BufferLength);
+        if (StringLength) *StringLength = (SQLINTEGER)len;
+        return SQL_SUCCESS;
+    }
+
     case SQL_DESC_LITERAL_PREFIX:
     case SQL_DESC_LITERAL_SUFFIX:
     case SQL_DESC_LOCAL_TYPE_NAME:

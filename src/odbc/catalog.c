@@ -17,6 +17,35 @@
 
 extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
 
+/* ── Helper: strip trailing spaces from identifier (metadata_id mode) ── */
+
+static char *strip_trailing_spaces(const char *s)
+{
+    if (!s) return NULL;
+    size_t len = strlen(s);
+    while (len > 0 && s[len - 1] == ' ')
+        len--;
+    char *out = malloc(len + 1);
+    if (!out) return NULL;
+    memcpy(out, s, len);
+    out[len] = '\0';
+    return out;
+}
+
+/* ── Helper: dup catalog arg, applying metadata_id rules if set ── */
+
+static char *catalog_arg_dup(const SQLCHAR *str, SQLSMALLINT len,
+                              SQLULEN metadata_id)
+{
+    char *raw = argus_str_dup_short(str, len);
+    if (raw && metadata_id == SQL_TRUE) {
+        char *stripped = strip_trailing_spaces(raw);
+        free(raw);
+        return stripped;
+    }
+    return raw;
+}
+
 /* ── Helper: dispatch catalog operation and setup result set ─── */
 
 static SQLRETURN catalog_dispatch(argus_stmt_t *stmt)
@@ -65,10 +94,11 @@ SQLRETURN SQL_API SQLTables(
         return argus_set_not_implemented(&stmt->diag, "SQLTables");
     }
 
-    char *catalog    = argus_str_dup_short(CatalogName, NameLength1);
-    char *schema     = argus_str_dup_short(SchemaName,  NameLength2);
-    char *table_name = argus_str_dup_short(TableName,   NameLength3);
-    char *table_type = argus_str_dup_short(TableType,   NameLength4);
+    SQLULEN mid = stmt->metadata_id;
+    char *catalog    = catalog_arg_dup(CatalogName, NameLength1, mid);
+    char *schema     = catalog_arg_dup(SchemaName,  NameLength2, mid);
+    char *table_name = catalog_arg_dup(TableName,   NameLength3, mid);
+    char *table_type = catalog_arg_dup(TableType,   NameLength4, mid);
 
     int rc = dbc->backend->get_tables(
         dbc->backend_conn,
@@ -115,10 +145,11 @@ SQLRETURN SQL_API SQLColumns(
         return argus_set_not_implemented(&stmt->diag, "SQLColumns");
     }
 
-    char *catalog     = argus_str_dup_short(CatalogName, NameLength1);
-    char *schema      = argus_str_dup_short(SchemaName,  NameLength2);
-    char *table_name  = argus_str_dup_short(TableName,   NameLength3);
-    char *column_name = argus_str_dup_short(ColumnName,  NameLength4);
+    SQLULEN mid2 = stmt->metadata_id;
+    char *catalog     = catalog_arg_dup(CatalogName, NameLength1, mid2);
+    char *schema      = catalog_arg_dup(SchemaName,  NameLength2, mid2);
+    char *table_name  = catalog_arg_dup(TableName,   NameLength3, mid2);
+    char *column_name = catalog_arg_dup(ColumnName,  NameLength4, mid2);
 
     int rc = dbc->backend->get_columns(
         dbc->backend_conn,

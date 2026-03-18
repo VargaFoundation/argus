@@ -7,6 +7,7 @@
 #include <sql.h>
 #include <sqlext.h>
 #include <stdbool.h>
+#include <glib.h>
 #include "argus/error.h"
 #include "argus/types.h"
 #include "argus/backend.h"
@@ -35,6 +36,7 @@ struct argus_dbc {
     unsigned int            signature;
     argus_diag_t            diag;
     argus_env_t            *env;
+    GMutex                  mutex;        /* thread safety */
     const argus_backend_t  *backend;
     argus_backend_conn_t    backend_conn;
     bool                    connected;
@@ -86,6 +88,7 @@ struct argus_stmt {
     unsigned int            signature;
     argus_diag_t            diag;
     argus_dbc_t            *dbc;
+    GMutex                  mutex;        /* thread safety */
 
     /* Query state */
     char                   *query;
@@ -112,18 +115,30 @@ struct argus_stmt {
     argus_param_binding_t   param_bindings[ARGUS_MAX_PARAMS];
     int                     num_param_bindings;
 
+    /* SQLGetData multi-call state */
+    SQLUSMALLINT            getdata_col;     /* 1-based column of last GetData, 0=none */
+    size_t                  getdata_offset;  /* byte offset for next GetData call */
+
     /* Statement attributes */
     SQLULEN                 max_rows;
     SQLULEN                 query_timeout;
     SQLULEN                 row_array_size;
     SQLULEN                *rows_fetched_ptr;
     SQLUSMALLINT           *row_status_ptr;
+    SQLULEN                 metadata_id;     /* SQL_TRUE or SQL_FALSE */
+    SQLULEN                 use_bookmarks;   /* SQL_UB_OFF (default) */
 
     /* Metrics */
     double                  execute_time_ms;    /* last execute duration */
     unsigned long           rows_fetched_total; /* cumulative rows fetched */
     unsigned long           errors_total;       /* total errors on this stmt */
 };
+
+/* Handle locking macros for thread safety */
+#define ARGUS_DBC_LOCK(dbc)    g_mutex_lock(&(dbc)->mutex)
+#define ARGUS_DBC_UNLOCK(dbc)  g_mutex_unlock(&(dbc)->mutex)
+#define ARGUS_STMT_LOCK(stmt)  g_mutex_lock(&(stmt)->mutex)
+#define ARGUS_STMT_UNLOCK(stmt) g_mutex_unlock(&(stmt)->mutex)
 
 /* Handle validation */
 static inline bool argus_valid_env(SQLHANDLE h) {

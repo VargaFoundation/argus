@@ -30,6 +30,7 @@ SQLRETURN argus_alloc_dbc(argus_env_t *env, argus_dbc_t **out)
 
     dbc->signature          = ARGUS_DBC_SIGNATURE;
     dbc->env                = env;
+    g_mutex_init(&dbc->mutex);
     dbc->connected          = false;
     dbc->login_timeout      = 0;
     dbc->connection_timeout = 0;
@@ -68,6 +69,7 @@ SQLRETURN argus_alloc_stmt(argus_dbc_t *dbc, argus_stmt_t **out)
 
     stmt->signature       = ARGUS_STMT_SIGNATURE;
     stmt->dbc             = dbc;
+    g_mutex_init(&stmt->mutex);
     stmt->row_count       = -1;
     stmt->row_array_size  = 1;
     argus_diag_clear(&stmt->diag);
@@ -99,6 +101,7 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
         return SQL_ERROR;
     }
 
+    g_mutex_clear(&dbc->mutex);
     dbc->signature = 0;
     free(dbc->host);
     free(dbc->username);
@@ -139,6 +142,8 @@ void argus_stmt_reset(argus_stmt_t *stmt)
     stmt->metadata_fetched = false;
     stmt->fetch_started   = false;
     stmt->row_count       = -1;
+    stmt->getdata_col     = 0;
+    stmt->getdata_offset  = 0;
 
     argus_row_cache_free(&stmt->row_cache);
     argus_row_cache_init(&stmt->row_cache);
@@ -162,6 +167,7 @@ SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
     }
 
     argus_stmt_reset(stmt);
+    g_mutex_clear(&stmt->mutex);
     stmt->signature = 0;
     free(stmt);
     return SQL_SUCCESS;
