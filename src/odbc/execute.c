@@ -481,17 +481,22 @@ SQLRETURN SQL_API SQLExecDirect(
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
+    ARGUS_STMT_LOCK(stmt);
     argus_diag_clear(&stmt->diag);
 
     if (!StatementText) {
-        return argus_set_error(&stmt->diag, "HY009",
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY009",
                                "[Argus] NULL statement text", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
     }
 
     char *query = argus_str_dup(StatementText, TextLength);
     if (!query) {
-        return argus_set_error(&stmt->diag, "HY001",
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY001",
                                "[Argus] Memory allocation failed", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
     }
 
     /* Store the query */
@@ -499,18 +504,24 @@ SQLRETURN SQL_API SQLExecDirect(
     stmt->query = query;
 
     /* Substitute bound parameters if any */
+    SQLRETURN ret;
     if (stmt->num_param_bindings > 0) {
         char *resolved = substitute_params(
             query, stmt->param_bindings,
             stmt->num_param_bindings, &stmt->diag);
-        if (!resolved) return SQL_ERROR;
+        if (!resolved) {
+            ARGUS_STMT_UNLOCK(stmt);
+            return SQL_ERROR;
+        }
 
-        SQLRETURN ret = do_execute(stmt, resolved);
+        ret = do_execute(stmt, resolved);
         free(resolved);
-        return ret;
+    } else {
+        ret = do_execute(stmt, query);
     }
 
-    return do_execute(stmt, query);
+    ARGUS_STMT_UNLOCK(stmt);
+    return ret;
 }
 
 /* ── ODBC API: SQLPrepare ────────────────────────────────────── */
@@ -523,17 +534,22 @@ SQLRETURN SQL_API SQLPrepare(
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
+    ARGUS_STMT_LOCK(stmt);
     argus_diag_clear(&stmt->diag);
 
     if (!StatementText) {
-        return argus_set_error(&stmt->diag, "HY009",
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY009",
                                "[Argus] NULL statement text", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
     }
 
     char *query = argus_str_dup(StatementText, TextLength);
     if (!query) {
-        return argus_set_error(&stmt->diag, "HY001",
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY001",
                                "[Argus] Memory allocation failed", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
     }
 
     free(stmt->query);
@@ -541,6 +557,7 @@ SQLRETURN SQL_API SQLPrepare(
     stmt->prepared = true;
     stmt->executed = false;
 
+    ARGUS_STMT_UNLOCK(stmt);
     return SQL_SUCCESS;
 }
 
@@ -551,26 +568,35 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT StatementHandle)
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
+    ARGUS_STMT_LOCK(stmt);
     argus_diag_clear(&stmt->diag);
 
     if (!stmt->query || !stmt->prepared) {
-        return argus_set_error(&stmt->diag, "HY010",
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY010",
                                "[Argus] No prepared statement", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
     }
 
     /* Substitute bound parameters if any */
+    SQLRETURN ret;
     if (stmt->num_param_bindings > 0) {
         char *resolved = substitute_params(
             stmt->query, stmt->param_bindings,
             stmt->num_param_bindings, &stmt->diag);
-        if (!resolved) return SQL_ERROR;
+        if (!resolved) {
+            ARGUS_STMT_UNLOCK(stmt);
+            return SQL_ERROR;
+        }
 
-        SQLRETURN ret = do_execute(stmt, resolved);
+        ret = do_execute(stmt, resolved);
         free(resolved);
-        return ret;
+    } else {
+        ret = do_execute(stmt, stmt->query);
     }
 
-    return do_execute(stmt, stmt->query);
+    ARGUS_STMT_UNLOCK(stmt);
+    return ret;
 }
 
 /* ── ODBC API: SQLRowCount ───────────────────────────────────── */
@@ -631,24 +657,30 @@ SQLRETURN SQL_API SQLCancel(SQLHSTMT StatementHandle)
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
+    ARGUS_STMT_LOCK(stmt);
     argus_diag_clear(&stmt->diag);
 
     /* Check if there's an active operation to cancel */
     if (!stmt->op || !stmt->executed) {
         /* Nothing to cancel */
+        ARGUS_STMT_UNLOCK(stmt);
         return SQL_SUCCESS;
     }
 
     argus_dbc_t *dbc = stmt->dbc;
     if (!dbc || !dbc->backend || !dbc->backend->cancel) {
-        return argus_set_error(&stmt->diag, "HYC00",
+        SQLRETURN err = argus_set_error(&stmt->diag, "HYC00",
                                "[Argus] Cancel not supported by backend", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
     }
 
     ARGUS_LOG_INFO("Cancelling statement operation");
 
     /* Call backend cancel function */
     int rc = dbc->backend->cancel(dbc->backend_conn, stmt->op);
+    ARGUS_STMT_UNLOCK(stmt);
+
     if (rc != 0) {
         ARGUS_LOG_ERROR("Cancel operation failed: rc=%d", rc);
         return argus_set_error(&stmt->diag, "HY008",
@@ -666,7 +698,14 @@ SQLRETURN SQL_API SQLMoreResults(SQLHSTMT StatementHandle)
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
-    /* Hive doesn't support multiple result sets */
+    /* No multiple result sets — clean up state to prevent stale data */
+    stmt->executed = false;
+    stmt->num_cols = 0;
+    stmt->metadata_fetched = false;
+    stmt->fetch_started = false;
+    stmt->getdata_col = 0;
+    stmt->getdata_offset = 0;
+
     return SQL_NO_DATA;
 }
 

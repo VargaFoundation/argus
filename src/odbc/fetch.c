@@ -591,12 +591,19 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
+    ARGUS_STMT_LOCK(stmt);
     argus_diag_clear(&stmt->diag);
 
+    /* Reset SQLGetData multi-call state on new row */
+    stmt->getdata_col = 0;
+    stmt->getdata_offset = 0;
+
     if (!stmt->executed) {
-        return argus_set_error(&stmt->diag, "HY010",
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY010",
                                "[Argus] Function sequence error: not executed",
                                0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
     }
 
     SQLULEN array_size = stmt->row_array_size > 0 ? stmt->row_array_size : 1;
@@ -639,6 +646,8 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
     if (stmt->rows_fetched_ptr)
         *(stmt->rows_fetched_ptr) = rows_fetched;
 
+    ARGUS_STMT_UNLOCK(stmt);
+
     if (rows_fetched == 0)
         return SQL_NO_DATA;
 
@@ -679,26 +688,115 @@ SQLRETURN SQL_API SQLGetData(
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
+    ARGUS_STMT_LOCK(stmt);
     argus_diag_clear(&stmt->diag);
 
     if (ColumnNumber < 1 || ColumnNumber > (SQLUSMALLINT)stmt->num_cols) {
-        return argus_set_error(&stmt->diag, "07009",
+        SQLRETURN err = argus_set_error(&stmt->diag, "07009",
                                "[Argus] Invalid column number", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
     }
 
     /* Current row is one behind current_row pointer */
     size_t row_idx = stmt->row_cache.current_row - 1;
     if (row_idx >= stmt->row_cache.num_rows) {
-        return argus_set_error(&stmt->diag, "24000",
+        SQLRETURN err = argus_set_error(&stmt->diag, "24000",
                                "[Argus] Invalid cursor state", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
     }
 
     argus_row_t *row = &stmt->row_cache.rows[row_idx];
     argus_cell_t *cell = &row->cells[ColumnNumber - 1];
 
-    return convert_cell_to_target(cell, TargetType, TargetValue,
-                                   BufferLength, StrLen_or_Ind,
-                                   &stmt->diag);
+    /* If column changed, reset offset */
+    if (stmt->getdata_col != ColumnNumber) {
+        stmt->getdata_col = ColumnNumber;
+        stmt->getdata_offset = 0;
+    }
+
+    /* Multi-call support for character/binary data */
+    if (cell->is_null) {
+        if (StrLen_or_Ind)
+            *StrLen_or_Ind = SQL_NULL_DATA;
+        stmt->getdata_offset = 0;
+        ARGUS_STMT_UNLOCK(stmt);
+        return SQL_SUCCESS;
+    }
+
+    if ((TargetType == SQL_C_CHAR || TargetType == SQL_C_DEFAULT ||
+         TargetType == SQL_C_BINARY || TargetType == SQL_C_WCHAR) &&
+        stmt->getdata_offset > 0) {
+        /* Continuation call — return remaining data from offset */
+        size_t data_len = cell->data_len;
+        size_t remaining = (stmt->getdata_offset < data_len)
+                           ? data_len - stmt->getdata_offset : 0;
+
+        if (remaining == 0) {
+            if (StrLen_or_Ind) *StrLen_or_Ind = 0;
+            ARGUS_STMT_UNLOCK(stmt);
+            return SQL_NO_DATA;
+        }
+
+        if (TargetType == SQL_C_BINARY) {
+            if (StrLen_or_Ind)
+                *StrLen_or_Ind = (SQLLEN)remaining;
+            if (TargetValue && BufferLength > 0) {
+                size_t copy = remaining < (size_t)BufferLength
+                              ? remaining : (size_t)BufferLength;
+                memcpy(TargetValue,
+                       cell->data + stmt->getdata_offset, copy);
+                stmt->getdata_offset += copy;
+                if (remaining > (size_t)BufferLength) {
+                    argus_diag_push(&stmt->diag, "01004",
+                                    "[Argus] Binary data truncated", 0);
+                    ARGUS_STMT_UNLOCK(stmt);
+                    return SQL_SUCCESS_WITH_INFO;
+                }
+            }
+            ARGUS_STMT_UNLOCK(stmt);
+            return SQL_SUCCESS;
+        }
+
+        /* SQL_C_CHAR / SQL_C_DEFAULT continuation */
+        if (StrLen_or_Ind)
+            *StrLen_or_Ind = (SQLLEN)remaining;
+        if (TargetValue && BufferLength > 0) {
+            size_t copy = remaining < (size_t)(BufferLength - 1)
+                          ? remaining : (size_t)(BufferLength - 1);
+            memcpy(TargetValue,
+                   cell->data + stmt->getdata_offset, copy);
+            ((char *)TargetValue)[copy] = '\0';
+            stmt->getdata_offset += copy;
+            if (remaining >= (size_t)BufferLength) {
+                argus_diag_push(&stmt->diag, "01004",
+                                "[Argus] String data, right truncated", 0);
+                ARGUS_STMT_UNLOCK(stmt);
+                return SQL_SUCCESS_WITH_INFO;
+            }
+        }
+        ARGUS_STMT_UNLOCK(stmt);
+        return SQL_SUCCESS;
+    }
+
+    /* First call — use standard conversion */
+    SQLRETURN ret = convert_cell_to_target(cell, TargetType, TargetValue,
+                                            BufferLength, StrLen_or_Ind,
+                                            &stmt->diag);
+
+    /* Track offset for multi-call if data was truncated */
+    if (ret == SQL_SUCCESS_WITH_INFO &&
+        (TargetType == SQL_C_CHAR || TargetType == SQL_C_DEFAULT ||
+         TargetType == SQL_C_BINARY || TargetType == SQL_C_WCHAR)) {
+        if (BufferLength > 1)
+            stmt->getdata_offset = (size_t)(BufferLength - 1);
+        else if (BufferLength > 0)
+            stmt->getdata_offset = (size_t)BufferLength;
+    }
+
+    ARGUS_STMT_UNLOCK(stmt);
+    return ret;
 }
 
 /* ── ODBC API: SQLBindCol ────────────────────────────────────── */
@@ -787,7 +885,34 @@ SQLRETURN SQL_API SQLDescribeCol(
     }
 
     if (DataTypePtr)      *DataTypePtr      = col->sql_type;
-    if (ColumnSizePtr)    *ColumnSizePtr     = col->column_size;
+    if (ColumnSizePtr) {
+        SQLULEN cs = col->column_size;
+        /* Provide default sizes when backend returns 0 */
+        if (cs == 0) {
+            switch (col->sql_type) {
+            case SQL_VARCHAR:
+            case SQL_LONGVARCHAR:  cs = 65535;  break;
+            case SQL_CHAR:         cs = 1;      break;
+            case SQL_INTEGER:      cs = 10;     break;
+            case SQL_BIGINT:       cs = 19;     break;
+            case SQL_SMALLINT:     cs = 5;      break;
+            case SQL_TINYINT:      cs = 3;      break;
+            case SQL_FLOAT:
+            case SQL_DOUBLE:       cs = 15;     break;
+            case SQL_REAL:         cs = 7;      break;
+            case SQL_DECIMAL:
+            case SQL_NUMERIC:      cs = 38;     break;
+            case SQL_TYPE_DATE:    cs = 10;     break;
+            case SQL_TYPE_TIMESTAMP: cs = 26;   break;
+            case SQL_TYPE_TIME:    cs = 8;      break;
+            case SQL_BIT:          cs = 1;      break;
+            case SQL_BINARY:
+            case SQL_VARBINARY:    cs = 8000;   break;
+            default:               cs = 255;    break;
+            }
+        }
+        *ColumnSizePtr = cs;
+    }
     if (DecimalDigitsPtr) *DecimalDigitsPtr  = col->decimal_digits;
     if (NullablePtr)      *NullablePtr       = col->nullable;
 
@@ -903,8 +1028,38 @@ SQLRETURN SQL_API SQLColAttribute(
     }
 
     case SQL_DESC_TABLE_NAME:
-    case SQL_DESC_SCHEMA_NAME:
-    case SQL_DESC_CATALOG_NAME:
+    case SQL_DESC_BASE_TABLE_NAME: {
+        SQLSMALLINT len = argus_copy_string(
+            (const char *)col->table_name,
+            (SQLCHAR *)CharacterAttribute, BufferLength);
+        if (StringLength) *StringLength = len;
+        return SQL_SUCCESS;
+    }
+
+    case SQL_DESC_SCHEMA_NAME: {
+        SQLSMALLINT len = argus_copy_string(
+            (const char *)col->schema_name,
+            (SQLCHAR *)CharacterAttribute, BufferLength);
+        if (StringLength) *StringLength = len;
+        return SQL_SUCCESS;
+    }
+
+    case SQL_DESC_CATALOG_NAME: {
+        SQLSMALLINT len = argus_copy_string(
+            (const char *)col->catalog_name,
+            (SQLCHAR *)CharacterAttribute, BufferLength);
+        if (StringLength) *StringLength = len;
+        return SQL_SUCCESS;
+    }
+
+    case SQL_DESC_BASE_COLUMN_NAME: {
+        SQLSMALLINT len = argus_copy_string(
+            (const char *)col->name,
+            (SQLCHAR *)CharacterAttribute, BufferLength);
+        if (StringLength) *StringLength = len;
+        return SQL_SUCCESS;
+    }
+
     case SQL_DESC_LITERAL_PREFIX:
     case SQL_DESC_LITERAL_SUFFIX:
     case SQL_DESC_LOCAL_TYPE_NAME:

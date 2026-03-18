@@ -141,24 +141,35 @@ SQLRETURN SQL_API SQLGetInfo(
         return set_uinteger_info(
             SQL_FN_STR_CONCAT | SQL_FN_STR_LENGTH | SQL_FN_STR_SUBSTRING |
             SQL_FN_STR_LTRIM | SQL_FN_STR_RTRIM | SQL_FN_STR_LCASE |
-            SQL_FN_STR_UCASE | SQL_FN_STR_REPLACE,
+            SQL_FN_STR_UCASE | SQL_FN_STR_REPLACE | SQL_FN_STR_LEFT |
+            SQL_FN_STR_RIGHT | SQL_FN_STR_LOCATE | SQL_FN_STR_REPEAT |
+            SQL_FN_STR_SPACE,
             InfoValue, StringLength);
 
     case SQL_NUMERIC_FUNCTIONS:
         return set_uinteger_info(
             SQL_FN_NUM_ABS | SQL_FN_NUM_CEILING | SQL_FN_NUM_FLOOR |
             SQL_FN_NUM_MOD | SQL_FN_NUM_ROUND | SQL_FN_NUM_SQRT |
-            SQL_FN_NUM_POWER | SQL_FN_NUM_LOG | SQL_FN_NUM_EXP,
+            SQL_FN_NUM_POWER | SQL_FN_NUM_LOG | SQL_FN_NUM_EXP |
+            SQL_FN_NUM_SIGN | SQL_FN_NUM_TRUNCATE | SQL_FN_NUM_RAND |
+            SQL_FN_NUM_LOG10 | SQL_FN_NUM_ACOS | SQL_FN_NUM_ASIN |
+            SQL_FN_NUM_ATAN | SQL_FN_NUM_COS | SQL_FN_NUM_SIN |
+            SQL_FN_NUM_TAN,
             InfoValue, StringLength);
 
     case SQL_SYSTEM_FUNCTIONS:
-        return set_uinteger_info(SQL_FN_SYS_IFNULL, InfoValue, StringLength);
+        return set_uinteger_info(
+            SQL_FN_SYS_IFNULL | SQL_FN_SYS_DBNAME | SQL_FN_SYS_USERNAME,
+            InfoValue, StringLength);
 
     case SQL_TIMEDATE_FUNCTIONS:
         return set_uinteger_info(
             SQL_FN_TD_NOW | SQL_FN_TD_CURDATE | SQL_FN_TD_YEAR |
             SQL_FN_TD_MONTH | SQL_FN_TD_DAYOFMONTH | SQL_FN_TD_HOUR |
-            SQL_FN_TD_MINUTE | SQL_FN_TD_SECOND,
+            SQL_FN_TD_MINUTE | SQL_FN_TD_SECOND | SQL_FN_TD_EXTRACT |
+            SQL_FN_TD_CURRENT_DATE | SQL_FN_TD_CURRENT_TIME |
+            SQL_FN_TD_CURRENT_TIMESTAMP | SQL_FN_TD_QUARTER |
+            SQL_FN_TD_WEEK | SQL_FN_TD_DAYOFWEEK | SQL_FN_TD_DAYOFYEAR,
             InfoValue, StringLength);
 
     /* ── SQL syntax support ──────────────────────────────────── */
@@ -167,14 +178,15 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_LIKE_ESCAPE_CLAUSE:
         return set_string_info("Y", InfoValue, BufferLength, StringLength);
     case SQL_SPECIAL_CHARACTERS:
-        return set_string_info("_", InfoValue, BufferLength, StringLength);
+        return set_string_info("_%", InfoValue, BufferLength, StringLength);
     case SQL_MAX_IDENTIFIER_LEN:
         return set_usmallint_info(128, InfoValue, StringLength);
     case SQL_MAX_TABLE_NAME_LEN:
-    case SQL_MAX_COLUMN_NAME_LEN:
     case SQL_MAX_SCHEMA_NAME_LEN:
     case SQL_MAX_CATALOG_NAME_LEN:
         return set_usmallint_info(128, InfoValue, StringLength);
+    case SQL_MAX_COLUMN_NAME_LEN:
+        return set_usmallint_info(256, InfoValue, StringLength);
 
     /* ── Cursor capabilities ─────────────────────────────────── */
     case SQL_SCROLL_OPTIONS:
@@ -237,7 +249,7 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_COLUMN_ALIAS:
         return set_string_info("Y", InfoValue, BufferLength, StringLength);
     case SQL_GROUP_BY:
-        return set_usmallint_info(SQL_GB_GROUP_BY_EQUALS_SELECT, InfoValue, StringLength);
+        return set_usmallint_info(SQL_GB_GROUP_BY_CONTAINS_SELECT, InfoValue, StringLength);
     case SQL_ORDER_BY_COLUMNS_IN_SELECT:
         return set_string_info("N", InfoValue, BufferLength, StringLength);
     case SQL_EXPRESSIONS_IN_ORDERBY:
@@ -251,7 +263,8 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_OJ_CAPABILITIES:
         return set_uinteger_info(
             SQL_OJ_LEFT | SQL_OJ_RIGHT | SQL_OJ_FULL |
-            SQL_OJ_NESTED | SQL_OJ_NOT_ORDERED,
+            SQL_OJ_NESTED | SQL_OJ_NOT_ORDERED |
+            SQL_OJ_INNER | SQL_OJ_ALL_COMPARISON_OPS,
             InfoValue, StringLength);
     case SQL_SUBQUERIES:
         return set_uinteger_info(
@@ -340,7 +353,7 @@ SQLRETURN SQL_API SQLGetInfo(
 
     case SQL_ACCESSIBLE_TABLES:
     case SQL_ACCESSIBLE_PROCEDURES:
-        return set_string_info("Y", InfoValue, BufferLength, StringLength);
+        return set_string_info("N", InfoValue, BufferLength, StringLength);
 
     case SQL_BATCH_SUPPORT:
     case SQL_BATCH_ROW_COUNT:
@@ -442,6 +455,62 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_INSERT_STATEMENT:
         return set_uinteger_info(SQL_IS_INSERT_LITERALS | SQL_IS_SELECT_INTO,
                                   InfoValue, StringLength);
+
+    /* ── Additional info types for BI tool compatibility ─────── */
+    case SQL_PROCEDURES:
+        return set_string_info("N", InfoValue, BufferLength, StringLength);
+
+    case SQL_MAX_BINARY_LITERAL_LEN:
+        return set_uinteger_info(0, InfoValue, StringLength);
+
+#ifdef SQL_TIMEDATE_ADD_INTERVALS
+    case SQL_TIMEDATE_ADD_INTERVALS:
+        return set_uinteger_info(0, InfoValue, StringLength);
+#endif
+#ifdef SQL_TIMEDATE_DIFF_INTERVALS
+    case SQL_TIMEDATE_DIFF_INTERVALS:
+        return set_uinteger_info(0, InfoValue, StringLength);
+#endif
+
+    /*
+     * ODBC 2.x aliases (SQL_OWNER_TERM, SQL_QUALIFIER_TERM, etc.) are
+     * #defined to the same numeric values as their ODBC 3.x counterparts
+     * (SQL_SCHEMA_TERM, SQL_CATALOG_TERM, etc.), so they are already
+     * handled by the cases above. No additional case labels needed.
+     */
+
+#ifdef SQL_ACTIVE_ENVIRONMENTS
+    case SQL_ACTIVE_ENVIRONMENTS:
+        return set_usmallint_info(0, InfoValue, StringLength);
+#endif
+
+    case SQL_CREATE_ASSERTION:
+    case SQL_CREATE_CHARACTER_SET:
+    case SQL_CREATE_COLLATION:
+    case SQL_CREATE_DOMAIN:
+    case SQL_CREATE_SCHEMA:
+    case SQL_CREATE_TRANSLATION:
+    case SQL_DROP_ASSERTION:
+    case SQL_DROP_CHARACTER_SET:
+    case SQL_DROP_COLLATION:
+    case SQL_DROP_DOMAIN:
+    case SQL_DROP_SCHEMA:
+    case SQL_DROP_TRANSLATION:
+        return set_uinteger_info(0, InfoValue, StringLength);
+
+    case SQL_SQL92_GRANT:
+    case SQL_SQL92_REVOKE:
+        return set_uinteger_info(0, InfoValue, StringLength);
+
+#ifdef SQL_STANDARD_CLI_CONFORMANCE
+    case SQL_STANDARD_CLI_CONFORMANCE:
+        return set_uinteger_info(0, InfoValue, StringLength);
+#endif
+
+#ifdef SQL_DDL_INDEX
+    case SQL_DDL_INDEX:
+        return set_uinteger_info(0, InfoValue, StringLength);
+#endif
 
     default:
         /* Return empty/zero for unknown info types */

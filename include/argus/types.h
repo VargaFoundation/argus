@@ -26,6 +26,9 @@ typedef struct argus_column_desc {
     SQLULEN      column_size;   /* precision / display size */
     SQLSMALLINT  decimal_digits;
     SQLSMALLINT  nullable;      /* SQL_NULLABLE, SQL_NO_NULLS, SQL_NULLABLE_UNKNOWN */
+    SQLCHAR      table_name[ARGUS_MAX_COLUMN_NAME];
+    SQLCHAR      schema_name[ARGUS_MAX_COLUMN_NAME];
+    SQLCHAR      catalog_name[ARGUS_MAX_COLUMN_NAME];
 } argus_column_desc_t;
 
 /* Column binding - application's buffer for SQLBindCol */
