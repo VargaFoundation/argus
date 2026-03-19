@@ -10,6 +10,7 @@ int phoenix_connect(argus_dbc_t *dbc,
                     argus_backend_conn_t *out_conn);
 
 void phoenix_disconnect(argus_backend_conn_t conn);
+bool phoenix_is_alive(argus_backend_conn_t conn);
 
 int phoenix_execute(argus_backend_conn_t conn,
                     const char *query,
@@ -58,11 +59,18 @@ int phoenix_get_schemas(argus_backend_conn_t conn,
 int phoenix_get_catalogs(argus_backend_conn_t conn,
                          argus_backend_op_t *out_op);
 
+int phoenix_get_primary_keys(argus_backend_conn_t conn,
+                              const char *catalog,
+                              const char *schema,
+                              const char *table_name,
+                              argus_backend_op_t *out_op);
+
 /* Phoenix backend vtable */
 static const argus_backend_t phoenix_backend = {
     .name                  = "phoenix",
     .connect               = phoenix_connect,
     .disconnect            = phoenix_disconnect,
+    .is_alive              = phoenix_is_alive,
     .execute               = phoenix_execute,
     .get_operation_status  = phoenix_get_operation_status,
     .close_operation       = phoenix_close_operation,
@@ -74,6 +82,7 @@ static const argus_backend_t phoenix_backend = {
     .get_type_info         = phoenix_get_type_info,
     .get_schemas           = phoenix_get_schemas,
     .get_catalogs          = phoenix_get_catalogs,
+    .get_primary_keys      = phoenix_get_primary_keys,
 };
 
 const argus_backend_t *argus_phoenix_backend_get(void)

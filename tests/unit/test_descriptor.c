@@ -23,6 +23,8 @@ static argus_stmt_t *create_stmt_with_metadata(void)
     stmt->metadata_fetched = true;
     argus_diag_clear(&stmt->diag);
     argus_row_cache_init(&stmt->row_cache);
+    argus_stmt_ensure_columns(stmt, 64);
+    argus_stmt_ensure_bindings(stmt, 64);
 
     /* Set up 3 columns */
     stmt->num_cols = 3;
@@ -55,6 +57,8 @@ static void destroy_test_stmt(argus_stmt_t *stmt)
 {
     argus_row_cache_free(&stmt->row_cache);
     free(stmt->query);
+    free(stmt->columns);
+    free(stmt->bindings);
     stmt->signature = 0;
     free(stmt);
 }

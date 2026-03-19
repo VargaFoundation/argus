@@ -24,7 +24,7 @@ SQLSMALLINT trino_type_to_sql_type(const char *trino_type)
     if (strcasecmp(trino_type, "time") == 0)         return SQL_TYPE_TIMESTAMP;
     if (strcasecmp(trino_type, "decimal") == 0)      return SQL_DECIMAL;
     if (strcasecmp(trino_type, "json") == 0)         return SQL_VARCHAR;
-    if (strcasecmp(trino_type, "uuid") == 0)         return SQL_VARCHAR;
+    if (strcasecmp(trino_type, "uuid") == 0)         return SQL_GUID;
     if (strcasecmp(trino_type, "ipaddress") == 0)    return SQL_VARCHAR;
 
     /* Parameterized types: varchar(n), char(n), decimal(p,s), timestamp(p) */
@@ -64,6 +64,7 @@ SQLULEN trino_type_column_size(SQLSMALLINT sql_type)
     case SQL_BINARY:         return 65535;
     case SQL_TYPE_DATE:      return 10;    /* YYYY-MM-DD */
     case SQL_TYPE_TIMESTAMP: return 29;    /* YYYY-MM-DD HH:MM:SS.fffffffff */
+    case SQL_GUID:           return 36;    /* xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx */
     default:                 return 65535;
     }
 }

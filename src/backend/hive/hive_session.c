@@ -191,6 +191,16 @@ fail:
     return -1;
 }
 
+/* ── Liveness check ──────────────────────────────────────────── */
+
+bool hive_is_alive(argus_backend_conn_t raw_conn)
+{
+    hive_conn_t *conn = (hive_conn_t *)raw_conn;
+    if (!conn || !conn->transport) return false;
+
+    return thrift_transport_is_open(conn->transport);
+}
+
 /* ── Disconnect from HiveServer2 ─────────────────────────────── */
 
 void hive_disconnect(argus_backend_conn_t raw_conn)

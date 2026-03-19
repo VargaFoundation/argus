@@ -10,6 +10,7 @@ int kudu_connect(argus_dbc_t *dbc,
                  argus_backend_conn_t *out_conn);
 
 void kudu_disconnect(argus_backend_conn_t conn);
+bool kudu_is_alive(argus_backend_conn_t conn);
 
 int kudu_execute(argus_backend_conn_t conn,
                  const char *query,
@@ -58,11 +59,18 @@ int kudu_get_schemas(argus_backend_conn_t conn,
 int kudu_get_catalogs(argus_backend_conn_t conn,
                       argus_backend_op_t *out_op);
 
+int kudu_get_primary_keys(argus_backend_conn_t conn,
+                           const char *catalog,
+                           const char *schema,
+                           const char *table_name,
+                           argus_backend_op_t *out_op);
+
 /* Kudu backend vtable */
 static const argus_backend_t kudu_backend = {
     .name                  = "kudu",
     .connect               = kudu_connect,
     .disconnect            = kudu_disconnect,
+    .is_alive              = kudu_is_alive,
     .execute               = kudu_execute,
     .get_operation_status  = kudu_get_operation_status,
     .close_operation       = kudu_close_operation,
@@ -74,6 +82,7 @@ static const argus_backend_t kudu_backend = {
     .get_type_info         = kudu_get_type_info,
     .get_schemas           = kudu_get_schemas,
     .get_catalogs          = kudu_get_catalogs,
+    .get_primary_keys      = kudu_get_primary_keys,
 };
 
 const argus_backend_t *argus_kudu_backend_get(void)

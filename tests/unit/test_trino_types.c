@@ -66,7 +66,7 @@ static void test_trino_specific_types(void **state)
     (void)state;
 
     assert_int_equal(trino_type_to_sql_type("json"),       SQL_VARCHAR);
-    assert_int_equal(trino_type_to_sql_type("uuid"),       SQL_VARCHAR);
+    assert_int_equal(trino_type_to_sql_type("uuid"),       SQL_GUID);
     assert_int_equal(trino_type_to_sql_type("ipaddress"),  SQL_VARCHAR);
 }
 

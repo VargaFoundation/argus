@@ -31,3 +31,72 @@ services:
       timeout: 10s
       retries: 12
       start_period: 30s
+
+  trino-ssl:
+    image: trinodb/trino:latest
+    container_name: argus-trino-ssl
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./certs/server.p12:/etc/trino/server.p12:ro
+      - ./certs/truststore.jks:/etc/trino/truststore.jks:ro
+      - ./trino-ssl-config:/etc/trino-ssl-config:ro
+    environment:
+      # Override Trino config to enable HTTPS on port 8443
+      JAVA_TOOL_OPTIONS: >-
+        -Dhttp-server.https.enabled=true
+        -Dhttp-server.https.port=8443
+        -Dhttp-server.https.keystore.path=/etc/trino/server.p12
+        -Dhttp-server.https.keystore.key=changeit
+        -Dhttp-server.http.enabled=false
+    healthcheck:
+      test: ["CMD", "curl", "-kf", "https://localhost:8443/v1/info"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  phoenix:
+    image: apache/phoenix:5.2.0
+    container_name: argus-phoenix
+    ports:
+      - "8765:8765"     # Phoenix Query Server
+      - "2181:2181"     # ZooKeeper
+      - "16010:16010"   # HBase Master UI
+    environment:
+      START_HBASE: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  kudu-master:
+    image: apache/kudu:latest
+    container_name: argus-kudu-master
+    ports:
+      - "7051:7051"     # Kudu Master RPC
+      - "8051:8051"     # Kudu Master Web UI
+    command: ["master"]
+    environment:
+      MASTER_ARGS: "--fs_wal_dir=/var/lib/kudu/master --webserver_doc_root=/opt/kudu/www"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8051/"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+  kudu-tserver:
+    image: apache/kudu:latest
+    container_name: argus-kudu-tserver
+    ports:
+      - "7050:7050"     # Kudu Tablet Server RPC
+      - "8050:8050"     # Kudu Tablet Server Web UI
+    command: ["tserver"]
+    environment:
+      TSERVER_ARGS: "--fs_wal_dir=/var/lib/kudu/tserver --tserver_master_addrs=kudu-master:7051"
+    depends_on:
+      kudu-master:
+        condition: service_healthy

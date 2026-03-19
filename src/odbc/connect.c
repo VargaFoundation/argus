@@ -21,6 +21,7 @@ extern SQLSMALLINT argus_copy_string(const char *src,
                                       SQLCHAR *dst, SQLSMALLINT dst_len);
 extern char *argus_str_dup(const SQLCHAR *str, SQLINTEGER len);
 extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
+extern bool argus_resolve_dsn(argus_dbc_t *dbc, const char *dsn_name);
 
 /* ── Internal: perform the actual connection ─────────────────── */
 
@@ -168,6 +169,12 @@ SQLRETURN SQL_API SQLDriverConnect(
 
     /* Extract parameters */
     const char *v;
+
+    /* If DSN= is specified, resolve from odbc.ini first */
+    v = argus_conn_params_get(&params, "DSN");
+    if (v && *v) {
+        argus_resolve_dsn(dbc, v);
+    }
 
     v = argus_conn_params_get(&params, "HOST");
     if (!v) v = argus_conn_params_get(&params, "SERVER");
@@ -339,9 +346,17 @@ SQLRETURN SQL_API SQLConnect(
                                "[Argus] Already connected", 0);
     }
 
-    /* ServerName is the DSN name; we treat it as host for now */
+    /* Try resolving ServerName as a DSN first */
     char *server = argus_str_dup_short(ServerName, NameLength1);
-    if (server) { free(dbc->host); dbc->host = server; }
+    if (server) {
+        if (!argus_resolve_dsn(dbc, server)) {
+            /* Not a DSN — treat as literal hostname */
+            free(dbc->host);
+            dbc->host = server;
+        } else {
+            free(server);
+        }
+    }
 
     char *user = argus_str_dup_short(UserName, NameLength2);
     if (user) { free(dbc->username); dbc->username = user; }

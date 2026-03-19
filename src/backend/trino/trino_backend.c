@@ -10,6 +10,7 @@ int trino_connect(argus_dbc_t *dbc,
                   argus_backend_conn_t *out_conn);
 
 void trino_disconnect(argus_backend_conn_t conn);
+bool trino_is_alive(argus_backend_conn_t conn);
 
 int trino_execute(argus_backend_conn_t conn,
                   const char *query,
@@ -58,11 +59,26 @@ int trino_get_schemas(argus_backend_conn_t conn,
 int trino_get_catalogs(argus_backend_conn_t conn,
                        argus_backend_op_t *out_op);
 
+int trino_get_primary_keys(argus_backend_conn_t conn,
+                            const char *catalog,
+                            const char *schema,
+                            const char *table_name,
+                            argus_backend_op_t *out_op);
+
+int trino_get_statistics(argus_backend_conn_t conn,
+                          const char *catalog,
+                          const char *schema,
+                          const char *table_name,
+                          unsigned short unique,
+                          unsigned short reserved,
+                          argus_backend_op_t *out_op);
+
 /* Trino backend vtable */
 static const argus_backend_t trino_backend = {
     .name                  = "trino",
     .connect               = trino_connect,
     .disconnect            = trino_disconnect,
+    .is_alive              = trino_is_alive,
     .execute               = trino_execute,
     .get_operation_status  = trino_get_operation_status,
     .close_operation       = trino_close_operation,
@@ -74,6 +90,8 @@ static const argus_backend_t trino_backend = {
     .get_type_info         = trino_get_type_info,
     .get_schemas           = trino_get_schemas,
     .get_catalogs          = trino_get_catalogs,
+    .get_primary_keys      = trino_get_primary_keys,
+    .get_statistics        = trino_get_statistics,
 };
 
 const argus_backend_t *argus_trino_backend_get(void)

@@ -244,6 +244,16 @@ fail:
     return -1;
 }
 
+/* ── Liveness check ──────────────────────────────────────────── */
+
+bool impala_is_alive(argus_backend_conn_t raw_conn)
+{
+    impala_conn_t *conn = (impala_conn_t *)raw_conn;
+    if (!conn || !conn->transport) return false;
+
+    return thrift_transport_is_open(conn->transport);
+}
+
 /* ── Disconnect from Impala ──────────────────────────────────── */
 
 void impala_disconnect(argus_backend_conn_t raw_conn)

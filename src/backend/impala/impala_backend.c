@@ -10,6 +10,7 @@ int impala_connect(argus_dbc_t *dbc,
                    argus_backend_conn_t *out_conn);
 
 void impala_disconnect(argus_backend_conn_t conn);
+bool impala_is_alive(argus_backend_conn_t conn);
 
 int impala_execute(argus_backend_conn_t conn,
                    const char *query,
@@ -63,6 +64,7 @@ static const argus_backend_t impala_backend = {
     .name                  = "impala",
     .connect               = impala_connect,
     .disconnect            = impala_disconnect,
+    .is_alive              = impala_is_alive,
     .execute               = impala_execute,
     .get_operation_status  = impala_get_operation_status,
     .close_operation       = impala_close_operation,

@@ -10,6 +10,7 @@ int hive_connect(argus_dbc_t *dbc,
                  argus_backend_conn_t *out_conn);
 
 void hive_disconnect(argus_backend_conn_t conn);
+bool hive_is_alive(argus_backend_conn_t conn);
 
 int hive_execute(argus_backend_conn_t conn,
                  const char *query,
@@ -63,6 +64,7 @@ static const argus_backend_t hive_backend = {
     .name                  = "hive",
     .connect               = hive_connect,
     .disconnect            = hive_disconnect,
+    .is_alive              = hive_is_alive,
     .execute               = hive_execute,
     .get_operation_status  = hive_get_operation_status,
     .close_operation       = hive_close_operation,

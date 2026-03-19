@@ -264,6 +264,22 @@ int trino_connect(argus_dbc_t *dbc,
     return 0;
 }
 
+/* ── Liveness check ──────────────────────────────────────────── */
+
+bool trino_is_alive(argus_backend_conn_t raw_conn)
+{
+    trino_conn_t *conn = (trino_conn_t *)raw_conn;
+    if (!conn || !conn->curl || !conn->base_url) return false;
+
+    char url[1024];
+    snprintf(url, sizeof(url), "%s/v1/info", conn->base_url);
+
+    trino_response_t resp = {0};
+    int rc = trino_http_get(conn, url, &resp);
+    free(resp.data);
+    return (rc == 0);
+}
+
 /* ── Disconnect from Trino ───────────────────────────────────── */
 
 void trino_disconnect(argus_backend_conn_t raw_conn)

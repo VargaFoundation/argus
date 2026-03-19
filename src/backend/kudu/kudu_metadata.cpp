@@ -395,6 +395,77 @@ int kudu_get_type_info(argus_backend_conn_t raw_conn,
     return 0;
 }
 
+/* ── GetPrimaryKeys ──────────────────────────────────────────── */
+
+extern "C"
+int kudu_get_primary_keys(argus_backend_conn_t raw_conn,
+                           const char *catalog,
+                           const char *schema,
+                           const char *table_name,
+                           argus_backend_op_t *out_op)
+{
+    kudu_conn_t *conn = static_cast<kudu_conn_t *>(raw_conn);
+    if (!conn || !table_name || !*table_name) return -1;
+    (void)schema;
+
+    /* Build full table name */
+    std::string full_name;
+    if (conn->database && *conn->database &&
+        strcmp(conn->database, "default") != 0) {
+        full_name = std::string(conn->database) + "." + table_name;
+    } else {
+        full_name = table_name;
+    }
+
+    /* Open table to get schema */
+    KuduClient *kclient = get_client(conn->client);
+    if (!kclient) return -1;
+
+    std::shared_ptr<KuduTable> table;
+    Status s = kclient->OpenTable(full_name, &table);
+    if (!s.ok()) {
+        ARGUS_LOG_ERROR("Kudu OpenTable failed: %s", s.ToString().c_str());
+        return -1;
+    }
+
+    const KuduSchema &kschema = table->schema();
+
+    /* SQLPrimaryKeys result: TABLE_CAT, TABLE_SCHEM, TABLE_NAME,
+       COLUMN_NAME, KEY_SEQ, PK_NAME */
+    const char *col_names[] = {
+        "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME",
+        "COLUMN_NAME", "KEY_SEQ", "PK_NAME"
+    };
+    SQLSMALLINT col_types[] = {
+        SQL_VARCHAR, SQL_VARCHAR, SQL_VARCHAR,
+        SQL_VARCHAR, SQL_SMALLINT, SQL_VARCHAR
+    };
+
+    kudu_operation_t *op = create_synthetic_op(6, col_names, col_types);
+    if (!op) return -1;
+
+    const char *cat = (catalog && *catalog) ? catalog : conn->database;
+    int key_seq = 1;
+
+    int ncols = kschema.num_columns();
+    int num_key_cols = kschema.GetAutoIncrementingColumnIndex();
+    /* num_key_cols is -1 if no auto-increment; use key column count instead */
+    for (int i = 0; i < ncols; i++) {
+        const KuduColumnSchema &col = kschema.Column(i);
+        if (!col.is_key()) continue;
+
+        char seq_str[16];
+        snprintf(seq_str, sizeof(seq_str), "%d", key_seq++);
+
+        add_synthetic_row(op->synthetic_cache, 6,
+                          cat, "default", table_name,
+                          col.name().c_str(), seq_str, "PRIMARY");
+    }
+
+    *out_op = op;
+    return 0;
+}
+
 /* ── GetSchemas ──────────────────────────────────────────────── */
 
 extern "C"

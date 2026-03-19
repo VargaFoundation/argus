@@ -215,3 +215,83 @@ int trino_get_catalogs(argus_backend_conn_t raw_conn,
     *out_op = op;
     return 0;
 }
+
+/* ── GetPrimaryKeys via system.jdbc.primary_keys ─────────────── */
+
+int trino_get_primary_keys(argus_backend_conn_t raw_conn,
+                            const char *catalog,
+                            const char *schema,
+                            const char *table_name,
+                            argus_backend_op_t *out_op)
+{
+    trino_conn_t *conn = (trino_conn_t *)raw_conn;
+    if (!conn) return -1;
+
+    char query[2048];
+    snprintf(query, sizeof(query),
+             "SELECT table_cat, table_schem, table_name, "
+             "column_name, key_seq, pk_name "
+             "FROM system.jdbc.primary_keys "
+             "WHERE 1=1");
+
+    size_t pos = strlen(query);
+    if (catalog && *catalog) {
+        pos += (size_t)snprintf(query + pos, sizeof(query) - pos,
+                 " AND table_cat = '%s'", catalog);
+    }
+    if (schema && *schema) {
+        pos += (size_t)snprintf(query + pos, sizeof(query) - pos,
+                 " AND table_schem = '%s'", schema);
+    }
+    if (table_name && *table_name) {
+        pos += (size_t)snprintf(query + pos, sizeof(query) - pos,
+                 " AND table_name = '%s'", table_name);
+    }
+    (void)pos;
+
+    trino_operation_t *op = NULL;
+    int rc = trino_execute_query(conn, query, &op);
+    if (rc != 0) return -1;
+
+    *out_op = op;
+    return 0;
+}
+
+/* ── GetStatistics via SHOW STATS ────────────────────────────── */
+
+int trino_get_statistics(argus_backend_conn_t raw_conn,
+                          const char *catalog,
+                          const char *schema,
+                          const char *table_name,
+                          unsigned short unique,
+                          unsigned short reserved,
+                          argus_backend_op_t *out_op)
+{
+    (void)unique;
+    (void)reserved;
+
+    trino_conn_t *conn = (trino_conn_t *)raw_conn;
+    if (!conn || !table_name || !*table_name) return -1;
+
+    char query[2048];
+    if (schema && *schema) {
+        if (catalog && *catalog) {
+            snprintf(query, sizeof(query),
+                     "SHOW STATS FOR %s.%s.%s",
+                     catalog, schema, table_name);
+        } else {
+            snprintf(query, sizeof(query),
+                     "SHOW STATS FOR %s.%s", schema, table_name);
+        }
+    } else {
+        snprintf(query, sizeof(query),
+                 "SHOW STATS FOR %s", table_name);
+    }
+
+    trino_operation_t *op = NULL;
+    int rc = trino_execute_query(conn, query, &op);
+    if (rc != 0) return -1;
+
+    *out_op = op;
+    return 0;
+}

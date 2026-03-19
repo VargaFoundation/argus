@@ -55,14 +55,26 @@ static SQLRETURN catalog_dispatch(argus_stmt_t *stmt)
     /* Get metadata for the catalog result set */
     if (stmt->dbc->backend->get_result_metadata) {
         int ncols = 0;
+        argus_column_desc_t tmp_cols[64];
         int rc = stmt->dbc->backend->get_result_metadata(
             stmt->dbc->backend_conn, stmt->op,
-            stmt->columns, &ncols);
+            tmp_cols, &ncols);
         if (rc == 0 && ncols > 0) {
-            /* Validate minimum column count for known catalog functions */
-            if (ncols > ARGUS_MAX_COLUMNS) ncols = ARGUS_MAX_COLUMNS;
-            stmt->num_cols = ncols;
-            stmt->metadata_fetched = true;
+            if (argus_stmt_ensure_columns(stmt, ncols) == 0) {
+                if (ncols <= 64) {
+                    memcpy(stmt->columns, tmp_cols,
+                           (size_t)ncols * sizeof(argus_column_desc_t));
+                } else {
+                    /* Re-query into the now-allocated buffer */
+                    int ncols2 = 0;
+                    stmt->dbc->backend->get_result_metadata(
+                        stmt->dbc->backend_conn, stmt->op,
+                        stmt->columns, &ncols2);
+                    ncols = ncols2;
+                }
+                stmt->num_cols = ncols;
+                stmt->metadata_fetched = true;
+            }
         }
     }
 
@@ -100,24 +112,57 @@ SQLRETURN SQL_API SQLTables(
     char *table_name = catalog_arg_dup(TableName,   NameLength3, mid);
     char *table_type = catalog_arg_dup(TableType,   NameLength4, mid);
 
+    /* Check metadata cache first */
+    if (argus_metadata_cache_lookup(dbc, stmt, "SQLTables",
+                                     catalog, schema, table_name, table_type)) {
+        free(catalog);
+        free(schema);
+        free(table_name);
+        free(table_type);
+        return SQL_SUCCESS;
+    }
+
     int rc = dbc->backend->get_tables(
         dbc->backend_conn,
         catalog, schema, table_name, table_type,
         &stmt->op);
 
-    free(catalog);
-    free(schema);
-    free(table_name);
-    free(table_type);
-
     if (rc != 0) {
+        free(catalog);
+        free(schema);
+        free(table_name);
+        free(table_type);
         if (stmt->diag.count == 0)
             argus_set_error(&stmt->diag, "HY000",
                             "[Argus] Failed to get tables", 0);
         return SQL_ERROR;
     }
 
-    return catalog_dispatch(stmt);
+    SQLRETURN ret = catalog_dispatch(stmt);
+
+    /* Fetch all rows eagerly for caching */
+    if (ret == SQL_SUCCESS && dbc->backend->fetch_results) {
+        int ncols = 0;
+        dbc->backend->fetch_results(
+            dbc->backend_conn, stmt->op, 10000,
+            &stmt->row_cache, stmt->columns, &ncols);
+        if (ncols > 0 && !stmt->metadata_fetched) {
+            stmt->num_cols = ncols;
+            stmt->metadata_fetched = true;
+        }
+        stmt->row_cache.exhausted = true;
+        stmt->fetch_started = false;
+        /* Store in cache */
+        argus_metadata_cache_store(dbc, stmt, "SQLTables",
+                                    catalog, schema, table_name, table_type);
+    }
+
+    free(catalog);
+    free(schema);
+    free(table_name);
+    free(table_type);
+
+    return ret;
 }
 
 /* ── ODBC API: SQLColumns ────────────────────────────────────── */
@@ -151,24 +196,57 @@ SQLRETURN SQL_API SQLColumns(
     char *table_name  = catalog_arg_dup(TableName,   NameLength3, mid2);
     char *column_name = catalog_arg_dup(ColumnName,  NameLength4, mid2);
 
+    /* Check metadata cache first */
+    if (argus_metadata_cache_lookup(dbc, stmt, "SQLColumns",
+                                     catalog, schema, table_name, column_name)) {
+        free(catalog);
+        free(schema);
+        free(table_name);
+        free(column_name);
+        return SQL_SUCCESS;
+    }
+
     int rc = dbc->backend->get_columns(
         dbc->backend_conn,
         catalog, schema, table_name, column_name,
         &stmt->op);
 
-    free(catalog);
-    free(schema);
-    free(table_name);
-    free(column_name);
-
     if (rc != 0) {
+        free(catalog);
+        free(schema);
+        free(table_name);
+        free(column_name);
         if (stmt->diag.count == 0)
             argus_set_error(&stmt->diag, "HY000",
                             "[Argus] Failed to get columns", 0);
         return SQL_ERROR;
     }
 
-    return catalog_dispatch(stmt);
+    SQLRETURN ret = catalog_dispatch(stmt);
+
+    /* Fetch all rows eagerly for caching */
+    if (ret == SQL_SUCCESS && dbc->backend->fetch_results) {
+        int ncols = 0;
+        dbc->backend->fetch_results(
+            dbc->backend_conn, stmt->op, 10000,
+            &stmt->row_cache, stmt->columns, &ncols);
+        if (ncols > 0 && !stmt->metadata_fetched) {
+            stmt->num_cols = ncols;
+            stmt->metadata_fetched = true;
+        }
+        stmt->row_cache.exhausted = true;
+        stmt->fetch_started = false;
+        /* Store in cache */
+        argus_metadata_cache_store(dbc, stmt, "SQLColumns",
+                                    catalog, schema, table_name, column_name);
+    }
+
+    free(catalog);
+    free(schema);
+    free(table_name);
+    free(column_name);
+
+    return ret;
 }
 
 /* ── Built-in type info for SQLGetTypeInfo fallback ──────────── */
@@ -241,6 +319,9 @@ static const builtin_type_info_t builtin_types[] = {
     {"LONGVARCHAR", SQL_LONGVARCHAR,  2147483647, "'", "'", NULL,
      SQL_NULLABLE, SQL_TRUE,  SQL_SEARCHABLE, -1, SQL_FALSE, -1,
      "STRING",   0, 0, SQL_LONGVARCHAR, 0, 0, 0},
+    {"GUID",      SQL_GUID,           36,    "'",  "'",  NULL,
+     SQL_NULLABLE, SQL_FALSE, SQL_SEARCHABLE, -1, SQL_FALSE, -1,
+     "UUID",     0, 0, SQL_GUID, 0, 0, 0},
 };
 
 #define BUILTIN_TYPE_COUNT (sizeof(builtin_types) / sizeof(builtin_types[0]))
