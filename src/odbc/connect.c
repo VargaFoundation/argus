@@ -270,6 +270,21 @@ SQLRETURN SQL_API SQLDriverConnect(
             dbc->trino_protocol_version = 1;
     }
 
+    /* Pool configuration keywords */
+    {
+        int pool_mpk = -1, pool_mt = -1, pool_it = -1, pool_ttl = -1;
+        v = argus_conn_params_get(&params, "POOLMAXPERKEY");
+        if (v) pool_mpk = atoi(v);
+        v = argus_conn_params_get(&params, "POOLMAXTOTAL");
+        if (v) pool_mt = atoi(v);
+        v = argus_conn_params_get(&params, "POOLIDLETIMEOUT");
+        if (v) pool_it = atoi(v);
+        v = argus_conn_params_get(&params, "POOLTTL");
+        if (v) pool_ttl = atoi(v);
+        if (pool_mpk > 0 || pool_mt > 0 || pool_it >= 0 || pool_ttl >= 0)
+            argus_pool_configure(pool_mpk, pool_mt, pool_it, pool_ttl);
+    }
+
     /* Apply logging settings if specified */
     if (dbc->log_level >= 0) {
         argus_log_set_level(dbc->log_level);
@@ -406,7 +421,78 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC ConnectionHandle)
     return SQL_SUCCESS;
 }
 
-/* ── ODBC API: SQLBrowseConnect (stub) ───────────────────────── */
+/* ── Internal: merge connection string keywords into dbc->browse_buf ── */
+
+static void browse_merge(argus_dbc_t *dbc, const char *in_str)
+{
+    argus_conn_params_t incoming;
+    argus_conn_params_init(&incoming);
+    argus_conn_params_parse(&incoming, in_str);
+
+    /* Parse existing accumulated keywords */
+    argus_conn_params_t existing;
+    argus_conn_params_init(&existing);
+    if (dbc->browse_buf && *dbc->browse_buf)
+        argus_conn_params_parse(&existing, dbc->browse_buf);
+
+    /* Merge incoming into existing (incoming wins on conflict) */
+    for (int i = 0; i < incoming.count; i++) {
+        bool found = false;
+        for (int j = 0; j < existing.count; j++) {
+            if (strcasecmp(existing.params[j].key,
+                           incoming.params[i].key) == 0) {
+                free(existing.params[j].value);
+                existing.params[j].value = strdup(incoming.params[i].value);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            /* Add new key */
+            if (existing.count >= existing.capacity) {
+                int new_cap = existing.capacity ? existing.capacity * 2 : 8;
+                argus_conn_param_t *new_p = realloc(
+                    existing.params,
+                    (size_t)new_cap * sizeof(argus_conn_param_t));
+                if (!new_p) continue;
+                existing.params = new_p;
+                existing.capacity = new_cap;
+            }
+            existing.params[existing.count].key =
+                strdup(incoming.params[i].key);
+            existing.params[existing.count].value =
+                strdup(incoming.params[i].value);
+            existing.count++;
+        }
+    }
+
+    /* Rebuild browse_buf from merged params */
+    free(dbc->browse_buf);
+    size_t buf_size = 1;
+    for (int i = 0; i < existing.count; i++)
+        buf_size += strlen(existing.params[i].key) + 1 +
+                    strlen(existing.params[i].value) + 1;
+    dbc->browse_buf = malloc(buf_size);
+    if (dbc->browse_buf) {
+        char *dst = dbc->browse_buf;
+        for (int i = 0; i < existing.count; i++) {
+            if (i > 0) *dst++ = ';';
+            size_t kl = strlen(existing.params[i].key);
+            memcpy(dst, existing.params[i].key, kl);
+            dst += kl;
+            *dst++ = '=';
+            size_t vl = strlen(existing.params[i].value);
+            memcpy(dst, existing.params[i].value, vl);
+            dst += vl;
+        }
+        *dst = '\0';
+    }
+
+    argus_conn_params_free(&incoming);
+    argus_conn_params_free(&existing);
+}
+
+/* ── ODBC API: SQLBrowseConnect ──────────────────────────────── */
 
 SQLRETURN SQL_API SQLBrowseConnect(
     SQLHDBC     ConnectionHandle,
@@ -414,13 +500,85 @@ SQLRETURN SQL_API SQLBrowseConnect(
     SQLCHAR    *OutConnectionString, SQLSMALLINT BufferLength,
     SQLSMALLINT *StringLength2Ptr)
 {
-    (void)InConnectionString;
-    (void)StringLength1;
-    (void)OutConnectionString;
-    (void)BufferLength;
-    (void)StringLength2Ptr;
-
     argus_dbc_t *dbc = (argus_dbc_t *)ConnectionHandle;
     if (!argus_valid_dbc(dbc)) return SQL_INVALID_HANDLE;
-    return argus_set_not_implemented(&dbc->diag, "SQLBrowseConnect");
+
+    argus_diag_clear(&dbc->diag);
+
+    if (dbc->connected) {
+        return argus_set_error(&dbc->diag, "08002",
+                               "[Argus] Already connected", 0);
+    }
+
+    /* Merge incoming keywords with previously accumulated ones */
+    char *in_str = argus_str_dup_short(InConnectionString, StringLength1);
+    if (!in_str) {
+        return argus_set_error(&dbc->diag, "HY001",
+                               "[Argus] Memory allocation failed", 0);
+    }
+    browse_merge(dbc, in_str);
+    free(in_str);
+
+    /* Check which required keywords are present */
+    argus_conn_params_t merged;
+    argus_conn_params_init(&merged);
+    if (dbc->browse_buf)
+        argus_conn_params_parse(&merged, dbc->browse_buf);
+
+    /* Required keywords and their descriptions */
+    static const struct { const char *key; const char *alt; const char *desc; } required[] = {
+        { "HOST",    "SERVER",      "Server hostname" },
+        { "PORT",    NULL,          "Server port number" },
+        { "BACKEND", "DRIVER_TYPE", "Backend type (hive,impala,trino,phoenix,kudu)" },
+    };
+    static const int num_required = 3;
+
+    /* Build list of missing keywords */
+    char missing_buf[512];
+    char *mp = missing_buf;
+    int missing_count = 0;
+
+    for (int i = 0; i < num_required; i++) {
+        const char *val = argus_conn_params_get(&merged, required[i].key);
+        if ((!val || !*val) && required[i].alt)
+            val = argus_conn_params_get(&merged, required[i].alt);
+        if (!val || !*val) {
+            int n = snprintf(mp, (size_t)(missing_buf + sizeof(missing_buf) - mp),
+                             "%s%s:%s=?",
+                             missing_count > 0 ? ";" : "",
+                             required[i].key, required[i].desc);
+            if (n > 0) mp += n;
+            missing_count++;
+        }
+    }
+
+    argus_conn_params_free(&merged);
+
+    if (missing_count > 0) {
+        /* Return SQL_NEED_DATA with browse result listing missing keywords */
+        *mp = '\0';
+        SQLSMALLINT out_len = (SQLSMALLINT)strlen(missing_buf);
+        if (OutConnectionString && BufferLength > 0) {
+            SQLSMALLINT copy = out_len < (BufferLength - 1)
+                               ? out_len : (SQLSMALLINT)(BufferLength - 1);
+            memcpy(OutConnectionString, missing_buf, (size_t)copy);
+            OutConnectionString[copy] = '\0';
+        }
+        if (StringLength2Ptr) *StringLength2Ptr = out_len;
+        return SQL_NEED_DATA;
+    }
+
+    /* All required keywords present — connect via SQLDriverConnect */
+    SQLRETURN ret = SQLDriverConnect(
+        ConnectionHandle, NULL,
+        (SQLCHAR *)dbc->browse_buf,
+        (SQLSMALLINT)strlen(dbc->browse_buf),
+        OutConnectionString, BufferLength,
+        StringLength2Ptr, SQL_DRIVER_NOPROMPT);
+
+    /* Clean up browse buffer on success or error */
+    free(dbc->browse_buf);
+    dbc->browse_buf = NULL;
+
+    return ret;
 }

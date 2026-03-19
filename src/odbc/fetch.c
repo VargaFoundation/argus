@@ -720,6 +720,147 @@ static SQLRETURN convert_cell_to_target(
     }
 }
 
+/* ── Internal: build full scroll cache for static cursors ─────── */
+
+static SQLRETURN build_scroll_cache(argus_stmt_t *stmt)
+{
+    if (stmt->scroll_cached) return SQL_SUCCESS;
+
+    argus_dbc_t *dbc = stmt->dbc;
+    if (!dbc || !dbc->backend || !dbc->backend_conn) {
+        return argus_set_error(&stmt->diag, "HY000",
+                               "[Argus] No backend connection", 0);
+    }
+
+    /* Start with reasonable capacity */
+    size_t capacity = 1024;
+    argus_row_t *all_rows = calloc(capacity, sizeof(argus_row_t));
+    if (!all_rows) {
+        return argus_set_error(&stmt->diag, "HY001",
+                               "[Argus] Memory allocation failed", 0);
+    }
+    size_t total = 0;
+
+    int batch_size = (dbc->fetch_buffer_size > 0)
+                     ? dbc->fetch_buffer_size
+                     : ARGUS_DEFAULT_BATCH_SIZE;
+
+    while (1) {
+        argus_row_cache_clear(&stmt->row_cache);
+        int num_cols = 0;
+        int rc = dbc->backend->fetch_results(
+            dbc->backend_conn, stmt->op,
+            batch_size,
+            &stmt->row_cache,
+            stmt->columns, &num_cols);
+
+        if (rc != 0) {
+            /* Free partially built cache */
+            for (size_t i = 0; i < total; i++) {
+                if (all_rows[i].cells) {
+                    for (int c = 0; c < stmt->num_cols; c++)
+                        free(all_rows[i].cells[c].data);
+                    free(all_rows[i].cells);
+                }
+            }
+            free(all_rows);
+            if (stmt->diag.count == 0)
+                argus_set_error(&stmt->diag, "HY000",
+                                "[Argus] Failed to fetch results", 0);
+            return SQL_ERROR;
+        }
+
+        if (num_cols > 0 && !stmt->metadata_fetched) {
+            if (argus_stmt_ensure_columns(stmt, num_cols) != 0) {
+                free(all_rows);
+                return SQL_ERROR;
+            }
+            stmt->num_cols = num_cols;
+            stmt->metadata_fetched = true;
+        }
+
+        if (stmt->row_cache.num_rows == 0) break;
+
+        /* Copy rows into scroll cache */
+        if (total + stmt->row_cache.num_rows > capacity) {
+            while (total + stmt->row_cache.num_rows > capacity)
+                capacity *= 2;
+            argus_row_t *new_rows = realloc(all_rows,
+                                             capacity * sizeof(argus_row_t));
+            if (!new_rows) {
+                for (size_t i = 0; i < total; i++) {
+                    if (all_rows[i].cells) {
+                        for (int c = 0; c < stmt->num_cols; c++)
+                            free(all_rows[i].cells[c].data);
+                        free(all_rows[i].cells);
+                    }
+                }
+                free(all_rows);
+                return argus_set_error(&stmt->diag, "HY001",
+                                       "[Argus] Memory allocation failed", 0);
+            }
+            all_rows = new_rows;
+        }
+
+        for (size_t i = 0; i < stmt->row_cache.num_rows; i++) {
+            /* Move rows (transfer ownership of cells) */
+            all_rows[total + i] = stmt->row_cache.rows[i];
+            stmt->row_cache.rows[i].cells = NULL;
+        }
+        total += stmt->row_cache.num_rows;
+        stmt->row_cache.num_rows = 0;
+    }
+
+    /* Store the scroll cache */
+    stmt->scroll_rows = all_rows;
+    stmt->scroll_row_count = total;
+    stmt->scroll_position = 0;
+    stmt->scroll_cached = true;
+    stmt->fetch_started = true;
+
+    return SQL_SUCCESS;
+}
+
+/* ── Internal: deliver scroll cache row to bound columns ─────── */
+
+static SQLRETURN deliver_scroll_row(argus_stmt_t *stmt, size_t row_idx,
+                                     SQLULEN rowset_idx)
+{
+    if (row_idx >= stmt->scroll_row_count) return SQL_NO_DATA;
+
+    argus_row_t *row = &stmt->scroll_rows[row_idx];
+    SQLRETURN final_ret = SQL_SUCCESS;
+
+    for (int col = 0; col < stmt->num_cols && col < stmt->bindings_capacity; col++) {
+        if (!stmt->bindings[col].bound) continue;
+
+        argus_col_binding_t *bind = &stmt->bindings[col];
+        argus_cell_t *cell = &row->cells[col];
+
+        SQLPOINTER target = bind->target_value;
+        SQLLEN *ind_ptr = bind->str_len_or_ind;
+        if (rowset_idx > 0 && target) {
+            target = (char *)target + rowset_idx * bind->buffer_length;
+            if (ind_ptr)
+                ind_ptr = (SQLLEN *)((char *)ind_ptr +
+                           rowset_idx * sizeof(SQLLEN));
+        }
+
+        SQLRETURN ret = convert_cell_to_target(
+            cell, bind->target_type,
+            target, bind->buffer_length,
+            ind_ptr, &stmt->diag);
+
+        if (ret == SQL_SUCCESS_WITH_INFO)
+            final_ret = SQL_SUCCESS_WITH_INFO;
+        else if (ret == SQL_ERROR)
+            return SQL_ERROR;
+    }
+
+    stmt->rows_fetched_total++;
+    return final_ret;
+}
+
 /* ── Internal: fetch a single row into bound columns ──────────── */
 
 static SQLRETURN fetch_single_row(argus_stmt_t *stmt, SQLULEN rowset_idx)
@@ -869,18 +1010,139 @@ SQLRETURN SQL_API SQLFetchScroll(
     SQLSMALLINT FetchOrientation,
     SQLLEN      FetchOffset)
 {
-    (void)FetchOffset;
-
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
-    /* Only support SQL_FETCH_NEXT (forward-only cursor) */
-    if (FetchOrientation != SQL_FETCH_NEXT) {
-        return argus_set_error(&stmt->diag, "HY106",
-                               "[Argus] Only SQL_FETCH_NEXT is supported", 0);
+    /* Forward-only cursor: only SQL_FETCH_NEXT allowed */
+    if (stmt->cursor_type == SQL_CURSOR_FORWARD_ONLY ||
+        stmt->cursor_type == 0) {
+        if (FetchOrientation != SQL_FETCH_NEXT) {
+            return argus_set_error(&stmt->diag, "HY106",
+                                   "[Argus] Fetch type out of range "
+                                   "(forward-only cursor)", 0);
+        }
+        return SQLFetch(StatementHandle);
     }
 
-    return SQLFetch(StatementHandle);
+    /* Static cursor: build full scroll cache on first call */
+    ARGUS_STMT_LOCK(stmt);
+    argus_diag_clear(&stmt->diag);
+
+    if (!stmt->executed) {
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY010",
+                               "[Argus] Function sequence error: not executed", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
+    }
+
+    if (!stmt->scroll_cached) {
+        SQLRETURN rc = build_scroll_cache(stmt);
+        if (rc != SQL_SUCCESS) {
+            ARGUS_STMT_UNLOCK(stmt);
+            return rc;
+        }
+    }
+
+    /* Compute new position based on orientation */
+    long long new_pos;
+    size_t total = stmt->scroll_row_count;
+
+    switch (FetchOrientation) {
+    case SQL_FETCH_NEXT:
+        new_pos = (long long)stmt->scroll_position;
+        break;
+    case SQL_FETCH_PRIOR:
+        new_pos = (long long)stmt->scroll_position - 2;
+        break;
+    case SQL_FETCH_FIRST:
+        new_pos = 0;
+        break;
+    case SQL_FETCH_LAST:
+        new_pos = (long long)total - 1;
+        break;
+    case SQL_FETCH_ABSOLUTE:
+        if (FetchOffset > 0)
+            new_pos = FetchOffset - 1;
+        else if (FetchOffset < 0)
+            new_pos = (long long)total + FetchOffset;
+        else
+            new_pos = -1; /* before start */
+        break;
+    case SQL_FETCH_RELATIVE:
+        new_pos = (long long)stmt->scroll_position - 1 + FetchOffset;
+        break;
+    case SQL_FETCH_BOOKMARK:
+        ARGUS_STMT_UNLOCK(stmt);
+        return argus_set_error(&stmt->diag, "HYC00",
+                               "[Argus] Bookmarks not supported", 0);
+    default:
+        ARGUS_STMT_UNLOCK(stmt);
+        return argus_set_error(&stmt->diag, "HY106",
+                               "[Argus] Fetch type out of range", 0);
+    }
+
+    /* Bounds check */
+    if (new_pos < 0 || (total == 0) || (size_t)new_pos >= total) {
+        stmt->scroll_position = (new_pos < 0) ? 0 : total;
+        if (stmt->rows_fetched_ptr) *stmt->rows_fetched_ptr = 0;
+        if (stmt->row_status_ptr) stmt->row_status_ptr[0] = SQL_ROW_NOROW;
+        ARGUS_STMT_UNLOCK(stmt);
+        return SQL_NO_DATA;
+    }
+
+    /* Reset GetData state */
+    stmt->getdata_col = 0;
+    stmt->getdata_offset = 0;
+
+    /* Fetch rows for the rowset */
+    SQLULEN array_size = stmt->row_array_size > 0 ? stmt->row_array_size : 1;
+    SQLULEN rows_fetched = 0;
+    SQLRETURN final_ret = SQL_SUCCESS;
+
+    for (SQLULEN i = 0; i < array_size; i++) {
+        size_t idx = (size_t)new_pos + i;
+        if (idx >= total) {
+            if (stmt->row_status_ptr)
+                stmt->row_status_ptr[i] = SQL_ROW_NOROW;
+            break;
+        }
+
+        SQLRETURN ret = deliver_scroll_row(stmt, idx, i);
+        if (ret == SQL_ERROR) {
+            if (stmt->row_status_ptr)
+                stmt->row_status_ptr[i] = SQL_ROW_ERROR;
+            final_ret = SQL_ERROR;
+            break;
+        }
+        if (stmt->row_status_ptr) {
+            stmt->row_status_ptr[i] = (ret == SQL_SUCCESS_WITH_INFO)
+                ? SQL_ROW_SUCCESS_WITH_INFO : SQL_ROW_SUCCESS;
+        }
+        if (ret == SQL_SUCCESS_WITH_INFO)
+            final_ret = SQL_SUCCESS_WITH_INFO;
+        rows_fetched++;
+    }
+
+    /* Fill remaining status with NOROW */
+    if (stmt->row_status_ptr) {
+        for (SQLULEN i = rows_fetched; i < array_size; i++)
+            stmt->row_status_ptr[i] = SQL_ROW_NOROW;
+    }
+
+    /* Update position to after the fetched rows */
+    stmt->scroll_position = (size_t)new_pos + rows_fetched;
+
+    /* Also update row_cache.current_row for GetData compatibility */
+    if (rows_fetched > 0 && (size_t)new_pos < total) {
+        /* Point row_cache at the last fetched scroll row for GetData */
+        stmt->row_cache.current_row = (size_t)new_pos + rows_fetched;
+    }
+
+    if (stmt->rows_fetched_ptr)
+        *stmt->rows_fetched_ptr = rows_fetched;
+
+    ARGUS_STMT_UNLOCK(stmt);
+    return rows_fetched == 0 ? SQL_NO_DATA : final_ret;
 }
 
 /* ── ODBC API: SQLGetData ────────────────────────────────────── */
@@ -1362,25 +1624,25 @@ SQLRETURN SQL_API SQLExtendedFetch(
     SQLULEN     *RowCountPtr,
     SQLUSMALLINT *RowStatusArray)
 {
-    (void)FetchOffset;
-
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
-    /* Only support SQL_FETCH_NEXT (forward-only cursor) */
-    if (FetchOrientation != SQL_FETCH_NEXT) {
-        return argus_set_error(&stmt->diag, "HY106",
-                               "[Argus] Only SQL_FETCH_NEXT is supported", 0);
-    }
+    /* Temporarily set rows_fetched_ptr and row_status_ptr for the call */
+    SQLULEN *saved_rfp = stmt->rows_fetched_ptr;
+    SQLUSMALLINT *saved_rsp = stmt->row_status_ptr;
+    SQLULEN rows_fetched = 0;
 
-    SQLRETURN ret = SQLFetch(StatementHandle);
+    stmt->rows_fetched_ptr = &rows_fetched;
+    stmt->row_status_ptr = RowStatusArray;
 
-    if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
-        if (RowCountPtr)
-            *RowCountPtr = 1;
-        if (RowStatusArray)
-            RowStatusArray[0] = SQL_ROW_SUCCESS;
-    }
+    SQLRETURN ret = SQLFetchScroll(StatementHandle,
+                                    (SQLSMALLINT)FetchOrientation,
+                                    FetchOffset);
+
+    stmt->rows_fetched_ptr = saved_rfp;
+    stmt->row_status_ptr = saved_rsp;
+
+    if (RowCountPtr) *RowCountPtr = rows_fetched;
 
     return ret;
 }
@@ -1393,14 +1655,22 @@ SQLRETURN SQL_API SQLSetPos(
     SQLUSMALLINT Operation,
     SQLUSMALLINT LockType)
 {
-    (void)RowNumber;
     (void)LockType;
 
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     if (Operation == SQL_POSITION) {
-        /* Accept SQL_POSITION for cursor positioning compatibility */
+        /* Position the cursor within the scroll cache */
+        if (stmt->scroll_cached && RowNumber > 0) {
+            size_t target = (size_t)(RowNumber - 1);
+            if (target < stmt->scroll_row_count) {
+                stmt->scroll_position = target + 1;
+                return SQL_SUCCESS;
+            }
+            return argus_set_error(&stmt->diag, "HY109",
+                                   "[Argus] Invalid cursor position", 0);
+        }
         return SQL_SUCCESS;
     }
 

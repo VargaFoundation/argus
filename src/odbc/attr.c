@@ -284,14 +284,31 @@ SQLRETURN SQL_API SQLSetStmtAttr(
         stmt->param_status_ptr = (SQLUSMALLINT *)Value;
         return SQL_SUCCESS;
 
-    case SQL_ATTR_CURSOR_TYPE:
+    case SQL_ATTR_CURSOR_TYPE: {
+        SQLULEN ct = (SQLULEN)(uintptr_t)Value;
+        if (ct == SQL_CURSOR_FORWARD_ONLY || ct == SQL_CURSOR_STATIC) {
+            stmt->cursor_type = ct;
+            return SQL_SUCCESS;
+        }
+        /* Downgrade keyset/dynamic to static with info */
+        stmt->cursor_type = SQL_CURSOR_STATIC;
+        argus_diag_push(&stmt->diag, "01S02",
+                         "[Argus] Cursor type changed to STATIC", 0);
+        return SQL_SUCCESS_WITH_INFO;
+    }
+
+    case SQL_ATTR_ASYNC_ENABLE: {
+        SQLULEN ae = (SQLULEN)(uintptr_t)Value;
+        stmt->async_enabled = (ae == SQL_ASYNC_ENABLE_ON);
+        return SQL_SUCCESS;
+    }
+
     case SQL_ATTR_CONCURRENCY:
     case SQL_ATTR_CURSOR_SCROLLABLE:
     case SQL_ATTR_CURSOR_SENSITIVITY:
     case SQL_ATTR_NOSCAN:
     case SQL_ATTR_RETRIEVE_DATA:
     case SQL_ATTR_MAX_LENGTH:
-    case SQL_ATTR_ASYNC_ENABLE:
     case SQL_ATTR_ROW_BIND_TYPE:
         /* Accept but ignore */
         return SQL_SUCCESS;
@@ -345,7 +362,7 @@ SQLRETURN SQL_API SQLGetStmtAttr(
         return SQL_SUCCESS;
 
     case SQL_ATTR_CURSOR_TYPE:
-        if (Value) *(SQLULEN *)Value = SQL_CURSOR_FORWARD_ONLY;
+        if (Value) *(SQLULEN *)Value = stmt->cursor_type;
         if (StringLength) *StringLength = sizeof(SQLULEN);
         return SQL_SUCCESS;
 
@@ -398,7 +415,9 @@ SQLRETURN SQL_API SQLGetStmtAttr(
         return SQL_SUCCESS;
 
     case SQL_ATTR_ASYNC_ENABLE:
-        if (Value) *(SQLULEN *)Value = SQL_ASYNC_ENABLE_OFF;
+        if (Value) *(SQLULEN *)Value = stmt->async_enabled
+                                        ? SQL_ASYNC_ENABLE_ON
+                                        : SQL_ASYNC_ENABLE_OFF;
         if (StringLength) *StringLength = sizeof(SQLULEN);
         return SQL_SUCCESS;
 
