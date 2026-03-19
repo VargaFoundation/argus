@@ -25,6 +25,8 @@ static argus_stmt_t *create_stmt_with_cell(const char *utf8_data)
     stmt->num_cols = 1;
     stmt->metadata_fetched = true;
     argus_diag_clear(&stmt->diag);
+    argus_stmt_ensure_columns(stmt, 64);
+    argus_stmt_ensure_bindings(stmt, 64);
 
     /* Set up column descriptor */
     strncpy((char *)stmt->columns[0].name, "col1", ARGUS_MAX_COLUMN_NAME);
@@ -50,6 +52,8 @@ static void destroy_test_stmt(argus_stmt_t *stmt)
 {
     argus_row_cache_free(&stmt->row_cache);
     free(stmt->query);
+    free(stmt->columns);
+    free(stmt->bindings);
     stmt->signature = 0;
     free(stmt);
 }

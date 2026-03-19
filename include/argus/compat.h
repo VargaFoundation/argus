@@ -46,6 +46,7 @@ static inline void argus_secure_free(char *p)
 
 #else /* POSIX */
 
+#include <stdlib.h>
 #include <strings.h>
 #include <string.h>
 

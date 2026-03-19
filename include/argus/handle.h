@@ -78,6 +78,9 @@ struct argus_dbc {
     int          log_level;
     char        *log_file;
 
+    /* Metadata cache (GHashTable*, lazily initialized) */
+    void        *metadata_cache;
+
     /* Metrics */
     double       connect_time_ms;       /* last connect duration */
     unsigned long errors_total;         /* total error count */
@@ -98,9 +101,10 @@ struct argus_stmt {
     /* Backend operation handle */
     argus_backend_op_t      op;
 
-    /* Result metadata */
-    argus_column_desc_t     columns[ARGUS_MAX_COLUMNS];
+    /* Result metadata (dynamically allocated) */
+    argus_column_desc_t    *columns;
     int                     num_cols;
+    int                     columns_capacity;
     bool                    metadata_fetched;
 
     /* Row cache and fetch state */
@@ -108,8 +112,9 @@ struct argus_stmt {
     bool                    fetch_started;
     SQLLEN                  row_count;   /* -1 if unknown */
 
-    /* Column bindings */
-    argus_col_binding_t     bindings[ARGUS_MAX_COLUMNS];
+    /* Column bindings (dynamically allocated) */
+    argus_col_binding_t    *bindings;
+    int                     bindings_capacity;
 
     /* Parameter bindings */
     argus_param_binding_t   param_bindings[ARGUS_MAX_PARAMS];
@@ -127,6 +132,12 @@ struct argus_stmt {
     SQLUSMALLINT           *row_status_ptr;
     SQLULEN                 metadata_id;     /* SQL_TRUE or SQL_FALSE */
     SQLULEN                 use_bookmarks;   /* SQL_UB_OFF (default) */
+
+    /* Batch parameter attributes */
+    SQLULEN                 paramset_size;       /* SQL_ATTR_PARAMSET_SIZE (default 1) */
+    SQLULEN                 param_bind_type;     /* SQL_ATTR_PARAM_BIND_TYPE */
+    SQLULEN                *params_processed_ptr; /* SQL_ATTR_PARAMS_PROCESSED_PTR */
+    SQLUSMALLINT           *param_status_ptr;    /* SQL_ATTR_PARAM_STATUS_PTR */
 
     /* Metrics */
     double                  execute_time_ms;    /* last execute duration */
@@ -156,6 +167,10 @@ SQLRETURN argus_alloc_env(argus_env_t **out);
 SQLRETURN argus_alloc_dbc(argus_env_t *env, argus_dbc_t **out);
 SQLRETURN argus_alloc_stmt(argus_dbc_t *dbc, argus_stmt_t **out);
 
+/* Ensure stmt has room for at least ncols columns/bindings */
+int argus_stmt_ensure_columns(argus_stmt_t *stmt, int ncols);
+int argus_stmt_ensure_bindings(argus_stmt_t *stmt, int ncols);
+
 SQLRETURN argus_free_env(argus_env_t *env);
 SQLRETURN argus_free_dbc(argus_dbc_t *dbc);
 SQLRETURN argus_free_stmt(argus_stmt_t *stmt);
@@ -177,5 +192,18 @@ void argus_pool_release(
 
 void argus_pool_cleanup(void);
 void argus_pool_evict_idle(int max_idle_sec);
+
+/* Metadata cache */
+void argus_metadata_cache_init(argus_dbc_t *dbc);
+void argus_metadata_cache_free(argus_dbc_t *dbc);
+void argus_metadata_cache_clear(argus_dbc_t *dbc);
+bool argus_metadata_cache_lookup(argus_dbc_t *dbc, argus_stmt_t *stmt,
+                                  const char *func,
+                                  const char *a1, const char *a2,
+                                  const char *a3, const char *a4);
+void argus_metadata_cache_store(argus_dbc_t *dbc, argus_stmt_t *stmt,
+                                 const char *func,
+                                 const char *a1, const char *a2,
+                                 const char *a3, const char *a4);
 
 #endif /* ARGUS_HANDLE_H */

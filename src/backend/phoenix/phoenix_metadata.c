@@ -217,6 +217,44 @@ int phoenix_get_schemas(argus_backend_conn_t raw_conn,
     return 0;
 }
 
+/* ── GetPrimaryKeys via Avatica getPrimaryKeys ───────────────── */
+
+int phoenix_get_primary_keys(argus_backend_conn_t raw_conn,
+                              const char *catalog,
+                              const char *schema,
+                              const char *table_name,
+                              argus_backend_op_t *out_op)
+{
+    phoenix_conn_t *conn = (phoenix_conn_t *)raw_conn;
+    if (!conn || !table_name || !*table_name) return -1;
+
+    JsonBuilder *params = json_builder_new();
+    json_builder_begin_object(params);
+    json_builder_set_member_name(params, "connectionId");
+    json_builder_add_string_value(params, conn->connection_id);
+
+    if (catalog && *catalog) {
+        json_builder_set_member_name(params, "catalog");
+        json_builder_add_string_value(params, catalog);
+    }
+    if (schema && *schema) {
+        json_builder_set_member_name(params, "schemaPattern");
+        json_builder_add_string_value(params, schema);
+    }
+    json_builder_set_member_name(params, "table");
+    json_builder_add_string_value(params, table_name);
+    json_builder_end_object(params);
+
+    phoenix_operation_t *op = NULL;
+    int rc = phoenix_catalog_request(conn, "getPrimaryKeys", params, &op);
+    g_object_unref(params);
+
+    if (rc != 0) return -1;
+
+    *out_op = op;
+    return 0;
+}
+
 /* ── GetCatalogs via Avatica getCatalogs ──────────────────────── */
 
 int phoenix_get_catalogs(argus_backend_conn_t raw_conn,

@@ -107,6 +107,21 @@ int kudu_connect(argus_dbc_t *dbc,
     return 0;
 }
 
+/* ── Liveness check ──────────────────────────────────────────── */
+
+extern "C"
+bool kudu_is_alive(argus_backend_conn_t raw_conn)
+{
+    kudu_conn_t *conn = static_cast<kudu_conn_t *>(raw_conn);
+    if (!conn || !conn->client) return false;
+
+    /* Try listing tables as a lightweight health check */
+    auto *client_ptr = static_cast<std::shared_ptr<KuduClient> *>(conn->client);
+    std::vector<std::string> tables;
+    Status s = (*client_ptr)->ListTables(&tables);
+    return s.ok();
+}
+
 /* ── Disconnect from Kudu ────────────────────────────────────── */
 
 extern "C"

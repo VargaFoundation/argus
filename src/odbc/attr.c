@@ -267,6 +267,23 @@ SQLRETURN SQL_API SQLSetStmtAttr(
                                "[Argus] Bookmarks not supported", 0);
     }
 
+    case SQL_ATTR_PARAMSET_SIZE:
+        stmt->paramset_size = (SQLULEN)(uintptr_t)Value;
+        if (stmt->paramset_size == 0) stmt->paramset_size = 1;
+        return SQL_SUCCESS;
+
+    case SQL_ATTR_PARAM_BIND_TYPE:
+        stmt->param_bind_type = (SQLULEN)(uintptr_t)Value;
+        return SQL_SUCCESS;
+
+    case SQL_ATTR_PARAMS_PROCESSED_PTR:
+        stmt->params_processed_ptr = (SQLULEN *)Value;
+        return SQL_SUCCESS;
+
+    case SQL_ATTR_PARAM_STATUS_PTR:
+        stmt->param_status_ptr = (SQLUSMALLINT *)Value;
+        return SQL_SUCCESS;
+
     case SQL_ATTR_CURSOR_TYPE:
     case SQL_ATTR_CONCURRENCY:
     case SQL_ATTR_CURSOR_SCROLLABLE:
@@ -275,10 +292,6 @@ SQLRETURN SQL_API SQLSetStmtAttr(
     case SQL_ATTR_RETRIEVE_DATA:
     case SQL_ATTR_MAX_LENGTH:
     case SQL_ATTR_ASYNC_ENABLE:
-    case SQL_ATTR_PARAM_BIND_TYPE:
-    case SQL_ATTR_PARAMSET_SIZE:
-    case SQL_ATTR_PARAM_STATUS_PTR:
-    case SQL_ATTR_PARAMS_PROCESSED_PTR:
     case SQL_ATTR_ROW_BIND_TYPE:
         /* Accept but ignore */
         return SQL_SUCCESS;
@@ -387,6 +400,26 @@ SQLRETURN SQL_API SQLGetStmtAttr(
     case SQL_ATTR_ASYNC_ENABLE:
         if (Value) *(SQLULEN *)Value = SQL_ASYNC_ENABLE_OFF;
         if (StringLength) *StringLength = sizeof(SQLULEN);
+        return SQL_SUCCESS;
+
+    case SQL_ATTR_PARAMSET_SIZE:
+        if (Value) *(SQLULEN *)Value = stmt->paramset_size;
+        if (StringLength) *StringLength = sizeof(SQLULEN);
+        return SQL_SUCCESS;
+
+    case SQL_ATTR_PARAM_BIND_TYPE:
+        if (Value) *(SQLULEN *)Value = stmt->param_bind_type;
+        if (StringLength) *StringLength = sizeof(SQLULEN);
+        return SQL_SUCCESS;
+
+    case SQL_ATTR_PARAMS_PROCESSED_PTR:
+        if (Value) *(SQLULEN **)Value = stmt->params_processed_ptr;
+        if (StringLength) *StringLength = sizeof(SQLULEN *);
+        return SQL_SUCCESS;
+
+    case SQL_ATTR_PARAM_STATUS_PTR:
+        if (Value) *(SQLUSMALLINT **)Value = stmt->param_status_ptr;
+        if (StringLength) *StringLength = sizeof(SQLUSMALLINT *);
         return SQL_SUCCESS;
 
     case SQL_ATTR_NOSCAN:
@@ -499,7 +532,12 @@ SQLRETURN SQL_API SQLCopyDesc(
         return SQL_INVALID_HANDLE;
 
     /* Copy column bindings from source to target */
-    memcpy(dst->bindings, src->bindings, sizeof(src->bindings));
+    if (src->bindings_capacity > 0 && src->bindings) {
+        if (argus_stmt_ensure_bindings(dst, src->bindings_capacity) != 0)
+            return SQL_ERROR;
+        memcpy(dst->bindings, src->bindings,
+               (size_t)src->bindings_capacity * sizeof(argus_col_binding_t));
+    }
 
     return SQL_SUCCESS;
 }

@@ -304,7 +304,9 @@ SQLRETURN SQL_API SQLSetDescField(
          * Accept these for ARD/APD. We route actual binding
          * through SQLBindCol/SQLBindParameter, so store minimally.
          */
-        if (RecNumber >= 1 && RecNumber <= ARGUS_MAX_COLUMNS) {
+        if (RecNumber >= 1) {
+            if (argus_stmt_ensure_bindings(stmt, RecNumber) != 0)
+                return SQL_ERROR;
             if (FieldIdentifier == SQL_DESC_DATA_PTR) {
                 int idx = RecNumber - 1;
                 if (Value) {
@@ -354,9 +356,14 @@ SQLRETURN SQL_API SQLSetDescRec(
 
     argus_stmt_t *stmt = (argus_stmt_t *)DescriptorHandle;
 
-    if (RecNumber < 1 || RecNumber > ARGUS_MAX_COLUMNS) {
+    if (RecNumber < 1) {
         return argus_set_error(&stmt->diag, "07009",
                                "[Argus] Invalid descriptor index", 0);
+    }
+
+    if (argus_stmt_ensure_bindings(stmt, RecNumber) != 0) {
+        return argus_set_error(&stmt->diag, "HY001",
+                               "[Argus] Memory allocation failed", 0);
     }
 
     int idx = RecNumber - 1;

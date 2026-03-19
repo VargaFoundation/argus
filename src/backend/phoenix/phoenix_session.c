@@ -282,6 +282,30 @@ int phoenix_connect(argus_dbc_t *dbc,
     return 0;
 }
 
+/* ── Liveness check ──────────────────────────────────────────── */
+
+bool phoenix_is_alive(argus_backend_conn_t raw_conn)
+{
+    phoenix_conn_t *conn = (phoenix_conn_t *)raw_conn;
+    if (!conn || !conn->curl || !conn->base_url) return false;
+
+    /* Send a lightweight Avatica databaseProperties request */
+    CURL *curl = conn->curl;
+    curl_easy_reset(curl);
+    phoenix_apply_curl_settings(conn, curl);
+    curl_easy_setopt(curl, CURLOPT_URL, conn->base_url);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
+
+    CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK) return false;
+
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    return (http_code < 500);
+}
+
 /* ── Disconnect from Phoenix Query Server ───────────────────── */
 
 void phoenix_disconnect(argus_backend_conn_t raw_conn)

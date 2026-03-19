@@ -182,6 +182,41 @@ char *argus_str_dup(const SQLCHAR *str, SQLINTEGER len)
     return dup;
 }
 
+/* ── Hex decode ──────────────────────────────────────────────── */
+
+/*
+ * Decode a hex-encoded string ("48656C6C6F") into raw bytes.
+ * Returns the number of decoded bytes, or -1 on error.
+ * If out is NULL, just returns the decoded length.
+ */
+int argus_hex_decode(const char *hex, size_t hex_len,
+                     unsigned char *out, size_t out_capacity)
+{
+    if (hex_len % 2 != 0) return -1;
+    size_t decoded_len = hex_len / 2;
+
+    if (!out) return (int)decoded_len;
+    if (decoded_len > out_capacity) return -1;
+
+    for (size_t i = 0; i < decoded_len; i++) {
+        unsigned char hi = (unsigned char)hex[i * 2];
+        unsigned char lo = (unsigned char)hex[i * 2 + 1];
+
+        if (hi >= '0' && hi <= '9')      hi = hi - '0';
+        else if (hi >= 'A' && hi <= 'F') hi = hi - 'A' + 10;
+        else if (hi >= 'a' && hi <= 'f') hi = hi - 'a' + 10;
+        else return -1;
+
+        if (lo >= '0' && lo <= '9')      lo = lo - '0';
+        else if (lo >= 'A' && lo <= 'F') lo = lo - 'A' + 10;
+        else if (lo >= 'a' && lo <= 'f') lo = lo - 'a' + 10;
+        else return -1;
+
+        out[i] = (unsigned char)((hi << 4) | lo);
+    }
+    return (int)decoded_len;
+}
+
 /* Same but for SQLSMALLINT lengths */
 char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len)
 {

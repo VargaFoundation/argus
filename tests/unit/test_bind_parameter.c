@@ -25,6 +25,8 @@ static argus_stmt_t *create_test_stmt(void)
     stmt->row_array_size = 1;
     argus_diag_clear(&stmt->diag);
     argus_row_cache_init(&stmt->row_cache);
+    argus_stmt_ensure_columns(stmt, 64);
+    argus_stmt_ensure_bindings(stmt, 64);
     return stmt;
 }
 
@@ -32,6 +34,8 @@ static void destroy_test_stmt(argus_stmt_t *stmt)
 {
     free(stmt->query);
     argus_row_cache_free(&stmt->row_cache);
+    free(stmt->columns);
+    free(stmt->bindings);
     stmt->signature = 0;
     free(stmt);
 }

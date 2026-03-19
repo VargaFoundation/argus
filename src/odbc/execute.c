@@ -290,19 +290,124 @@ static char *render_param(const argus_param_binding_t *param)
 
     case SQL_C_INTERVAL_YEAR:
     case SQL_C_INTERVAL_MONTH:
+    case SQL_C_INTERVAL_YEAR_TO_MONTH:
     case SQL_C_INTERVAL_DAY:
     case SQL_C_INTERVAL_HOUR:
     case SQL_C_INTERVAL_MINUTE:
     case SQL_C_INTERVAL_SECOND:
-    case SQL_C_INTERVAL_YEAR_TO_MONTH:
     case SQL_C_INTERVAL_DAY_TO_HOUR:
     case SQL_C_INTERVAL_DAY_TO_MINUTE:
     case SQL_C_INTERVAL_DAY_TO_SECOND:
     case SQL_C_INTERVAL_HOUR_TO_MINUTE:
     case SQL_C_INTERVAL_HOUR_TO_SECOND:
-    case SQL_C_INTERVAL_MINUTE_TO_SECOND:
-        /* Interval types not supported — return NULL to propagate HYC00 */
-        return NULL;
+    case SQL_C_INTERVAL_MINUTE_TO_SECOND: {
+        const SQL_INTERVAL_STRUCT *iv =
+            (const SQL_INTERVAL_STRUCT *)param->value;
+        char buf[128];
+        const char *sign = iv->interval_sign ? "-" : "";
+        switch (iv->interval_type) {
+        case SQL_IS_YEAR:
+            snprintf(buf, sizeof(buf), "INTERVAL '%s%u' YEAR",
+                     sign, (unsigned)iv->intval.year_month.year);
+            break;
+        case SQL_IS_MONTH:
+            snprintf(buf, sizeof(buf), "INTERVAL '%s%u' MONTH",
+                     sign, (unsigned)iv->intval.year_month.month);
+            break;
+        case SQL_IS_YEAR_TO_MONTH:
+            snprintf(buf, sizeof(buf), "INTERVAL '%s%u-%u' YEAR TO MONTH",
+                     sign, (unsigned)iv->intval.year_month.year,
+                     (unsigned)iv->intval.year_month.month);
+            break;
+        case SQL_IS_DAY:
+            snprintf(buf, sizeof(buf), "INTERVAL '%s%u' DAY",
+                     sign, (unsigned)iv->intval.day_second.day);
+            break;
+        case SQL_IS_HOUR:
+            snprintf(buf, sizeof(buf), "INTERVAL '%s%u' HOUR",
+                     sign, (unsigned)iv->intval.day_second.hour);
+            break;
+        case SQL_IS_MINUTE:
+            snprintf(buf, sizeof(buf), "INTERVAL '%s%u' MINUTE",
+                     sign, (unsigned)iv->intval.day_second.minute);
+            break;
+        case SQL_IS_SECOND:
+            if (iv->intval.day_second.fraction > 0)
+                snprintf(buf, sizeof(buf), "INTERVAL '%s%u.%u' SECOND",
+                         sign, (unsigned)iv->intval.day_second.second,
+                         (unsigned)iv->intval.day_second.fraction);
+            else
+                snprintf(buf, sizeof(buf), "INTERVAL '%s%u' SECOND",
+                         sign, (unsigned)iv->intval.day_second.second);
+            break;
+        case SQL_IS_DAY_TO_HOUR:
+            snprintf(buf, sizeof(buf), "INTERVAL '%s%u %02u' DAY TO HOUR",
+                     sign, (unsigned)iv->intval.day_second.day,
+                     (unsigned)iv->intval.day_second.hour);
+            break;
+        case SQL_IS_DAY_TO_MINUTE:
+            snprintf(buf, sizeof(buf),
+                     "INTERVAL '%s%u %02u:%02u' DAY TO MINUTE",
+                     sign, (unsigned)iv->intval.day_second.day,
+                     (unsigned)iv->intval.day_second.hour,
+                     (unsigned)iv->intval.day_second.minute);
+            break;
+        case SQL_IS_DAY_TO_SECOND:
+            if (iv->intval.day_second.fraction > 0)
+                snprintf(buf, sizeof(buf),
+                         "INTERVAL '%s%u %02u:%02u:%02u.%u' DAY TO SECOND",
+                         sign, (unsigned)iv->intval.day_second.day,
+                         (unsigned)iv->intval.day_second.hour,
+                         (unsigned)iv->intval.day_second.minute,
+                         (unsigned)iv->intval.day_second.second,
+                         (unsigned)iv->intval.day_second.fraction);
+            else
+                snprintf(buf, sizeof(buf),
+                         "INTERVAL '%s%u %02u:%02u:%02u' DAY TO SECOND",
+                         sign, (unsigned)iv->intval.day_second.day,
+                         (unsigned)iv->intval.day_second.hour,
+                         (unsigned)iv->intval.day_second.minute,
+                         (unsigned)iv->intval.day_second.second);
+            break;
+        case SQL_IS_HOUR_TO_MINUTE:
+            snprintf(buf, sizeof(buf),
+                     "INTERVAL '%s%u:%02u' HOUR TO MINUTE",
+                     sign, (unsigned)iv->intval.day_second.hour,
+                     (unsigned)iv->intval.day_second.minute);
+            break;
+        case SQL_IS_HOUR_TO_SECOND:
+            if (iv->intval.day_second.fraction > 0)
+                snprintf(buf, sizeof(buf),
+                         "INTERVAL '%s%u:%02u:%02u.%u' HOUR TO SECOND",
+                         sign, (unsigned)iv->intval.day_second.hour,
+                         (unsigned)iv->intval.day_second.minute,
+                         (unsigned)iv->intval.day_second.second,
+                         (unsigned)iv->intval.day_second.fraction);
+            else
+                snprintf(buf, sizeof(buf),
+                         "INTERVAL '%s%u:%02u:%02u' HOUR TO SECOND",
+                         sign, (unsigned)iv->intval.day_second.hour,
+                         (unsigned)iv->intval.day_second.minute,
+                         (unsigned)iv->intval.day_second.second);
+            break;
+        case SQL_IS_MINUTE_TO_SECOND:
+            if (iv->intval.day_second.fraction > 0)
+                snprintf(buf, sizeof(buf),
+                         "INTERVAL '%s%u:%02u.%u' MINUTE TO SECOND",
+                         sign, (unsigned)iv->intval.day_second.minute,
+                         (unsigned)iv->intval.day_second.second,
+                         (unsigned)iv->intval.day_second.fraction);
+            else
+                snprintf(buf, sizeof(buf),
+                         "INTERVAL '%s%u:%02u' MINUTE TO SECOND",
+                         sign, (unsigned)iv->intval.day_second.minute,
+                         (unsigned)iv->intval.day_second.second);
+            break;
+        default:
+            return strdup("NULL");
+        }
+        return strdup(buf);
+    }
 
     default:
         /* Treat as string */
@@ -455,15 +560,36 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
 
     /* Try to get result metadata */
     if (dbc->backend->get_result_metadata) {
+        /* Pre-allocate for metadata query — backend tells us actual count */
         int ncols = 0;
+        /* First call to get column count; need temp buffer for backends
+           that write directly into the columns array */
+        argus_column_desc_t tmp_cols[64];
         rc = dbc->backend->get_result_metadata(
             dbc->backend_conn, stmt->op,
-            stmt->columns, &ncols);
+            tmp_cols, &ncols);
         if (rc == 0 && ncols > 0) {
-            if (ncols > ARGUS_MAX_COLUMNS)
-                ncols = ARGUS_MAX_COLUMNS;
-            stmt->num_cols = ncols;
-            stmt->metadata_fetched = true;
+            if (ncols <= 64) {
+                /* Fast path: fits in stack buffer */
+                if (argus_stmt_ensure_columns(stmt, ncols) == 0) {
+                    memcpy(stmt->columns, tmp_cols,
+                           (size_t)ncols * sizeof(argus_column_desc_t));
+                    stmt->num_cols = ncols;
+                    stmt->metadata_fetched = true;
+                }
+            } else {
+                /* Need larger buffer — re-query */
+                if (argus_stmt_ensure_columns(stmt, ncols) == 0) {
+                    int ncols2 = 0;
+                    rc = dbc->backend->get_result_metadata(
+                        dbc->backend_conn, stmt->op,
+                        stmt->columns, &ncols2);
+                    if (rc == 0 && ncols2 > 0) {
+                        stmt->num_cols = ncols2;
+                        stmt->metadata_fetched = true;
+                    }
+                }
+            }
             ARGUS_LOG_TRACE("Retrieved metadata: %d columns", ncols);
         }
     }
@@ -561,6 +687,84 @@ SQLRETURN SQL_API SQLPrepare(
     return SQL_SUCCESS;
 }
 
+/* ── Internal: compute element size for a C type ─────────────── */
+
+static size_t c_type_element_size(SQLSMALLINT c_type)
+{
+    switch (c_type) {
+    case SQL_C_CHAR:
+    case SQL_C_DEFAULT:
+    case SQL_C_BINARY:
+    case SQL_C_WCHAR:
+        return 0; /* variable-length; use buffer_length */
+    case SQL_C_SLONG:
+    case SQL_C_LONG:
+    case SQL_C_ULONG:
+        return sizeof(SQLINTEGER);
+    case SQL_C_SSHORT:
+    case SQL_C_SHORT:
+    case SQL_C_USHORT:
+        return sizeof(SQLSMALLINT);
+    case SQL_C_STINYINT:
+    case SQL_C_TINYINT:
+    case SQL_C_UTINYINT:
+    case SQL_C_BIT:
+        return 1;
+    case SQL_C_SBIGINT:
+    case SQL_C_UBIGINT:
+        return sizeof(SQLBIGINT);
+    case SQL_C_FLOAT:
+        return sizeof(SQLREAL);
+    case SQL_C_DOUBLE:
+        return sizeof(SQLDOUBLE);
+    case SQL_C_TYPE_DATE:
+        return sizeof(SQL_DATE_STRUCT);
+    case SQL_C_TYPE_TIME:
+        return sizeof(SQL_TIME_STRUCT);
+    case SQL_C_TYPE_TIMESTAMP:
+        return sizeof(SQL_TIMESTAMP_STRUCT);
+    case SQL_C_NUMERIC:
+        return sizeof(SQL_NUMERIC_STRUCT);
+    default:
+        return sizeof(SQLPOINTER);
+    }
+}
+
+/* ── Internal: build param bindings for a specific row in a paramset ── */
+
+static void build_row_params(const argus_param_binding_t *base_params,
+                              int num_params,
+                              SQLULEN row_idx,
+                              SQLULEN bind_type,
+                              argus_param_binding_t *row_params)
+{
+    for (int i = 0; i < num_params; i++) {
+        row_params[i] = base_params[i];
+        if (!base_params[i].bound || row_idx == 0) continue;
+
+        if (bind_type == SQL_PARAM_BIND_BY_COLUMN) {
+            /* Column-wise: advance by element size */
+            size_t elem_sz = c_type_element_size(base_params[i].value_type);
+            if (elem_sz == 0)
+                elem_sz = (size_t)base_params[i].buffer_length;
+
+            row_params[i].value = (SQLPOINTER)(
+                (unsigned char *)base_params[i].value + row_idx * elem_sz);
+            if (base_params[i].str_len_or_ind)
+                row_params[i].str_len_or_ind =
+                    base_params[i].str_len_or_ind + row_idx;
+        } else {
+            /* Row-wise: advance by bind_type (struct stride) */
+            row_params[i].value = (SQLPOINTER)(
+                (unsigned char *)base_params[i].value + row_idx * bind_type);
+            if (base_params[i].str_len_or_ind)
+                row_params[i].str_len_or_ind = (SQLLEN *)(
+                    (unsigned char *)base_params[i].str_len_or_ind
+                    + row_idx * bind_type);
+        }
+    }
+}
+
 /* ── ODBC API: SQLExecute ────────────────────────────────────── */
 
 SQLRETURN SQL_API SQLExecute(SQLHSTMT StatementHandle)
@@ -578,25 +782,83 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT StatementHandle)
         return err;
     }
 
-    /* Substitute bound parameters if any */
-    SQLRETURN ret;
-    if (stmt->num_param_bindings > 0) {
-        char *resolved = substitute_params(
-            stmt->query, stmt->param_bindings,
-            stmt->num_param_bindings, &stmt->diag);
-        if (!resolved) {
-            ARGUS_STMT_UNLOCK(stmt);
-            return SQL_ERROR;
-        }
+    SQLULEN paramset_size = stmt->paramset_size;
+    if (paramset_size < 1) paramset_size = 1;
 
-        ret = do_execute(stmt, resolved);
-        free(resolved);
-    } else {
-        ret = do_execute(stmt, stmt->query);
+    /* Single-row execution (common case) */
+    if (paramset_size == 1) {
+        SQLRETURN ret;
+        if (stmt->num_param_bindings > 0) {
+            char *resolved = substitute_params(
+                stmt->query, stmt->param_bindings,
+                stmt->num_param_bindings, &stmt->diag);
+            if (!resolved) {
+                if (stmt->params_processed_ptr) *stmt->params_processed_ptr = 0;
+                ARGUS_STMT_UNLOCK(stmt);
+                return SQL_ERROR;
+            }
+            ret = do_execute(stmt, resolved);
+            free(resolved);
+        } else {
+            ret = do_execute(stmt, stmt->query);
+        }
+        if (stmt->params_processed_ptr) *stmt->params_processed_ptr = 1;
+        if (stmt->param_status_ptr)
+            stmt->param_status_ptr[0] = (ret == SQL_SUCCESS)
+                ? SQL_PARAM_SUCCESS : SQL_PARAM_ERROR;
+        ARGUS_STMT_UNLOCK(stmt);
+        return ret;
     }
 
+    /* Batch execution: loop over parameter sets */
+    SQLRETURN overall_ret = SQL_SUCCESS;
+    SQLULEN rows_processed = 0;
+
+    argus_param_binding_t *row_params = calloc(
+        (size_t)stmt->num_param_bindings, sizeof(argus_param_binding_t));
+    if (!row_params) {
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY001",
+                               "[Argus] Memory allocation failed", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
+    }
+
+    for (SQLULEN r = 0; r < paramset_size; r++) {
+        /* Build param bindings for this row */
+        build_row_params(stmt->param_bindings, stmt->num_param_bindings,
+                          r, stmt->param_bind_type, row_params);
+
+        char *resolved = substitute_params(
+            stmt->query, row_params,
+            stmt->num_param_bindings, &stmt->diag);
+        if (!resolved) {
+            if (stmt->param_status_ptr)
+                stmt->param_status_ptr[r] = SQL_PARAM_ERROR;
+            overall_ret = SQL_SUCCESS_WITH_INFO;
+            rows_processed++;
+            continue;
+        }
+
+        SQLRETURN ret = do_execute(stmt, resolved);
+        free(resolved);
+        rows_processed++;
+
+        if (stmt->param_status_ptr) {
+            stmt->param_status_ptr[r] = (ret == SQL_SUCCESS)
+                ? SQL_PARAM_SUCCESS : SQL_PARAM_ERROR;
+        }
+
+        if (ret != SQL_SUCCESS) {
+            overall_ret = SQL_SUCCESS_WITH_INFO;
+        }
+    }
+
+    free(row_params);
+    if (stmt->params_processed_ptr)
+        *stmt->params_processed_ptr = rows_processed;
+
     ARGUS_STMT_UNLOCK(stmt);
-    return ret;
+    return overall_ret;
 }
 
 /* ── ODBC API: SQLRowCount ───────────────────────────────────── */

@@ -9,6 +9,8 @@
 
 extern SQLSMALLINT argus_copy_string(const char *src,
                                       SQLCHAR *dst, SQLSMALLINT dst_len);
+extern int argus_hex_decode(const char *hex, size_t hex_len,
+                             unsigned char *out, size_t out_capacity);
 
 /* ── Row cache implementation ─────────────────────────────────── */
 
@@ -83,8 +85,8 @@ static SQLRETURN fetch_batch(argus_stmt_t *stmt)
     }
 
     if (num_cols > 0 && !stmt->metadata_fetched) {
-        if (num_cols > ARGUS_MAX_COLUMNS)
-            num_cols = ARGUS_MAX_COLUMNS;
+        if (argus_stmt_ensure_columns(stmt, num_cols) != 0)
+            return SQL_ERROR;
         stmt->num_cols = num_cols;
         stmt->metadata_fetched = true;
     }
@@ -387,15 +389,37 @@ static SQLRETURN convert_cell_to_target(
     }
 
     case SQL_C_TYPE_TIMESTAMP: {
-        /* Parse "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD HH:MM:SS.fff" */
+        /* Parse "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD HH:MM:SS.fff...fffffffff" */
         SQL_TIMESTAMP_STRUCT ts;
         memset(&ts, 0, sizeof(ts));
-        int n = sscanf(cell->data, "%4hd-%2hu-%2hu %2hu:%2hu:%2hu.%u",
+        int n = sscanf(cell->data, "%4hd-%2hu-%2hu %2hu:%2hu:%2hu",
                        &ts.year, &ts.month, &ts.day,
-                       &ts.hour, &ts.minute, &ts.second, &ts.fraction);
+                       &ts.hour, &ts.minute, &ts.second);
         if (n < 6) {
             return argus_set_error(diag, "22007",
                                    "[Argus] Invalid timestamp format", 0);
+        }
+        /* Parse fractional seconds and normalize to nanoseconds.
+         * ODBC SQL_TIMESTAMP_STRUCT.fraction is in nanoseconds (0-999999999).
+         * We must count the digits to scale correctly:
+         *   ".1"   -> 100000000 ns
+         *   ".12"  -> 120000000 ns
+         *   ".123" -> 123000000 ns
+         *   ".123456789" -> 123456789 ns */
+        const char *dot = strchr(cell->data, '.');
+        if (dot) {
+            dot++;
+            SQLUINTEGER frac = 0;
+            int digits = 0;
+            while (*dot >= '0' && *dot <= '9' && digits < 9) {
+                frac = frac * 10 + (SQLUINTEGER)(*dot - '0');
+                dot++;
+                digits++;
+            }
+            /* Pad to 9 digits (nanoseconds) */
+            for (int pad = digits; pad < 9; pad++)
+                frac *= 10;
+            ts.fraction = frac;
         }
         if (ts.month < 1 || ts.month > 12 ||
             ts.day < 1 || ts.day > 31 ||
@@ -479,21 +503,205 @@ static SQLRETURN convert_cell_to_target(
         return SQL_SUCCESS;
     }
 
-    case SQL_C_BINARY: {
-        /* Raw binary data copy */
+    case SQL_C_GUID: {
+        /*
+         * Parse UUID string "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+         * into SQLGUID structure.
+         */
+        SQLGUID guid;
+        memset(&guid, 0, sizeof(guid));
+        unsigned int d1, d2, d3;
+        unsigned int d4[8];
+        int n = sscanf(cell->data,
+            "%8x-%4x-%4x-%2x%2x-%2x%2x%2x%2x%2x%2x",
+            &d1, &d2, &d3,
+            &d4[0], &d4[1], &d4[2], &d4[3],
+            &d4[4], &d4[5], &d4[6], &d4[7]);
+        if (n != 11) {
+            return argus_set_error(diag, "22018",
+                                   "[Argus] Invalid UUID/GUID format", 0);
+        }
+        guid.Data1 = (DWORD)d1;
+        guid.Data2 = (WORD)d2;
+        guid.Data3 = (WORD)d3;
+        for (int i = 0; i < 8; i++)
+            guid.Data4[i] = (BYTE)d4[i];
+        if (target_value)
+            *(SQLGUID *)target_value = guid;
         if (str_len_or_ind)
-            *str_len_or_ind = (SQLLEN)cell->data_len;
+            *str_len_or_ind = sizeof(SQLGUID);
+        return SQL_SUCCESS;
+    }
 
-        if (target_value && buffer_length > 0) {
-            size_t copy = cell->data_len < (size_t)buffer_length
-                          ? cell->data_len : (size_t)buffer_length;
-            memcpy(target_value, cell->data, copy);
-
-            if (cell->data_len > (size_t)buffer_length) {
-                argus_diag_push(diag, "01004",
-                                "[Argus] Binary data truncated", 0);
-                return SQL_SUCCESS_WITH_INFO;
+    case SQL_C_BINARY: {
+        /*
+         * Backends return binary data as hex strings ("48656C6C6F").
+         * Detect hex encoding and decode, otherwise copy raw bytes.
+         */
+        bool is_hex = (cell->data_len >= 2 && cell->data_len % 2 == 0);
+        if (is_hex) {
+            for (size_t i = 0; i < cell->data_len; i++) {
+                char c = cell->data[i];
+                if (!((c >= '0' && c <= '9') ||
+                      (c >= 'A' && c <= 'F') ||
+                      (c >= 'a' && c <= 'f'))) {
+                    is_hex = false;
+                    break;
+                }
             }
+        }
+
+        if (is_hex) {
+            size_t decoded_len = cell->data_len / 2;
+            if (str_len_or_ind)
+                *str_len_or_ind = (SQLLEN)decoded_len;
+
+            if (target_value && buffer_length > 0) {
+                size_t copy = decoded_len < (size_t)buffer_length
+                              ? decoded_len : (size_t)buffer_length;
+                /* Decode only the bytes that fit */
+                argus_hex_decode(cell->data, copy * 2,
+                                 (unsigned char *)target_value, copy);
+
+                if (decoded_len > (size_t)buffer_length) {
+                    argus_diag_push(diag, "01004",
+                                    "[Argus] Binary data truncated", 0);
+                    return SQL_SUCCESS_WITH_INFO;
+                }
+            }
+        } else {
+            /* Raw binary data — no hex encoding */
+            if (str_len_or_ind)
+                *str_len_or_ind = (SQLLEN)cell->data_len;
+
+            if (target_value && buffer_length > 0) {
+                size_t copy = cell->data_len < (size_t)buffer_length
+                              ? cell->data_len : (size_t)buffer_length;
+                memcpy(target_value, cell->data, copy);
+
+                if (cell->data_len > (size_t)buffer_length) {
+                    argus_diag_push(diag, "01004",
+                                    "[Argus] Binary data truncated", 0);
+                    return SQL_SUCCESS_WITH_INFO;
+                }
+            }
+        }
+        return SQL_SUCCESS;
+    }
+
+    case SQL_C_INTERVAL_YEAR:
+    case SQL_C_INTERVAL_MONTH:
+    case SQL_C_INTERVAL_DAY:
+    case SQL_C_INTERVAL_HOUR:
+    case SQL_C_INTERVAL_MINUTE:
+    case SQL_C_INTERVAL_SECOND:
+    case SQL_C_INTERVAL_YEAR_TO_MONTH:
+    case SQL_C_INTERVAL_DAY_TO_HOUR:
+    case SQL_C_INTERVAL_DAY_TO_MINUTE:
+    case SQL_C_INTERVAL_DAY_TO_SECOND:
+    case SQL_C_INTERVAL_HOUR_TO_MINUTE:
+    case SQL_C_INTERVAL_HOUR_TO_SECOND:
+    case SQL_C_INTERVAL_MINUTE_TO_SECOND: {
+        if (str_len_or_ind)
+            *str_len_or_ind = (SQLLEN)sizeof(SQL_INTERVAL_STRUCT);
+        if (!target_value || buffer_length < (SQLLEN)sizeof(SQL_INTERVAL_STRUCT))
+            return SQL_SUCCESS;
+
+        SQL_INTERVAL_STRUCT *iv = (SQL_INTERVAL_STRUCT *)target_value;
+        memset(iv, 0, sizeof(*iv));
+
+        const char *s = cell->data;
+        int sign = SQL_FALSE;
+        if (*s == '-') { sign = SQL_TRUE; s++; }
+        else if (*s == '+') { s++; }
+        iv->interval_sign = (SQLSMALLINT)sign;
+
+        unsigned int v1 = 0, v2 = 0, v3 = 0, v4 = 0;
+        unsigned int frac = 0;
+
+        switch (target_type) {
+        case SQL_C_INTERVAL_YEAR:
+            iv->interval_type = SQL_IS_YEAR;
+            sscanf(s, "%u", &v1);
+            iv->intval.year_month.year = (SQLUINTEGER)v1;
+            break;
+        case SQL_C_INTERVAL_MONTH:
+            iv->interval_type = SQL_IS_MONTH;
+            sscanf(s, "%u", &v1);
+            iv->intval.year_month.month = (SQLUINTEGER)v1;
+            break;
+        case SQL_C_INTERVAL_YEAR_TO_MONTH:
+            iv->interval_type = SQL_IS_YEAR_TO_MONTH;
+            sscanf(s, "%u-%u", &v1, &v2);
+            iv->intval.year_month.year = (SQLUINTEGER)v1;
+            iv->intval.year_month.month = (SQLUINTEGER)v2;
+            break;
+        case SQL_C_INTERVAL_DAY:
+            iv->interval_type = SQL_IS_DAY;
+            sscanf(s, "%u", &v1);
+            iv->intval.day_second.day = (SQLUINTEGER)v1;
+            break;
+        case SQL_C_INTERVAL_HOUR:
+            iv->interval_type = SQL_IS_HOUR;
+            sscanf(s, "%u", &v1);
+            iv->intval.day_second.hour = (SQLUINTEGER)v1;
+            break;
+        case SQL_C_INTERVAL_MINUTE:
+            iv->interval_type = SQL_IS_MINUTE;
+            sscanf(s, "%u", &v1);
+            iv->intval.day_second.minute = (SQLUINTEGER)v1;
+            break;
+        case SQL_C_INTERVAL_SECOND:
+            iv->interval_type = SQL_IS_SECOND;
+            sscanf(s, "%u.%u", &v1, &frac);
+            iv->intval.day_second.second = (SQLUINTEGER)v1;
+            iv->intval.day_second.fraction = (SQLUINTEGER)frac;
+            break;
+        case SQL_C_INTERVAL_DAY_TO_HOUR:
+            iv->interval_type = SQL_IS_DAY_TO_HOUR;
+            sscanf(s, "%u %u", &v1, &v2);
+            iv->intval.day_second.day = (SQLUINTEGER)v1;
+            iv->intval.day_second.hour = (SQLUINTEGER)v2;
+            break;
+        case SQL_C_INTERVAL_DAY_TO_MINUTE:
+            iv->interval_type = SQL_IS_DAY_TO_MINUTE;
+            sscanf(s, "%u %u:%u", &v1, &v2, &v3);
+            iv->intval.day_second.day = (SQLUINTEGER)v1;
+            iv->intval.day_second.hour = (SQLUINTEGER)v2;
+            iv->intval.day_second.minute = (SQLUINTEGER)v3;
+            break;
+        case SQL_C_INTERVAL_DAY_TO_SECOND:
+            iv->interval_type = SQL_IS_DAY_TO_SECOND;
+            sscanf(s, "%u %u:%u:%u.%u", &v1, &v2, &v3, &v4, &frac);
+            iv->intval.day_second.day = (SQLUINTEGER)v1;
+            iv->intval.day_second.hour = (SQLUINTEGER)v2;
+            iv->intval.day_second.minute = (SQLUINTEGER)v3;
+            iv->intval.day_second.second = (SQLUINTEGER)v4;
+            iv->intval.day_second.fraction = (SQLUINTEGER)frac;
+            break;
+        case SQL_C_INTERVAL_HOUR_TO_MINUTE:
+            iv->interval_type = SQL_IS_HOUR_TO_MINUTE;
+            sscanf(s, "%u:%u", &v1, &v2);
+            iv->intval.day_second.hour = (SQLUINTEGER)v1;
+            iv->intval.day_second.minute = (SQLUINTEGER)v2;
+            break;
+        case SQL_C_INTERVAL_HOUR_TO_SECOND:
+            iv->interval_type = SQL_IS_HOUR_TO_SECOND;
+            sscanf(s, "%u:%u:%u.%u", &v1, &v2, &v3, &frac);
+            iv->intval.day_second.hour = (SQLUINTEGER)v1;
+            iv->intval.day_second.minute = (SQLUINTEGER)v2;
+            iv->intval.day_second.second = (SQLUINTEGER)v3;
+            iv->intval.day_second.fraction = (SQLUINTEGER)frac;
+            break;
+        case SQL_C_INTERVAL_MINUTE_TO_SECOND:
+            iv->interval_type = SQL_IS_MINUTE_TO_SECOND;
+            sscanf(s, "%u:%u.%u", &v1, &v2, &frac);
+            iv->intval.day_second.minute = (SQLUINTEGER)v1;
+            iv->intval.day_second.second = (SQLUINTEGER)v2;
+            iv->intval.day_second.fraction = (SQLUINTEGER)frac;
+            break;
+        default:
+            break;
         }
         return SQL_SUCCESS;
     }
@@ -550,7 +758,7 @@ static SQLRETURN fetch_single_row(argus_stmt_t *stmt, SQLULEN rowset_idx)
 
     /* Transfer data to bound columns */
     SQLRETURN final_ret = SQL_SUCCESS;
-    for (int col = 0; col < stmt->num_cols && col < ARGUS_MAX_COLUMNS; col++) {
+    for (int col = 0; col < stmt->num_cols && col < stmt->bindings_capacity; col++) {
         if (!stmt->bindings[col].bound) continue;
 
         argus_col_binding_t *bind = &stmt->bindings[col];
@@ -814,7 +1022,7 @@ SQLRETURN SQL_API SQLBindCol(
 
     argus_diag_clear(&stmt->diag);
 
-    if (ColumnNumber < 1 || ColumnNumber > ARGUS_MAX_COLUMNS) {
+    if (ColumnNumber < 1) {
         return argus_set_error(&stmt->diag, "07009",
                                "[Argus] Invalid column number", 0);
     }
@@ -823,8 +1031,15 @@ SQLRETURN SQL_API SQLBindCol(
 
     if (!TargetValue) {
         /* Unbind */
-        stmt->bindings[idx].bound = false;
+        if (idx < stmt->bindings_capacity)
+            stmt->bindings[idx].bound = false;
         return SQL_SUCCESS;
+    }
+
+    /* Ensure bindings array is large enough */
+    if (argus_stmt_ensure_bindings(stmt, ColumnNumber) != 0) {
+        return argus_set_error(&stmt->diag, "HY001",
+                               "[Argus] Memory allocation failed", 0);
     }
 
     stmt->bindings[idx].target_type    = TargetType;
@@ -908,6 +1123,7 @@ SQLRETURN SQL_API SQLDescribeCol(
             case SQL_BIT:          cs = 1;      break;
             case SQL_BINARY:
             case SQL_VARBINARY:    cs = 8000;   break;
+            case SQL_GUID:         cs = 36;     break;
             default:               cs = 255;    break;
             }
         }
@@ -1019,6 +1235,7 @@ SQLRETURN SQL_API SQLColAttribute(
         case SQL_BIT:       type_name = "BOOLEAN"; break;
         case SQL_DECIMAL:   type_name = "DECIMAL"; break;
         case SQL_BINARY:    type_name = "BINARY"; break;
+        case SQL_GUID:      type_name = "GUID"; break;
         default:            type_name = "VARCHAR"; break;
         }
         SQLSMALLINT len = argus_copy_string(

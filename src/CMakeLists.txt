@@ -14,6 +14,8 @@ set(ARGUS_SOURCES
     odbc/log.c
     odbc/unicode.c
     odbc/desc.c
+    odbc/dsn.c
+    odbc/metadata_cache.c
     odbc/pool.c
     backend/backend.c
 )
@@ -38,7 +40,7 @@ set(ARGUS_LINK_DIRS
     ${GIO2_LIBRARY_DIRS}
 )
 
-set(ARGUS_COMPILE_DEFS ARGUS_BUILD_DLL)
+set(ARGUS_COMPILE_DEFS ARGUS_BUILD_DLL SQL_NOUNICODEMAP)
 
 # Conditionally add Hive/Impala backends (require Thrift C GLib)
 if(ARGUS_BUILD_THRIFT_BACKENDS)

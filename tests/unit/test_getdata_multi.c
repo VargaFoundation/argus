@@ -89,7 +89,7 @@ static void test_getdata_multi_call(void **state)
     SQLRETURN ret = SQLGetData((SQLHSTMT)stmt, 1, SQL_C_CHAR,
                                  buf, sizeof(buf), &ind);
     assert_int_equal(ret, SQL_SUCCESS_WITH_INFO);
-    assert_int_equal(ind, 31); /* total data length */
+    assert_int_equal(ind, 32); /* total data length */
     assert_int_equal(strlen((char *)buf), 9);
     assert_memory_equal(buf, "Hello, Wo", 9);
 
@@ -97,21 +97,22 @@ static void test_getdata_multi_call(void **state)
     ret = SQLGetData((SQLHSTMT)stmt, 1, SQL_C_CHAR,
                       buf, sizeof(buf), &ind);
     assert_int_equal(ret, SQL_SUCCESS_WITH_INFO);
-    assert_int_equal(ind, 22); /* remaining data length */
+    assert_int_equal(ind, 23); /* remaining data length */
     assert_memory_equal(buf, "rld! This", 9);
 
     /* Third call: get next 9 chars */
     ret = SQLGetData((SQLHSTMT)stmt, 1, SQL_C_CHAR,
                       buf, sizeof(buf), &ind);
     assert_int_equal(ret, SQL_SUCCESS_WITH_INFO);
-    assert_int_equal(ind, 13); /* remaining data length */
+    assert_int_equal(ind, 14); /* remaining data length */
+    assert_memory_equal(buf, " is long ", 9);
 
-    /* Fourth call: remaining 4 chars fit in buffer */
+    /* Fourth call: remaining 5 chars fit in buffer */
     ret = SQLGetData((SQLHSTMT)stmt, 1, SQL_C_CHAR,
                       buf, sizeof(buf), &ind);
     assert_int_equal(ret, SQL_SUCCESS);
-    assert_int_equal(ind, 4);
-    assert_memory_equal(buf, "ata.", 4);
+    assert_int_equal(ind, 5);
+    assert_memory_equal(buf, "data.", 5);
 
     argus_free_stmt(stmt);
     free_test_dbc(dbc);

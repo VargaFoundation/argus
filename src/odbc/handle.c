@@ -72,11 +72,52 @@ SQLRETURN argus_alloc_stmt(argus_dbc_t *dbc, argus_stmt_t **out)
     g_mutex_init(&stmt->mutex);
     stmt->row_count       = -1;
     stmt->row_array_size  = 1;
+    stmt->paramset_size   = 1;
+    stmt->param_bind_type = SQL_PARAM_BIND_BY_COLUMN;
     argus_diag_clear(&stmt->diag);
     argus_row_cache_init(&stmt->row_cache);
 
+    /* Pre-allocate columns and bindings for common case */
+    if (argus_stmt_ensure_columns(stmt, 64) != 0 ||
+        argus_stmt_ensure_bindings(stmt, 64) != 0) {
+        free(stmt->columns);
+        free(stmt->bindings);
+        free(stmt);
+        return SQL_ERROR;
+    }
+
     *out = stmt;
     return SQL_SUCCESS;
+}
+
+/* ── Dynamic column/binding capacity ─────────────────────────── */
+
+int argus_stmt_ensure_columns(argus_stmt_t *stmt, int ncols)
+{
+    if (ncols <= stmt->columns_capacity) return 0;
+    int cap = ncols < 64 ? 64 : ncols;
+    argus_column_desc_t *p = realloc(
+        stmt->columns, (size_t)cap * sizeof(argus_column_desc_t));
+    if (!p) return -1;
+    memset(p + stmt->columns_capacity, 0,
+           (size_t)(cap - stmt->columns_capacity) * sizeof(argus_column_desc_t));
+    stmt->columns = p;
+    stmt->columns_capacity = cap;
+    return 0;
+}
+
+int argus_stmt_ensure_bindings(argus_stmt_t *stmt, int ncols)
+{
+    if (ncols <= stmt->bindings_capacity) return 0;
+    int cap = ncols < 64 ? 64 : ncols;
+    argus_col_binding_t *p = realloc(
+        stmt->bindings, (size_t)cap * sizeof(argus_col_binding_t));
+    if (!p) return -1;
+    memset(p + stmt->bindings_capacity, 0,
+           (size_t)(cap - stmt->bindings_capacity) * sizeof(argus_col_binding_t));
+    stmt->bindings = p;
+    stmt->bindings_capacity = cap;
+    return 0;
 }
 
 /* ── Deallocation ─────────────────────────────────────────────── */
@@ -121,6 +162,9 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     free(dbc->http_path);
     free(dbc->log_file);
 
+    /* Free metadata cache */
+    argus_metadata_cache_free(dbc);
+
     free(dbc);
     return SQL_SUCCESS;
 }
@@ -151,6 +195,12 @@ void argus_stmt_reset(argus_stmt_t *stmt)
     /* Reset parameter bindings */
     memset(stmt->param_bindings, 0, sizeof(stmt->param_bindings));
     stmt->num_param_bindings = 0;
+    stmt->paramset_size = 1;
+
+    /* Reset column bindings (keep allocation) */
+    if (stmt->bindings && stmt->bindings_capacity > 0)
+        memset(stmt->bindings, 0,
+               (size_t)stmt->bindings_capacity * sizeof(argus_col_binding_t));
 }
 
 SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
@@ -168,6 +218,8 @@ SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
 
     argus_stmt_reset(stmt);
     g_mutex_clear(&stmt->mutex);
+    free(stmt->columns);
+    free(stmt->bindings);
     stmt->signature = 0;
     free(stmt);
     return SQL_SUCCESS;
@@ -295,7 +347,9 @@ SQLRETURN SQL_API SQLFreeStmt(
         return argus_free_stmt(stmt);
 
     case SQL_UNBIND:
-        memset(stmt->bindings, 0, sizeof(stmt->bindings));
+        if (stmt->bindings && stmt->bindings_capacity > 0)
+            memset(stmt->bindings, 0,
+                   (size_t)stmt->bindings_capacity * sizeof(argus_col_binding_t));
         return SQL_SUCCESS;
 
     case SQL_RESET_PARAMS:

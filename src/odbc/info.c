@@ -84,7 +84,6 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_SERVER_NAME:
         return set_string_info(dbc->host ? dbc->host : "", InfoValue, BufferLength, StringLength);
     case SQL_DATABASE_NAME:
-    case SQL_CATALOG_NAME:
         return set_string_info(dbc->database ? dbc->database : "default",
                                InfoValue, BufferLength, StringLength);
     case SQL_DBMS_NAME: {
