@@ -78,6 +78,9 @@ struct argus_dbc {
     int          log_level;
     char        *log_file;
 
+    /* SQLBrowseConnect accumulated keywords */
+    char        *browse_buf;
+
     /* Metadata cache (GHashTable*, lazily initialized) */
     void        *metadata_cache;
 
@@ -85,6 +88,22 @@ struct argus_dbc {
     double       connect_time_ms;       /* last connect duration */
     unsigned long errors_total;         /* total error count */
 };
+
+/* Async execution states */
+typedef enum {
+    ARGUS_ASYNC_IDLE       = 0,
+    ARGUS_ASYNC_SUBMITTED  = 1,
+    ARGUS_ASYNC_RUNNING    = 2,
+    ARGUS_ASYNC_DONE       = 3,
+    ARGUS_ASYNC_ERROR      = 4
+} argus_async_state_t;
+
+/* Data-at-execution states */
+typedef enum {
+    ARGUS_DAE_IDLE       = 0,
+    ARGUS_DAE_NEED_DATA  = 1,
+    ARGUS_DAE_PUTTING    = 2
+} argus_dae_state_t;
 
 /* Statement handle */
 struct argus_stmt {
@@ -132,6 +151,23 @@ struct argus_stmt {
     SQLUSMALLINT           *row_status_ptr;
     SQLULEN                 metadata_id;     /* SQL_TRUE or SQL_FALSE */
     SQLULEN                 use_bookmarks;   /* SQL_UB_OFF (default) */
+
+    /* Async execution state */
+    bool                    async_enabled;
+    argus_async_state_t     async_state;
+    char                   *async_query;    /* query saved for async polling */
+
+    /* Data-at-execution state */
+    argus_dae_state_t       dae_state;
+    int                     dae_current_param;  /* 0-based index */
+    GByteArray             *dae_buffer;         /* accumulated PutData bytes */
+
+    /* Cursor type for scrollable cursors */
+    SQLULEN                 cursor_type;        /* SQL_CURSOR_FORWARD_ONLY or SQL_CURSOR_STATIC */
+    size_t                  scroll_position;    /* absolute position in full cache */
+    argus_row_t            *scroll_rows;        /* full result set cache */
+    size_t                  scroll_row_count;   /* number of rows in scroll cache */
+    bool                    scroll_cached;      /* true if full cache built */
 
     /* Batch parameter attributes */
     SQLULEN                 paramset_size;       /* SQL_ATTR_PARAMSET_SIZE (default 1) */
@@ -192,6 +228,10 @@ void argus_pool_release(
 
 void argus_pool_cleanup(void);
 void argus_pool_evict_idle(int max_idle_sec);
+void argus_pool_configure(int max_per_key, int max_total,
+                           int idle_timeout_sec, int ttl_sec);
+void argus_pool_get_config(int *max_per_key, int *max_total,
+                            int *idle_timeout_sec, int *ttl_sec);
 
 /* Metadata cache */
 void argus_metadata_cache_init(argus_dbc_t *dbc);

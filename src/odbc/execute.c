@@ -502,6 +502,74 @@ static char *substitute_params(const char *sql,
     return out;
 }
 
+/* ── Internal: poll an async operation for completion ─────────── */
+
+static SQLRETURN async_poll(argus_stmt_t *stmt)
+{
+    argus_dbc_t *dbc = stmt->dbc;
+    if (!dbc || !dbc->backend || !dbc->backend->get_operation_status) {
+        stmt->async_state = ARGUS_ASYNC_ERROR;
+        return argus_set_error(&stmt->diag, "HY000",
+                               "[Argus] Backend does not support async polling", 0);
+    }
+
+    bool finished = false;
+    int rc = dbc->backend->get_operation_status(
+        dbc->backend_conn, stmt->op, &finished);
+    if (rc != 0) {
+        stmt->async_state = ARGUS_ASYNC_ERROR;
+        stmt->errors_total++;
+        if (dbc) dbc->errors_total++;
+        if (stmt->diag.count == 0)
+            argus_set_error(&stmt->diag, "HY000",
+                            "[Argus] Async status check failed", 0);
+        return SQL_ERROR;
+    }
+
+    if (!finished) {
+        stmt->async_state = ARGUS_ASYNC_RUNNING;
+        return SQL_STILL_EXECUTING;
+    }
+
+    /* Operation is done — fetch metadata */
+    gint64 exec_end = g_get_monotonic_time();
+    stmt->execute_time_ms = (double)(exec_end - g_get_monotonic_time()) / 1000.0;
+    stmt->executed = true;
+    stmt->async_state = ARGUS_ASYNC_DONE;
+
+    if (dbc->backend->get_result_metadata) {
+        int ncols = 0;
+        argus_column_desc_t tmp_cols[64];
+        rc = dbc->backend->get_result_metadata(
+            dbc->backend_conn, stmt->op, tmp_cols, &ncols);
+        if (rc == 0 && ncols > 0) {
+            if (ncols <= 64) {
+                if (argus_stmt_ensure_columns(stmt, ncols) == 0) {
+                    memcpy(stmt->columns, tmp_cols,
+                           (size_t)ncols * sizeof(argus_column_desc_t));
+                    stmt->num_cols = ncols;
+                    stmt->metadata_fetched = true;
+                }
+            } else {
+                if (argus_stmt_ensure_columns(stmt, ncols) == 0) {
+                    int ncols2 = 0;
+                    rc = dbc->backend->get_result_metadata(
+                        dbc->backend_conn, stmt->op,
+                        stmt->columns, &ncols2);
+                    if (rc == 0 && ncols2 > 0) {
+                        stmt->num_cols = ncols2;
+                        stmt->metadata_fetched = true;
+                    }
+                }
+            }
+        }
+    }
+
+    free(stmt->async_query);
+    stmt->async_query = NULL;
+    return SQL_SUCCESS;
+}
+
 /* ── Internal: execute a query on the backend ────────────────── */
 
 static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
@@ -597,6 +665,42 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
     return SQL_SUCCESS;
 }
 
+/* ── Internal: resolve query with param substitution ──────────── */
+
+static char *resolve_query(argus_stmt_t *stmt, const char *query)
+{
+    if (stmt->num_param_bindings > 0) {
+        return substitute_params(query, stmt->param_bindings,
+                                 stmt->num_param_bindings, &stmt->diag);
+    }
+    return strdup(query);
+}
+
+/* ── Internal: execute or poll async ─────────────────────────── */
+
+static SQLRETURN exec_or_async(argus_stmt_t *stmt, const char *query)
+{
+    /* If async is enabled and we're already polling, continue polling */
+    if (stmt->async_enabled &&
+        (stmt->async_state == ARGUS_ASYNC_SUBMITTED ||
+         stmt->async_state == ARGUS_ASYNC_RUNNING)) {
+        return async_poll(stmt);
+    }
+
+    /* If async is enabled, submit and return STILL_EXECUTING */
+    if (stmt->async_enabled) {
+        SQLRETURN ret = do_execute(stmt, query);
+        if (ret != SQL_SUCCESS) return ret;
+        stmt->async_state = ARGUS_ASYNC_SUBMITTED;
+        free(stmt->async_query);
+        stmt->async_query = strdup(query);
+        return SQL_STILL_EXECUTING;
+    }
+
+    /* Synchronous execution */
+    return do_execute(stmt, query);
+}
+
 /* ── ODBC API: SQLExecDirect ─────────────────────────────────── */
 
 SQLRETURN SQL_API SQLExecDirect(
@@ -609,6 +713,15 @@ SQLRETURN SQL_API SQLExecDirect(
 
     ARGUS_STMT_LOCK(stmt);
     argus_diag_clear(&stmt->diag);
+
+    /* If async polling is in progress, continue it */
+    if (stmt->async_enabled &&
+        (stmt->async_state == ARGUS_ASYNC_SUBMITTED ||
+         stmt->async_state == ARGUS_ASYNC_RUNNING)) {
+        SQLRETURN ret = async_poll(stmt);
+        ARGUS_STMT_UNLOCK(stmt);
+        return ret;
+    }
 
     if (!StatementText) {
         SQLRETURN err = argus_set_error(&stmt->diag, "HY009",
@@ -629,22 +742,15 @@ SQLRETURN SQL_API SQLExecDirect(
     free(stmt->query);
     stmt->query = query;
 
-    /* Substitute bound parameters if any */
-    SQLRETURN ret;
-    if (stmt->num_param_bindings > 0) {
-        char *resolved = substitute_params(
-            query, stmt->param_bindings,
-            stmt->num_param_bindings, &stmt->diag);
-        if (!resolved) {
-            ARGUS_STMT_UNLOCK(stmt);
-            return SQL_ERROR;
-        }
-
-        ret = do_execute(stmt, resolved);
-        free(resolved);
-    } else {
-        ret = do_execute(stmt, query);
+    /* Resolve parameters */
+    char *resolved = resolve_query(stmt, query);
+    if (!resolved) {
+        ARGUS_STMT_UNLOCK(stmt);
+        return SQL_ERROR;
     }
+
+    SQLRETURN ret = exec_or_async(stmt, resolved);
+    free(resolved);
 
     ARGUS_STMT_UNLOCK(stmt);
     return ret;
@@ -775,6 +881,21 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT StatementHandle)
     ARGUS_STMT_LOCK(stmt);
     argus_diag_clear(&stmt->diag);
 
+    /* If async polling is in progress, continue it */
+    if (stmt->async_enabled &&
+        (stmt->async_state == ARGUS_ASYNC_SUBMITTED ||
+         stmt->async_state == ARGUS_ASYNC_RUNNING)) {
+        SQLRETURN ret = async_poll(stmt);
+        if (ret != SQL_STILL_EXECUTING) {
+            if (stmt->params_processed_ptr) *stmt->params_processed_ptr = 1;
+            if (stmt->param_status_ptr)
+                stmt->param_status_ptr[0] = (ret == SQL_SUCCESS)
+                    ? SQL_PARAM_SUCCESS : SQL_PARAM_ERROR;
+        }
+        ARGUS_STMT_UNLOCK(stmt);
+        return ret;
+    }
+
     if (!stmt->query || !stmt->prepared) {
         SQLRETURN err = argus_set_error(&stmt->diag, "HY010",
                                "[Argus] No prepared statement", 0);
@@ -782,30 +903,41 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT StatementHandle)
         return err;
     }
 
+    /* Check for data-at-execution parameters */
+    if (stmt->dae_state == ARGUS_DAE_IDLE) {
+        for (int i = 0; i < stmt->num_param_bindings; i++) {
+            argus_param_binding_t *p = &stmt->param_bindings[i];
+            if (!p->bound || !p->str_len_or_ind) continue;
+            SQLLEN ind = *p->str_len_or_ind;
+            if (ind == SQL_DATA_AT_EXEC ||
+                (ind <= SQL_LEN_DATA_AT_EXEC_OFFSET)) {
+                stmt->dae_state = ARGUS_DAE_NEED_DATA;
+                stmt->dae_current_param = -1; /* will advance in ParamData */
+                ARGUS_STMT_UNLOCK(stmt);
+                return SQL_NEED_DATA;
+            }
+        }
+    }
+
     SQLULEN paramset_size = stmt->paramset_size;
     if (paramset_size < 1) paramset_size = 1;
 
     /* Single-row execution (common case) */
     if (paramset_size == 1) {
-        SQLRETURN ret;
-        if (stmt->num_param_bindings > 0) {
-            char *resolved = substitute_params(
-                stmt->query, stmt->param_bindings,
-                stmt->num_param_bindings, &stmt->diag);
-            if (!resolved) {
-                if (stmt->params_processed_ptr) *stmt->params_processed_ptr = 0;
-                ARGUS_STMT_UNLOCK(stmt);
-                return SQL_ERROR;
-            }
-            ret = do_execute(stmt, resolved);
-            free(resolved);
-        } else {
-            ret = do_execute(stmt, stmt->query);
+        char *resolved = resolve_query(stmt, stmt->query);
+        if (!resolved) {
+            if (stmt->params_processed_ptr) *stmt->params_processed_ptr = 0;
+            ARGUS_STMT_UNLOCK(stmt);
+            return SQL_ERROR;
         }
-        if (stmt->params_processed_ptr) *stmt->params_processed_ptr = 1;
-        if (stmt->param_status_ptr)
-            stmt->param_status_ptr[0] = (ret == SQL_SUCCESS)
-                ? SQL_PARAM_SUCCESS : SQL_PARAM_ERROR;
+        SQLRETURN ret = exec_or_async(stmt, resolved);
+        free(resolved);
+        if (ret != SQL_STILL_EXECUTING) {
+            if (stmt->params_processed_ptr) *stmt->params_processed_ptr = 1;
+            if (stmt->param_status_ptr)
+                stmt->param_status_ptr[0] = (ret == SQL_SUCCESS)
+                    ? SQL_PARAM_SUCCESS : SQL_PARAM_ERROR;
+        }
         ARGUS_STMT_UNLOCK(stmt);
         return ret;
     }
@@ -922,6 +1054,22 @@ SQLRETURN SQL_API SQLCancel(SQLHSTMT StatementHandle)
     ARGUS_STMT_LOCK(stmt);
     argus_diag_clear(&stmt->diag);
 
+    /* Reset DAE state if in progress */
+    if (stmt->dae_state != ARGUS_DAE_IDLE) {
+        stmt->dae_state = ARGUS_DAE_IDLE;
+        stmt->dae_current_param = -1;
+        if (stmt->dae_buffer) {
+            g_byte_array_set_size(stmt->dae_buffer, 0);
+        }
+    }
+
+    /* Reset async state */
+    if (stmt->async_state != ARGUS_ASYNC_IDLE) {
+        stmt->async_state = ARGUS_ASYNC_IDLE;
+        free(stmt->async_query);
+        stmt->async_query = NULL;
+    }
+
     /* Check if there's an active operation to cancel */
     if (!stmt->op || !stmt->executed) {
         /* Nothing to cancel */
@@ -971,30 +1119,154 @@ SQLRETURN SQL_API SQLMoreResults(SQLHSTMT StatementHandle)
     return SQL_NO_DATA;
 }
 
-/* ── ODBC API: SQLParamData (stub) ───────────────────────────── */
+/* ── Internal: find next data-at-execution param ─────────────── */
+
+static int find_next_dae_param(argus_stmt_t *stmt, int after)
+{
+    for (int i = after + 1; i < stmt->num_param_bindings; i++) {
+        argus_param_binding_t *p = &stmt->param_bindings[i];
+        if (!p->bound || !p->str_len_or_ind) continue;
+        SQLLEN ind = *p->str_len_or_ind;
+        if (ind == SQL_DATA_AT_EXEC ||
+            (ind <= SQL_LEN_DATA_AT_EXEC_OFFSET))
+            return i;
+    }
+    return -1;
+}
+
+/* ── ODBC API: SQLParamData ──────────────────────────────────── */
 
 SQLRETURN SQL_API SQLParamData(
     SQLHSTMT   StatementHandle,
     SQLPOINTER *Value)
 {
-    (void)Value;
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
-    return argus_set_not_implemented(&stmt->diag, "SQLParamData");
+
+    ARGUS_STMT_LOCK(stmt);
+    argus_diag_clear(&stmt->diag);
+
+    if (stmt->dae_state == ARGUS_DAE_IDLE) {
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY010",
+                               "[Argus] Function sequence error", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
+    }
+
+    /* If we were putting data for a param, finalize it */
+    if (stmt->dae_state == ARGUS_DAE_PUTTING &&
+        stmt->dae_current_param >= 0) {
+        argus_param_binding_t *p =
+            &stmt->param_bindings[stmt->dae_current_param];
+        /* Replace the param's value pointer with accumulated buffer */
+        if (stmt->dae_buffer && stmt->dae_buffer->len > 0) {
+            p->value = (SQLPOINTER)stmt->dae_buffer->data;
+            /* Update str_len_or_ind to actual data length */
+            static SQLLEN dae_len;
+            dae_len = (SQLLEN)stmt->dae_buffer->len;
+            p->str_len_or_ind = &dae_len;
+        }
+    }
+
+    /* Find the next DAE param */
+    int next = find_next_dae_param(stmt, stmt->dae_current_param);
+    if (next >= 0) {
+        stmt->dae_current_param = next;
+        stmt->dae_state = ARGUS_DAE_PUTTING;
+        /* Reset the accumulation buffer for this param */
+        if (!stmt->dae_buffer)
+            stmt->dae_buffer = g_byte_array_new();
+        else
+            g_byte_array_set_size(stmt->dae_buffer, 0);
+        /* Return the user's value pointer for identification */
+        if (Value)
+            *Value = stmt->param_bindings[next].value;
+        ARGUS_STMT_UNLOCK(stmt);
+        return SQL_NEED_DATA;
+    }
+
+    /* All DAE params have been provided — execute the query */
+    stmt->dae_state = ARGUS_DAE_IDLE;
+    stmt->dae_current_param = -1;
+
+    char *resolved = resolve_query(stmt, stmt->query);
+    if (!resolved) {
+        ARGUS_STMT_UNLOCK(stmt);
+        return SQL_ERROR;
+    }
+    SQLRETURN ret = do_execute(stmt, resolved);
+    free(resolved);
+
+    /* Free DAE buffer */
+    if (stmt->dae_buffer) {
+        g_byte_array_free(stmt->dae_buffer, TRUE);
+        stmt->dae_buffer = NULL;
+    }
+
+    ARGUS_STMT_UNLOCK(stmt);
+    return ret;
 }
 
-/* ── ODBC API: SQLPutData (stub) ─────────────────────────────── */
+/* ── ODBC API: SQLPutData ────────────────────────────────────── */
 
 SQLRETURN SQL_API SQLPutData(
     SQLHSTMT   StatementHandle,
     SQLPOINTER Data,
     SQLLEN     StrLen_or_Ind)
 {
-    (void)Data;
-    (void)StrLen_or_Ind;
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
-    return argus_set_not_implemented(&stmt->diag, "SQLPutData");
+
+    ARGUS_STMT_LOCK(stmt);
+    argus_diag_clear(&stmt->diag);
+
+    if (stmt->dae_state != ARGUS_DAE_PUTTING ||
+        stmt->dae_current_param < 0) {
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY010",
+                               "[Argus] Function sequence error: "
+                               "no parameter awaiting data", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
+    }
+
+    if (!Data && StrLen_or_Ind != SQL_NULL_DATA) {
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY009",
+                               "[Argus] Invalid use of null pointer", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
+    }
+
+    if (StrLen_or_Ind == SQL_NULL_DATA) {
+        /* Mark param as NULL */
+        argus_param_binding_t *p =
+            &stmt->param_bindings[stmt->dae_current_param];
+        static SQLLEN null_ind = SQL_NULL_DATA;
+        p->str_len_or_ind = &null_ind;
+        ARGUS_STMT_UNLOCK(stmt);
+        return SQL_SUCCESS;
+    }
+
+    /* Determine data length */
+    size_t data_len;
+    if (StrLen_or_Ind == SQL_NTS) {
+        data_len = strlen((const char *)Data);
+    } else if (StrLen_or_Ind >= 0) {
+        data_len = (size_t)StrLen_or_Ind;
+    } else {
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY090",
+                               "[Argus] Invalid string or buffer length", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
+    }
+
+    /* Accumulate data */
+    if (!stmt->dae_buffer)
+        stmt->dae_buffer = g_byte_array_new();
+    g_byte_array_append(stmt->dae_buffer,
+                         (const guint8 *)Data, (guint)data_len);
+
+    ARGUS_STMT_UNLOCK(stmt);
+    return SQL_SUCCESS;
 }
 
 /* ── ODBC API: SQLNumParams ──────────────────────────────────── */

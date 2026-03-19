@@ -162,6 +162,9 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     free(dbc->http_path);
     free(dbc->log_file);
 
+    /* Free browse buffer */
+    free(dbc->browse_buf);
+
     /* Free metadata cache */
     argus_metadata_cache_free(dbc);
 
@@ -178,6 +181,9 @@ void argus_stmt_reset(argus_stmt_t *stmt)
         stmt->op = NULL;
     }
 
+    /* Save num_cols before clearing for scroll cache cleanup */
+    int saved_num_cols = stmt->num_cols;
+
     free(stmt->query);
     stmt->query           = NULL;
     stmt->prepared        = false;
@@ -191,6 +197,38 @@ void argus_stmt_reset(argus_stmt_t *stmt)
 
     argus_row_cache_free(&stmt->row_cache);
     argus_row_cache_init(&stmt->row_cache);
+
+    /* Free scroll cache */
+    if (stmt->scroll_rows) {
+        int nc = saved_num_cols > 0 ? saved_num_cols
+                                     : stmt->row_cache.num_cols;
+        for (size_t i = 0; i < stmt->scroll_row_count; i++) {
+            argus_row_t *row = &stmt->scroll_rows[i];
+            if (row->cells) {
+                for (int c = 0; c < nc; c++)
+                    free(row->cells[c].data);
+                free(row->cells);
+            }
+        }
+        free(stmt->scroll_rows);
+        stmt->scroll_rows = NULL;
+    }
+    stmt->scroll_row_count = 0;
+    stmt->scroll_position  = 0;
+    stmt->scroll_cached    = false;
+
+    /* Reset async state */
+    stmt->async_state = ARGUS_ASYNC_IDLE;
+    free(stmt->async_query);
+    stmt->async_query = NULL;
+
+    /* Reset DAE state */
+    stmt->dae_state = ARGUS_DAE_IDLE;
+    stmt->dae_current_param = -1;
+    if (stmt->dae_buffer) {
+        g_byte_array_free(stmt->dae_buffer, TRUE);
+        stmt->dae_buffer = NULL;
+    }
 
     /* Reset parameter bindings */
     memset(stmt->param_bindings, 0, sizeof(stmt->param_bindings));
