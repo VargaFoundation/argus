@@ -2,6 +2,7 @@
 #include "argus/handle.h"
 #include "argus/error.h"
 #include "argus/log.h"
+#include "../thrift_sasl.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -9,14 +10,28 @@
 
 /* ── Connect to Impala via Thrift (TCLIService) ──────────────── */
 
+static bool use_sasl(const char *auth_mechanism)
+{
+    if (!auth_mechanism) return false;
+    return strcasecmp(auth_mechanism, "NOSASL") != 0;
+}
+
+static bool use_gssapi(const char *auth_mechanism)
+{
+    if (!auth_mechanism) return false;
+    return strcasecmp(auth_mechanism, "KERBEROS") == 0 ||
+           strcasecmp(auth_mechanism, "GSSAPI") == 0;
+}
+
 int impala_connect(argus_dbc_t *dbc,
                    const char *host, int port,
                    const char *username, const char *password,
                    const char *database, const char *auth_mechanism,
                    argus_backend_conn_t *out_conn)
 {
-    (void)auth_mechanism;
     GError *error = NULL;
+    bool sasl = use_sasl(auth_mechanism);
+    bool gssapi = use_gssapi(auth_mechanism);
 
     impala_conn_t *conn = calloc(1, sizeof(impala_conn_t));
     if (!conn) {
@@ -29,7 +44,6 @@ int impala_connect(argus_dbc_t *dbc,
 #ifdef ARGUS_HAS_THRIFT_SSL
     if (dbc->ssl_enabled) {
         ARGUS_LOG_DEBUG("Impala: Creating SSL socket to %s:%d", host, port);
-        /* Note: Thrift C GLib SSL socket configuration is done via system SSL settings */
         conn->socket = (ThriftSocket *)g_object_new(
             THRIFT_TYPE_SSL_SOCKET,
             "hostname", host,
@@ -52,10 +66,96 @@ int impala_connect(argus_dbc_t *dbc,
             NULL);
     }
 
-    conn->transport = (ThriftTransport *)g_object_new(
-        THRIFT_TYPE_BUFFERED_TRANSPORT,
-        "transport", conn->socket,
-        NULL);
+    /*
+     * For NOSASL: socket → buffered_transport → binary_protocol
+     * For SASL:   socket → [SASL handshake] → framed_transport → binary_protocol
+     *
+     * With SASL, we first open the raw socket, do the SASL handshake,
+     * then wrap it in a framed transport for the Thrift RPC layer.
+     */
+    if (sasl) {
+        /* Open raw socket for SASL handshake */
+        ThriftTransport *raw = (ThriftTransport *)conn->socket;
+        if (!thrift_transport_open(raw, &error)) {
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                     "[Argus][Impala] Failed to connect to %s:%d: %s",
+                     host, port, error ? error->message : "unknown error");
+            argus_set_error(&dbc->diag, "08001", msg, 0);
+            if (error) g_error_free(error);
+            goto fail;
+        }
+
+        /* Set socket timeout before SASL */
+        if (dbc->socket_timeout_sec > 0) {
+            GSocket *gsocket = NULL;
+            g_object_get(conn->socket, "socket", &gsocket, NULL);
+            if (gsocket) {
+                g_socket_set_timeout(gsocket, (guint)dbc->socket_timeout_sec);
+                g_object_unref(gsocket);
+            }
+        }
+
+        /* Perform SASL handshake (GSSAPI or PLAIN) */
+        char sasl_err[512];
+        int sasl_rc;
+        if (gssapi) {
+            ARGUS_LOG_DEBUG("Impala: Performing SASL GSSAPI handshake to %s:%d",
+                            host, port);
+            sasl_rc = argus_thrift_sasl_handshake_gssapi(
+                raw, "impala", host, sasl_err, sizeof(sasl_err));
+        } else {
+            ARGUS_LOG_DEBUG("Impala: Performing SASL PLAIN handshake to %s:%d",
+                            host, port);
+            sasl_rc = argus_thrift_sasl_handshake_plain(
+                raw, username ? username : "", password ? password : "",
+                sasl_err, sizeof(sasl_err));
+        }
+        if (sasl_rc != 0) {
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                     "[Argus][Impala] SASL handshake failed on %s:%d: %s",
+                     host, port, sasl_err);
+            argus_set_error(&dbc->diag, "08001", msg, 0);
+            thrift_transport_close(raw, NULL);
+            goto fail;
+        }
+        ARGUS_LOG_DEBUG("Impala: SASL handshake completed successfully");
+
+        /* After SASL, use framed transport */
+        conn->transport = (ThriftTransport *)g_object_new(
+            THRIFT_TYPE_FRAMED_TRANSPORT,
+            "transport", conn->socket,
+            NULL);
+    } else {
+        /* NOSASL: buffered transport, opened normally */
+        conn->transport = (ThriftTransport *)g_object_new(
+            THRIFT_TYPE_BUFFERED_TRANSPORT,
+            "transport", conn->socket,
+            NULL);
+
+        if (!thrift_transport_open(conn->transport, &error)) {
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                     "[Argus][Impala] Failed to connect to %s:%d: %s",
+                     host, port, error ? error->message : "unknown error");
+            argus_set_error(&dbc->diag, "08001", msg, 0);
+            if (error) g_error_free(error);
+            goto fail;
+        }
+
+        /* Set socket timeout */
+        if (dbc->socket_timeout_sec > 0) {
+            GSocket *gsocket = NULL;
+            g_object_get(conn->socket, "socket", &gsocket, NULL);
+            if (gsocket) {
+                g_socket_set_timeout(gsocket, (guint)dbc->socket_timeout_sec);
+                ARGUS_LOG_DEBUG("Impala: Set socket timeout to %d seconds",
+                                dbc->socket_timeout_sec);
+                g_object_unref(gsocket);
+            }
+        }
+    }
 
     conn->protocol = (ThriftProtocol *)g_object_new(
         THRIFT_TYPE_BINARY_PROTOCOL,
@@ -68,28 +168,6 @@ int impala_connect(argus_dbc_t *dbc,
         "input_protocol", conn->protocol,
         "output_protocol", conn->protocol,
         NULL);
-
-    /* Open the transport */
-    if (!thrift_transport_open(conn->transport, &error)) {
-        char msg[512];
-        snprintf(msg, sizeof(msg),
-                 "[Argus][Impala] Failed to connect to %s:%d: %s",
-                 host, port, error ? error->message : "unknown error");
-        argus_set_error(&dbc->diag, "08001", msg, 0);
-        if (error) g_error_free(error);
-        goto fail;
-    }
-
-    /* Set socket timeout if specified */
-    if (dbc->socket_timeout_sec > 0) {
-        GSocket *gsocket = NULL;
-        g_object_get(conn->socket, "socket", &gsocket, NULL);
-        if (gsocket) {
-            g_socket_set_timeout(gsocket, (guint)dbc->socket_timeout_sec);
-            ARGUS_LOG_DEBUG("Impala: Set socket timeout to %d seconds", dbc->socket_timeout_sec);
-            g_object_unref(gsocket);
-        }
-    }
 
     /* Open an Impala session with protocol V6 */
     TOpenSessionReq *open_req = g_object_new(TYPE_T_OPEN_SESSION_REQ, NULL);

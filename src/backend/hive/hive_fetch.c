@@ -17,17 +17,15 @@ static int parse_column_values(GObject *column_obj,
                                 int num_rows)
 {
     /*
-     * TColumn is a union - we need to try each value type.
-     * We'll extract the string representation for all types.
-     * The actual TColumn has: stringVal, i32Val, i64Val, doubleVal,
-     * boolVal, byteVal, i16Val, binaryVal.
+     * TColumn is a union — exactly one field is set.
+     * Use the __isset flags to determine which field contains data,
+     * since g_object_get always returns a pre-initialized child object.
      */
+    TColumn *tcol = T_COLUMN(column_obj);
 
-    /* Try to get stringVal (TStringColumn) */
-    TStringColumn *str_col = NULL;
-    g_object_get(column_obj, "stringVal", &str_col, NULL);
-
-    if (str_col) {
+    /* Try stringVal (TStringColumn) */
+    if (tcol->__isset_stringVal) {
+        TStringColumn *str_col = tcol->stringVal;
         GPtrArray *values = NULL;
         GByteArray *nulls = NULL;
         g_object_get(str_col, "values", &values, "nulls", &nulls, NULL);
@@ -56,15 +54,12 @@ static int parse_column_values(GObject *column_obj,
                 }
             }
         }
-        if (nulls) g_byte_array_unref(nulls);
-        g_object_unref(str_col);
         return 0;
     }
 
     /* Try i32Val (TI32Column) */
-    TI32Column *i32_col = NULL;
-    g_object_get(column_obj, "i32Val", &i32_col, NULL);
-    if (i32_col) {
+    if (tcol->__isset_i32Val) {
+        TI32Column *i32_col = tcol->i32Val;
         GArray *values = NULL;
         GByteArray *nulls = NULL;
         g_object_get(i32_col, "values", &values, "nulls", &nulls, NULL);
@@ -90,15 +85,12 @@ static int parse_column_values(GObject *column_obj,
                 }
             }
         }
-        if (nulls) g_byte_array_unref(nulls);
-        g_object_unref(i32_col);
         return 0;
     }
 
     /* Try i64Val (TI64Column) */
-    TI64Column *i64_col = NULL;
-    g_object_get(column_obj, "i64Val", &i64_col, NULL);
-    if (i64_col) {
+    if (tcol->__isset_i64Val) {
+        TI64Column *i64_col = tcol->i64Val;
         GArray *values = NULL;
         GByteArray *nulls = NULL;
         g_object_get(i64_col, "values", &values, "nulls", &nulls, NULL);
@@ -124,15 +116,12 @@ static int parse_column_values(GObject *column_obj,
                 }
             }
         }
-        if (nulls) g_byte_array_unref(nulls);
-        g_object_unref(i64_col);
         return 0;
     }
 
     /* Try doubleVal (TDoubleColumn) */
-    TDoubleColumn *dbl_col = NULL;
-    g_object_get(column_obj, "doubleVal", &dbl_col, NULL);
-    if (dbl_col) {
+    if (tcol->__isset_doubleVal) {
+        TDoubleColumn *dbl_col = tcol->doubleVal;
         GArray *values = NULL;
         GByteArray *nulls = NULL;
         g_object_get(dbl_col, "values", &values, "nulls", &nulls, NULL);
@@ -158,15 +147,12 @@ static int parse_column_values(GObject *column_obj,
                 }
             }
         }
-        if (nulls) g_byte_array_unref(nulls);
-        g_object_unref(dbl_col);
         return 0;
     }
 
     /* Try boolVal (TBoolColumn) */
-    TBoolColumn *bool_col = NULL;
-    g_object_get(column_obj, "boolVal", &bool_col, NULL);
-    if (bool_col) {
+    if (tcol->__isset_boolVal) {
+        TBoolColumn *bool_col = tcol->boolVal;
         GArray *values = NULL;
         GByteArray *nulls = NULL;
         g_object_get(bool_col, "values", &values, "nulls", &nulls, NULL);
@@ -191,15 +177,12 @@ static int parse_column_values(GObject *column_obj,
                 }
             }
         }
-        if (nulls) g_byte_array_unref(nulls);
-        g_object_unref(bool_col);
         return 0;
     }
 
     /* Try byteVal (TByteColumn) for TINYINT */
-    TByteColumn *byte_col = NULL;
-    g_object_get(column_obj, "byteVal", &byte_col, NULL);
-    if (byte_col) {
+    if (tcol->__isset_byteVal) {
+        TByteColumn *byte_col = tcol->byteVal;
         GArray *values = NULL;
         GByteArray *nulls = NULL;
         g_object_get(byte_col, "values", &values, "nulls", &nulls, NULL);
@@ -225,15 +208,12 @@ static int parse_column_values(GObject *column_obj,
                 }
             }
         }
-        if (nulls) g_byte_array_unref(nulls);
-        g_object_unref(byte_col);
         return 0;
     }
 
     /* Try i16Val (TI16Column) */
-    TI16Column *i16_col = NULL;
-    g_object_get(column_obj, "i16Val", &i16_col, NULL);
-    if (i16_col) {
+    if (tcol->__isset_i16Val) {
+        TI16Column *i16_col = tcol->i16Val;
         GArray *values = NULL;
         GByteArray *nulls = NULL;
         g_object_get(i16_col, "values", &values, "nulls", &nulls, NULL);
@@ -259,15 +239,12 @@ static int parse_column_values(GObject *column_obj,
                 }
             }
         }
-        if (nulls) g_byte_array_unref(nulls);
-        g_object_unref(i16_col);
         return 0;
     }
 
     /* Try binaryVal (TBinaryColumn) */
-    TBinaryColumn *bin_col = NULL;
-    g_object_get(column_obj, "binaryVal", &bin_col, NULL);
-    if (bin_col) {
+    if (tcol->__isset_binaryVal) {
+        TBinaryColumn *bin_col = tcol->binaryVal;
         GPtrArray *values = NULL;
         GByteArray *nulls = NULL;
         g_object_get(bin_col, "values", &values, "nulls", &nulls, NULL);
@@ -297,8 +274,6 @@ static int parse_column_values(GObject *column_obj,
                 }
             }
         }
-        if (nulls) g_byte_array_unref(nulls);
-        g_object_unref(bin_col);
         return 0;
     }
 
@@ -309,77 +284,43 @@ static int parse_column_values(GObject *column_obj,
 
 static int get_column_row_count(GObject *column_obj)
 {
-    /* Check stringVal first */
-    TStringColumn *str_col = NULL;
-    g_object_get(column_obj, "stringVal", &str_col, NULL);
-    if (str_col) {
-        GPtrArray *values = NULL;
-        g_object_get(str_col, "values", &values, NULL);
-        int count = values ? (int)values->len : 0;
-        g_object_unref(str_col);
-        return count;
-    }
+    TColumn *tcol = T_COLUMN(column_obj);
 
-    TI32Column *i32_col = NULL;
-    g_object_get(column_obj, "i32Val", &i32_col, NULL);
-    if (i32_col) {
-        GArray *values = NULL;
-        g_object_get(i32_col, "values", &values, NULL);
-        int count = values ? (int)values->len : 0;
-        g_object_unref(i32_col);
-        return count;
+    if (tcol->__isset_stringVal && tcol->stringVal) {
+        GPtrArray *v = NULL;
+        g_object_get(tcol->stringVal, "values", &v, NULL);
+        return v ? (int)v->len : 0;
     }
-
-    TI64Column *i64_col = NULL;
-    g_object_get(column_obj, "i64Val", &i64_col, NULL);
-    if (i64_col) {
-        GArray *values = NULL;
-        g_object_get(i64_col, "values", &values, NULL);
-        int count = values ? (int)values->len : 0;
-        g_object_unref(i64_col);
-        return count;
+    if (tcol->__isset_i32Val && tcol->i32Val) {
+        GArray *v = NULL;
+        g_object_get(tcol->i32Val, "values", &v, NULL);
+        return v ? (int)v->len : 0;
     }
-
-    TDoubleColumn *dbl_col = NULL;
-    g_object_get(column_obj, "doubleVal", &dbl_col, NULL);
-    if (dbl_col) {
-        GArray *values = NULL;
-        g_object_get(dbl_col, "values", &values, NULL);
-        int count = values ? (int)values->len : 0;
-        g_object_unref(dbl_col);
-        return count;
+    if (tcol->__isset_i64Val && tcol->i64Val) {
+        GArray *v = NULL;
+        g_object_get(tcol->i64Val, "values", &v, NULL);
+        return v ? (int)v->len : 0;
     }
-
-    TBoolColumn *bool_col = NULL;
-    g_object_get(column_obj, "boolVal", &bool_col, NULL);
-    if (bool_col) {
-        GArray *values = NULL;
-        g_object_get(bool_col, "values", &values, NULL);
-        int count = values ? (int)values->len : 0;
-        g_object_unref(bool_col);
-        return count;
+    if (tcol->__isset_doubleVal && tcol->doubleVal) {
+        GArray *v = NULL;
+        g_object_get(tcol->doubleVal, "values", &v, NULL);
+        return v ? (int)v->len : 0;
     }
-
-    TByteColumn *byte_col = NULL;
-    g_object_get(column_obj, "byteVal", &byte_col, NULL);
-    if (byte_col) {
-        GArray *values = NULL;
-        g_object_get(byte_col, "values", &values, NULL);
-        int count = values ? (int)values->len : 0;
-        g_object_unref(byte_col);
-        return count;
+    if (tcol->__isset_boolVal && tcol->boolVal) {
+        GArray *v = NULL;
+        g_object_get(tcol->boolVal, "values", &v, NULL);
+        return v ? (int)v->len : 0;
     }
-
-    TI16Column *i16_col = NULL;
-    g_object_get(column_obj, "i16Val", &i16_col, NULL);
-    if (i16_col) {
-        GArray *values = NULL;
-        g_object_get(i16_col, "values", &values, NULL);
-        int count = values ? (int)values->len : 0;
-        g_object_unref(i16_col);
-        return count;
+    if (tcol->__isset_byteVal && tcol->byteVal) {
+        GArray *v = NULL;
+        g_object_get(tcol->byteVal, "values", &v, NULL);
+        return v ? (int)v->len : 0;
     }
-
+    if (tcol->__isset_i16Val && tcol->i16Val) {
+        GArray *v = NULL;
+        g_object_get(tcol->i16Val, "values", &v, NULL);
+        return v ? (int)v->len : 0;
+    }
     return 0;
 }
 

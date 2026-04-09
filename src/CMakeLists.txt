@@ -45,6 +45,7 @@ set(ARGUS_COMPILE_DEFS ARGUS_BUILD_DLL SQL_NOUNICODEMAP)
 # Conditionally add Hive/Impala backends (require Thrift C GLib)
 if(ARGUS_BUILD_THRIFT_BACKENDS)
     list(APPEND ARGUS_SOURCES
+        backend/thrift_sasl.c
         backend/hive/hive_backend.c
         backend/hive/hive_session.c
         backend/hive/hive_query.c
@@ -59,6 +60,7 @@ if(ARGUS_BUILD_THRIFT_BACKENDS)
         backend/impala/impala_types.c
     )
     list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend
         ${CMAKE_CURRENT_SOURCE_DIR}/backend/hive
         ${CMAKE_CURRENT_SOURCE_DIR}/backend/impala
         ${THRIFT_C_GLIB_INCLUDE_DIRS}
@@ -71,6 +73,28 @@ if(ARGUS_BUILD_THRIFT_BACKENDS)
         ${THRIFT_C_GLIB_LIBRARY_DIRS}
     )
     list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_THRIFT_BACKENDS)
+    # Optional: HTTP transport for Hive (requires libcurl)
+    if(LIBCURL_FOUND)
+        list(APPEND ARGUS_SOURCES backend/hive/thrift_http_transport.c)
+        list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS ${LIBCURL_INCLUDE_DIRS})
+        list(APPEND ARGUS_LINK_LIBS ${LIBCURL_LIBRARIES})
+        list(APPEND ARGUS_LINK_DIRS ${LIBCURL_LIBRARY_DIRS})
+        list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_CURL)
+        message(STATUS "  Hive HTTP transport: ENABLED")
+    else()
+        message(STATUS "  Hive HTTP transport: DISABLED (install libcurl-dev)")
+    endif()
+    if(ARGUS_HAS_GSSAPI)
+        list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_GSSAPI)
+        if(KRB5_GSSAPI_FOUND)
+            list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS ${KRB5_GSSAPI_INCLUDE_DIRS})
+            list(APPEND ARGUS_LINK_LIBS ${KRB5_GSSAPI_LIBRARIES})
+            list(APPEND ARGUS_LINK_DIRS ${KRB5_GSSAPI_LIBRARY_DIRS})
+        else()
+            list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS ${GSSAPI_INCLUDE})
+            list(APPEND ARGUS_LINK_LIBS ${GSSAPI_LIB})
+        endif()
+    endif()
 endif()
 
 # Conditionally add Trino backend (requires libcurl + json-glib)

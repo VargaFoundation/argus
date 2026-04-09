@@ -80,6 +80,9 @@ if(BUILD_INTEGRATION_TESTS)
 
     argus_add_integration_test(test_hive_connect integration/test_hive_connect.c)
     argus_add_integration_test(test_hive_query integration/test_hive_query.c)
+    argus_add_integration_test(test_impala_connect integration/test_impala_connect.c)
+    argus_add_integration_test(test_impala_query integration/test_impala_query.c)
+    argus_add_integration_test(test_hive_http integration/test_hive_http.c)
 
     if(ARGUS_BUILD_TRINO)
         argus_add_integration_test(test_trino_connect integration/test_trino_connect.c)

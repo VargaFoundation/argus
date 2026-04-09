@@ -5,6 +5,7 @@
 #include <thrift/c_glib/thrift.h>
 #include <thrift/c_glib/transport/thrift_socket.h>
 #include <thrift/c_glib/transport/thrift_buffered_transport.h>
+#include <thrift/c_glib/transport/thrift_framed_transport.h>
 #include <thrift/c_glib/protocol/thrift_binary_protocol.h>
 
 /* SSL support (requires OpenSSL) */
@@ -22,12 +23,13 @@
 
 /* Hive connection state */
 typedef struct hive_conn {
-    ThriftSocket           *socket;
-    ThriftTransport        *transport;
+    ThriftSocket           *socket;         /* NULL in HTTP mode */
+    ThriftTransport        *transport;      /* buffered, framed, or HTTP */
     ThriftProtocol         *protocol;
     TCLIServiceIf          *client;
     TSessionHandle         *session_handle;
     char                   *database;
+    bool                    http_mode;      /* true when using HTTP transport */
 } hive_conn_t;
 
 /* Hive operation state */
