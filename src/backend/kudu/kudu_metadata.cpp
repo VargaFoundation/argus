@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <cstdarg>
 
 extern "C" {
 #include "kudu_internal.h"
@@ -17,13 +18,14 @@ using kudu::client::KuduClient;
 using kudu::client::KuduTable;
 using kudu::client::KuduSchema;
 using kudu::client::KuduColumnSchema;
+using kudu::client::sp::shared_ptr;
 using kudu::Status;
 
 /* ── Helper: get KuduClient from opaque pointer ──────────────── */
 
 static KuduClient *get_client(void *client_ptr)
 {
-    auto *sp = static_cast<std::shared_ptr<KuduClient> *>(client_ptr);
+    auto *sp = static_cast<shared_ptr<KuduClient> *>(client_ptr);
     return sp->get();
 }
 
@@ -113,7 +115,7 @@ int kudu_cpp_get_table_schema(void *client, const char *table_name,
     KuduClient *kclient = get_client(client);
     if (!kclient) return -1;
 
-    std::shared_ptr<KuduTable> table;
+    shared_ptr<KuduTable> table;
     Status s = kclient->OpenTable(table_name, &table);
     if (!s.ok()) {
         ARGUS_LOG_ERROR("Kudu OpenTable failed: %s", s.ToString().c_str());
@@ -278,6 +280,17 @@ int kudu_get_tables(argus_backend_conn_t raw_conn,
     return 0;
 }
 
+/* ── Helper: check if string contains wildcard characters ────── */
+
+static bool has_wildcard(const char *s)
+{
+    if (!s) return false;
+    for (; *s; s++) {
+        if (*s == '%' || *s == '_') return true;
+    }
+    return false;
+}
+
 /* ── GetColumns ──────────────────────────────────────────────── */
 
 extern "C"
@@ -293,25 +306,6 @@ int kudu_get_columns(argus_backend_conn_t raw_conn,
     (void)schema;
     (void)column_name;
 
-    if (!table_name || !*table_name) return -1;
-
-    /* Build full table name */
-    std::string full_name;
-    if (conn->database && *conn->database &&
-        strcmp(conn->database, "default") != 0) {
-        full_name = std::string(conn->database) + "." + table_name;
-    } else {
-        full_name = table_name;
-    }
-
-    /* Get schema from Kudu */
-    argus_column_desc_t tbl_cols[ARGUS_MAX_COLUMNS];
-    int ncols = 0;
-    int *kudu_types = nullptr;
-    int rc = kudu_cpp_get_table_schema(conn->client, full_name.c_str(),
-                                       tbl_cols, &ncols, &kudu_types);
-    if (rc != 0) return -1;
-
     /* Build synthetic result set matching ODBC SQLColumns output */
     const char *col_names[] = {
         "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME",
@@ -325,29 +319,89 @@ int kudu_get_columns(argus_backend_conn_t raw_conn,
     };
 
     kudu_operation_t *op = create_synthetic_op(7, col_names, col_types);
-    if (!op) {
-        free(kudu_types);
-        return -1;
-    }
+    if (!op) return -1;
 
     const char *cat = (catalog && *catalog) ? catalog : conn->database;
 
-    for (int i = 0; i < ncols; i++) {
-        char ordinal[16];
-        snprintf(ordinal, sizeof(ordinal), "%d", i + 1);
+    /* If table_name is a wildcard or NULL, list matching tables first */
+    if (!table_name || !*table_name || has_wildcard(table_name)) {
+        char **tables = nullptr;
+        int table_count = 0;
+        int rc = kudu_cpp_list_tables(conn->client, conn->database,
+                                       table_name, &tables, &table_count);
+        if (rc != 0 || table_count == 0) {
+            /* Return empty result set (still success) */
+            if (tables) free(tables);
+            *out_op = op;
+            return 0;
+        }
 
-        const char *type_name = kudu_types ?
-            kudu_type_id_to_name(kudu_types[i]) : "UNKNOWN";
-        const char *nullable = tbl_cols[i].nullable == SQL_NULLABLE ?
-            "YES" : "NO";
+        for (int t = 0; t < table_count; t++) {
+            /* Build full table name for schema lookup */
+            std::string full_name;
+            if (conn->database && *conn->database &&
+                strcmp(conn->database, "default") != 0) {
+                full_name = std::string(conn->database) + "." + tables[t];
+            } else {
+                full_name = tables[t];
+            }
 
-        add_synthetic_row(op->synthetic_cache, 7,
-                          cat, "default", table_name,
-                          reinterpret_cast<const char *>(tbl_cols[i].name),
-                          type_name, ordinal, nullable);
+            argus_column_desc_t tbl_cols[ARGUS_MAX_COLUMNS];
+            int ncols = 0;
+            int *kudu_types = nullptr;
+            if (kudu_cpp_get_table_schema(conn->client, full_name.c_str(),
+                                           tbl_cols, &ncols, &kudu_types) == 0) {
+                for (int i = 0; i < ncols; i++) {
+                    char ordinal[16];
+                    snprintf(ordinal, sizeof(ordinal), "%d", i + 1);
+                    const char *type_name = kudu_types ?
+                        kudu_type_id_to_name(kudu_types[i]) : "UNKNOWN";
+                    const char *nullable = tbl_cols[i].nullable == SQL_NULLABLE ?
+                        "YES" : "NO";
+                    add_synthetic_row(op->synthetic_cache, 7,
+                                      cat, "default", tables[t],
+                                      reinterpret_cast<const char *>(tbl_cols[i].name),
+                                      type_name, ordinal, nullable);
+                }
+                free(kudu_types);
+            }
+            free(tables[t]);
+        }
+        free(tables);
+    } else {
+        /* Specific table name — get its columns directly */
+        std::string full_name;
+        if (conn->database && *conn->database &&
+            strcmp(conn->database, "default") != 0) {
+            full_name = std::string(conn->database) + "." + table_name;
+        } else {
+            full_name = table_name;
+        }
+
+        argus_column_desc_t tbl_cols[ARGUS_MAX_COLUMNS];
+        int ncols = 0;
+        int *kudu_types = nullptr;
+        int rc = kudu_cpp_get_table_schema(conn->client, full_name.c_str(),
+                                           tbl_cols, &ncols, &kudu_types);
+        if (rc != 0) {
+            kudu_operation_free(op);
+            return -1;
+        }
+
+        for (int i = 0; i < ncols; i++) {
+            char ordinal[16];
+            snprintf(ordinal, sizeof(ordinal), "%d", i + 1);
+            const char *type_name = kudu_types ?
+                kudu_type_id_to_name(kudu_types[i]) : "UNKNOWN";
+            const char *nullable = tbl_cols[i].nullable == SQL_NULLABLE ?
+                "YES" : "NO";
+            add_synthetic_row(op->synthetic_cache, 7,
+                              cat, "default", table_name,
+                              reinterpret_cast<const char *>(tbl_cols[i].name),
+                              type_name, ordinal, nullable);
+        }
+        free(kudu_types);
     }
-
-    free(kudu_types);
 
     *out_op = op;
     return 0;
@@ -421,7 +475,7 @@ int kudu_get_primary_keys(argus_backend_conn_t raw_conn,
     KuduClient *kclient = get_client(conn->client);
     if (!kclient) return -1;
 
-    std::shared_ptr<KuduTable> table;
+    shared_ptr<KuduTable> table;
     Status s = kclient->OpenTable(full_name, &table);
     if (!s.ok()) {
         ARGUS_LOG_ERROR("Kudu OpenTable failed: %s", s.ToString().c_str());
@@ -445,17 +499,15 @@ int kudu_get_primary_keys(argus_backend_conn_t raw_conn,
     if (!op) return -1;
 
     const char *cat = (catalog && *catalog) ? catalog : conn->database;
-    int key_seq = 1;
 
-    int ncols = kschema.num_columns();
-    int num_key_cols = kschema.GetAutoIncrementingColumnIndex();
-    /* num_key_cols is -1 if no auto-increment; use key column count instead */
-    for (int i = 0; i < ncols; i++) {
-        const KuduColumnSchema &col = kschema.Column(i);
-        if (!col.is_key()) continue;
+    std::vector<int> key_indexes;
+    kschema.GetPrimaryKeyColumnIndexes(&key_indexes);
+
+    for (int seq = 0; seq < static_cast<int>(key_indexes.size()); seq++) {
+        const KuduColumnSchema &col = kschema.Column(key_indexes[seq]);
 
         char seq_str[16];
-        snprintf(seq_str, sizeof(seq_str), "%d", key_seq++);
+        snprintf(seq_str, sizeof(seq_str), "%d", seq + 1);
 
         add_synthetic_row(op->synthetic_cache, 6,
                           cat, "default", table_name,

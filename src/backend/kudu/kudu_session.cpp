@@ -3,8 +3,8 @@
  * Uses the Kudu C++ client library with extern "C" wrappers.
  */
 #include <kudu/client/client.h>
+#include <kudu/util/monotime.h>
 #include <string>
-#include <memory>
 
 extern "C" {
 #include "kudu_internal.h"
@@ -16,6 +16,7 @@ extern "C" {
 using kudu::client::KuduClient;
 using kudu::client::KuduClientBuilder;
 using kudu::client::KuduTable;
+using kudu::client::sp::shared_ptr;
 using kudu::Status;
 
 /* ── C++ client creation/destruction ─────────────────────────── */
@@ -34,8 +35,8 @@ int kudu_cpp_client_create(const char *master_addresses,
             kudu::MonoDelta::FromSeconds(timeout_sec));
     }
 
-    std::shared_ptr<KuduClient> *client_ptr =
-        new std::shared_ptr<KuduClient>();
+    shared_ptr<KuduClient> *client_ptr =
+        new shared_ptr<KuduClient>();
     Status s = builder.Build(client_ptr);
     if (!s.ok()) {
         delete client_ptr;
@@ -50,7 +51,7 @@ extern "C"
 void kudu_cpp_client_destroy(void *client)
 {
     if (!client) return;
-    auto *client_ptr = static_cast<std::shared_ptr<KuduClient> *>(client);
+    auto *client_ptr = static_cast<shared_ptr<KuduClient> *>(client);
     delete client_ptr;
 }
 
@@ -116,7 +117,7 @@ bool kudu_is_alive(argus_backend_conn_t raw_conn)
     if (!conn || !conn->client) return false;
 
     /* Try listing tables as a lightweight health check */
-    auto *client_ptr = static_cast<std::shared_ptr<KuduClient> *>(conn->client);
+    auto *client_ptr = static_cast<shared_ptr<KuduClient> *>(conn->client);
     std::vector<std::string> tables;
     Status s = (*client_ptr)->ListTables(&tables);
     return s.ok();

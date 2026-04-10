@@ -15,6 +15,7 @@ function(argus_add_unit_test name source)
     target_link_libraries(${name} PRIVATE
         argus_odbc_static
         ${CMOCKA_LIBRARIES}
+        stdc++
     )
     target_link_directories(${name} PRIVATE
         ${CMOCKA_LIBRARY_DIRS}

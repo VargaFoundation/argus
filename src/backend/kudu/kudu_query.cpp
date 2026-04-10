@@ -3,15 +3,20 @@
  * Uses the Kudu C++ client library with extern "C" wrappers.
  */
 #include <kudu/client/client.h>
+#include <kudu/client/value.h>
 #include <string>
 #include <vector>
-#include <memory>
 #include <cstring>
 
 extern "C" {
 #include "kudu_internal.h"
 #include "argus/log.h"
 }
+
+/* sql.h defines BOOL as a macro, conflicting with KuduColumnSchema::BOOL */
+#ifdef BOOL
+#undef BOOL
+#endif
 
 using kudu::client::KuduClient;
 using kudu::client::KuduTable;
@@ -21,6 +26,7 @@ using kudu::client::KuduPredicate;
 using kudu::client::KuduValue;
 using kudu::client::KuduSchema;
 using kudu::client::KuduColumnSchema;
+using kudu::client::sp::shared_ptr;
 using kudu::Slice;
 using kudu::Status;
 
@@ -28,7 +34,7 @@ using kudu::Status;
 
 static KuduClient *get_client(void *client_ptr)
 {
-    auto *sp = static_cast<std::shared_ptr<KuduClient> *>(client_ptr);
+    auto *sp = static_cast<shared_ptr<KuduClient> *>(client_ptr);
     return sp->get();
 }
 
@@ -57,7 +63,7 @@ int kudu_cpp_execute_scan(void *client, const kudu_parsed_query_t *query,
                                                query->table_name);
 
     /* Open the table */
-    std::shared_ptr<KuduTable> table;
+    shared_ptr<KuduTable> table;
     Status s = kclient->OpenTable(table_name, &table);
     if (!s.ok()) {
         ARGUS_LOG_ERROR("Kudu OpenTable failed for '%s': %s",
@@ -91,7 +97,13 @@ int kudu_cpp_execute_scan(void *client, const kudu_parsed_query_t *query,
     /* Add predicates */
     for (int i = 0; i < query->num_predicates; i++) {
         kudu_predicate_t *pred = &query->predicates[i];
-        int col_idx = schema.find_column(pred->column);
+        int col_idx = -1;
+        for (int ci = 0; ci < static_cast<int>(schema.num_columns()); ci++) {
+            if (schema.Column(ci).name() == pred->column) {
+                col_idx = ci;
+                break;
+            }
+        }
         if (col_idx < 0) {
             ARGUS_LOG_ERROR("Kudu column not found: %s", pred->column);
             delete scanner;
@@ -357,13 +369,15 @@ int kudu_cpp_fetch_batch(kudu_operation_t *op,
             case KuduColumnSchema::STRING: {
                 Slice v;
                 row.GetString(c, &v);
-                cell->data = strndup(v.data(), v.size());
+                cell->data = strndup(
+                    reinterpret_cast<const char *>(v.data()), v.size());
                 break;
             }
             case KuduColumnSchema::BINARY: {
                 Slice v;
                 row.GetBinary(c, &v);
-                cell->data = strndup(v.data(), v.size());
+                cell->data = strndup(
+                    reinterpret_cast<const char *>(v.data()), v.size());
                 break;
             }
             case KuduColumnSchema::UNIXTIME_MICROS: {
