@@ -170,6 +170,12 @@ bool argus_metadata_cache_lookup(argus_dbc_t *dbc, argus_stmt_t *stmt,
     stmt->num_cols = entry->num_cols;
     stmt->metadata_fetched = true;
     stmt->executed = true;
+    /* Rows are already in the cache (and exhausted); mark the fetch as started
+     * so SQLFetch iterates the cache instead of re-fetching from the backend
+     * (there is no backend op on a cache hit — that would clear the cache and
+     * fetch with a NULL op). */
+    stmt->fetch_started = true;
+    stmt->row_cache.current_row = 0;
 
     ARGUS_LOG_DEBUG("Metadata cache hit for %s (age=%llds)",
                     func, (long long)age_sec);

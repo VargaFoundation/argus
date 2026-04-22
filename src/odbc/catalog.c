@@ -151,7 +151,10 @@ SQLRETURN SQL_API SQLTables(
             stmt->metadata_fetched = true;
         }
         stmt->row_cache.exhausted = true;
-        stmt->fetch_started = false;
+        /* Rows were fetched eagerly into the cache; mark the fetch as started so
+         * SQLFetch iterates the cache instead of re-fetching (which would clear
+         * the cache and read the empty next batch). */
+        stmt->fetch_started = true;
         /* Store in cache */
         argus_metadata_cache_store(dbc, stmt, "SQLTables",
                                     catalog, schema, table_name, table_type);
@@ -235,7 +238,10 @@ SQLRETURN SQL_API SQLColumns(
             stmt->metadata_fetched = true;
         }
         stmt->row_cache.exhausted = true;
-        stmt->fetch_started = false;
+        /* Rows were fetched eagerly into the cache; mark the fetch as started so
+         * SQLFetch iterates the cache instead of re-fetching (which would clear
+         * the cache and read the empty next batch). */
+        stmt->fetch_started = true;
         /* Store in cache */
         argus_metadata_cache_store(dbc, stmt, "SQLColumns",
                                     catalog, schema, table_name, column_name);
