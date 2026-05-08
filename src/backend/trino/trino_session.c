@@ -4,6 +4,7 @@
 #include "argus/log.h"
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 
 /* ── Helper: Apply SSL and timeout settings to curl ─────────────── */
@@ -37,6 +38,30 @@ static void trino_apply_curl_settings(trino_conn_t *conn, CURL *curl)
     }
     if (conn->query_timeout_sec > 0) {
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)conn->query_timeout_sec);
+    }
+
+    /* Authentication. Bearer (JWT/OAuth2) is applied as a default header at
+     * connect time; Basic and Negotiate are set on the easy handle here because
+     * curl_easy_reset() wiped them at the start of each request. */
+    switch (conn->auth_mode) {
+    case TRINO_AUTH_BASIC: {
+        char userpwd[512];
+        snprintf(userpwd, sizeof(userpwd), "%s:%s",
+                 conn->user ? conn->user : "",
+                 conn->password ? conn->password : "");
+        curl_easy_setopt(curl, CURLOPT_HTTPAUTH, (long)CURLAUTH_BASIC);
+        curl_easy_setopt(curl, CURLOPT_USERPWD, userpwd);
+        break;
+    }
+    case TRINO_AUTH_NEGOTIATE:
+        /* Kerberos/SPNEGO via the ambient credential cache (kinit). */
+        curl_easy_setopt(curl, CURLOPT_HTTPAUTH, (long)CURLAUTH_NEGOTIATE);
+        curl_easy_setopt(curl, CURLOPT_USERPWD, ":");
+        break;
+    case TRINO_AUTH_BEARER:
+    case TRINO_AUTH_NONE:
+    default:
+        break;
     }
 }
 
@@ -136,6 +161,80 @@ int trino_http_delete(trino_conn_t *conn, const char *url)
     return (res == CURLE_OK) ? 0 : -1;
 }
 
+/* ── OAuth2 client-credentials: fetch an access token from the IdP ─── */
+
+static int trino_fetch_oauth_token(trino_conn_t *conn, argus_dbc_t *dbc,
+                                   char **out_token)
+{
+    *out_token = NULL;
+    CURL *c = curl_easy_init();
+    if (!c) return -1;
+
+    /* Build a client_secret_post body (widely accepted: Keycloak/Okta/Auth0). */
+    char *eid = curl_easy_escape(c, dbc->oauth_client_id, 0);
+    char *esec = curl_easy_escape(c, dbc->oauth_client_secret, 0);
+    char *escope = dbc->oauth_scope ? curl_easy_escape(c, dbc->oauth_scope, 0) : NULL;
+    char body[2048];
+    if (escope)
+        snprintf(body, sizeof(body),
+                 "grant_type=client_credentials&client_id=%s&client_secret=%s&scope=%s",
+                 eid ? eid : "", esec ? esec : "", escope);
+    else
+        snprintf(body, sizeof(body),
+                 "grant_type=client_credentials&client_id=%s&client_secret=%s",
+                 eid ? eid : "", esec ? esec : "");
+
+    struct curl_slist *hdrs = curl_slist_append(
+        NULL, "Content-Type: application/x-www-form-urlencoded");
+    trino_response_t resp = {0};
+
+    curl_easy_setopt(c, CURLOPT_URL, dbc->oauth_token_url);
+    curl_easy_setopt(c, CURLOPT_POST, 1L);
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &resp);
+    if (conn->ssl_enabled) {
+        curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
+        curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);
+        if (conn->ssl_ca_file) curl_easy_setopt(c, CURLOPT_CAINFO, conn->ssl_ca_file);
+    }
+    if (conn->connect_timeout_sec > 0)
+        curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, (long)conn->connect_timeout_sec);
+
+    CURLcode res = curl_easy_perform(c);
+    long http_code = 0;
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
+
+    curl_free(eid);
+    curl_free(esec);
+    if (escope) curl_free(escope);
+    curl_slist_free_all(hdrs);
+
+    int ret = -1;
+    if (res == CURLE_OK && http_code >= 200 && http_code < 300 && resp.data) {
+        JsonParser *parser = json_parser_new();
+        if (json_parser_load_from_data(parser, resp.data, (gssize)resp.size, NULL)) {
+            JsonNode *root = json_parser_get_root(parser);
+            if (root && JSON_NODE_HOLDS_OBJECT(root)) {
+                JsonObject *obj = json_node_get_object(root);
+                if (json_object_has_member(obj, "access_token")) {
+                    const char *tok = json_object_get_string_member(obj, "access_token");
+                    if (tok && *tok) { *out_token = strdup(tok); ret = 0; }
+                }
+            }
+        }
+        g_object_unref(parser);
+    } else {
+        ARGUS_LOG_ERROR("Trino OAuth2 token request failed (curl=%d, http=%ld)",
+                        (int)res, http_code);
+    }
+
+    free(resp.data);
+    curl_easy_cleanup(c);
+    return ret;
+}
+
 /* ── Connect to Trino ────────────────────────────────────────── */
 
 int trino_connect(argus_dbc_t *dbc,
@@ -144,9 +243,6 @@ int trino_connect(argus_dbc_t *dbc,
                   const char *database, const char *auth_mechanism,
                   argus_backend_conn_t *out_conn)
 {
-    (void)password;
-    (void)auth_mechanism;
-
     trino_conn_t *conn = calloc(1, sizeof(trino_conn_t));
     if (!conn) {
         argus_set_error(&dbc->diag, "HY001",
@@ -181,6 +277,40 @@ int trino_connect(argus_dbc_t *dbc,
     conn->catalog = strdup(database && *database ? database : "hive");
     conn->schema = strdup("default");
 
+    /* Determine authentication mode from AuthMech (+ credentials). */
+    if (password && *password) conn->password = strdup(password);
+    if (auth_mechanism &&
+        (strcasecmp(auth_mechanism, "GSSAPI") == 0 ||
+         strcasecmp(auth_mechanism, "KERBEROS") == 0 ||
+         strcasecmp(auth_mechanism, "SPNEGO") == 0 ||
+         strcasecmp(auth_mechanism, "NEGOTIATE") == 0)) {
+        conn->auth_mode = TRINO_AUTH_NEGOTIATE;
+    } else if (auth_mechanism &&
+        (strcasecmp(auth_mechanism, "JWT") == 0 ||
+         strcasecmp(auth_mechanism, "BEARER") == 0 ||
+         strcasecmp(auth_mechanism, "OAUTH2") == 0 ||
+         strcasecmp(auth_mechanism, "OAUTH") == 0 ||
+         strcasecmp(auth_mechanism, "CLIENT_CREDENTIALS") == 0)) {
+        conn->auth_mode = TRINO_AUTH_BEARER;   /* static token in PWD, or fetched below */
+    } else if (conn->password &&
+        (!auth_mechanism ||
+         strcasecmp(auth_mechanism, "BASIC") == 0 ||
+         strcasecmp(auth_mechanism, "LDAP") == 0 ||
+         strcasecmp(auth_mechanism, "PLAIN") == 0 ||
+         strcasecmp(auth_mechanism, "PASSWORD") == 0 ||
+         /* default mech is NOSASL; a password present implies Basic for Trino */
+         strcasecmp(auth_mechanism, "NOSASL") == 0)) {
+        conn->auth_mode = TRINO_AUTH_BASIC;
+    } else {
+        conn->auth_mode = TRINO_AUTH_NONE;
+    }
+
+    if ((conn->auth_mode == TRINO_AUTH_BASIC ||
+         conn->auth_mode == TRINO_AUTH_BEARER) && !conn->ssl_enabled) {
+        ARGUS_LOG_WARN("Trino: sending credentials over plain HTTP (no SSL) — "
+                       "Trino normally requires TLS for password/token auth");
+    }
+
     /* Initialize CURL */
     conn->curl = curl_easy_init();
     if (!conn->curl) {
@@ -188,10 +318,34 @@ int trino_connect(argus_dbc_t *dbc,
                         "[Argus][Trino] Failed to initialize HTTP client", 0);
         free(conn->base_url);
         free(conn->user);
+        free(conn->password);
         free(conn->catalog);
         free(conn->schema);
         free(conn);
         return -1;
+    }
+
+    /* OAuth2 client-credentials (M2M): obtain an access token from the IdP and
+     * use it as the Bearer token. Triggered when an OAuth2-family AuthMech is
+     * set together with the token endpoint + client credentials. */
+    if (conn->auth_mode == TRINO_AUTH_BEARER &&
+        dbc->oauth_token_url && dbc->oauth_client_id && dbc->oauth_client_secret) {
+        char *tok = NULL;
+        if (trino_fetch_oauth_token(conn, dbc, &tok) != 0 || !tok) {
+            argus_set_error(&dbc->diag, "08001",
+                "[Argus][Trino] OAuth2 client-credentials token request failed", 0);
+            curl_easy_cleanup(conn->curl);
+            free(conn->base_url);
+            free(conn->user);
+            free(conn->password);
+            free(conn->catalog);
+            free(conn->schema);
+            free(conn);
+            return -1;
+        }
+        free(conn->password);
+        conn->password = tok;   /* fetched access token, used as Bearer below */
+        ARGUS_LOG_INFO("Trino: obtained OAuth2 access token via client-credentials");
     }
 
     /* Build default headers */
@@ -221,6 +375,18 @@ int trino_connect(argus_dbc_t *dbc,
         ARGUS_LOG_DEBUG("Trino v2 spooling protocol enabled");
     }
 
+    /* Bearer (JWT/OAuth2) auth is a static Authorization header. */
+    if (conn->auth_mode == TRINO_AUTH_BEARER && conn->password) {
+        char auth_hdr[2048];
+        snprintf(auth_hdr, sizeof(auth_hdr), "Authorization: Bearer %s", conn->password);
+        conn->default_headers = curl_slist_append(conn->default_headers, auth_hdr);
+        ARGUS_LOG_DEBUG("Trino: JWT/OAuth2 bearer token auth enabled");
+    } else if (conn->auth_mode == TRINO_AUTH_NEGOTIATE) {
+        ARGUS_LOG_DEBUG("Trino: Kerberos/SPNEGO (Negotiate) auth enabled");
+    } else if (conn->auth_mode == TRINO_AUTH_BASIC) {
+        ARGUS_LOG_DEBUG("Trino: HTTP Basic (password) auth enabled");
+    }
+
     /* Verify connectivity with a lightweight request */
     trino_response_t resp = {0};
     char stmt_url[1024];
@@ -236,6 +402,7 @@ int trino_connect(argus_dbc_t *dbc,
         curl_easy_cleanup(conn->curl);
         free(conn->base_url);
         free(conn->user);
+        free(conn->password);
         free(conn->catalog);
         free(conn->schema);
         free(conn);
@@ -294,6 +461,7 @@ void trino_disconnect(argus_backend_conn_t raw_conn)
 
     free(conn->base_url);
     free(conn->user);
+    free(conn->password);
     free(conn->catalog);
     free(conn->schema);
 

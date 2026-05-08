@@ -261,6 +261,24 @@ SQLRETURN SQL_API SQLDriverConnect(
     v = argus_conn_params_get(&params, "HTTPPATH");
     if (v) { free(dbc->http_path); dbc->http_path = strdup(v); }
 
+    /* OAuth2 client-credentials (M2M) parameters (Trino) */
+    v = argus_conn_params_get(&params, "OAUTH2TOKENENDPOINT");
+    if (!v) v = argus_conn_params_get(&params, "TOKENURI");
+    if (!v) v = argus_conn_params_get(&params, "TOKENURL");
+    if (v) { free(dbc->oauth_token_url); dbc->oauth_token_url = strdup(v); }
+
+    v = argus_conn_params_get(&params, "OAUTH2CLIENTID");
+    if (!v) v = argus_conn_params_get(&params, "CLIENTID");
+    if (v) { free(dbc->oauth_client_id); dbc->oauth_client_id = strdup(v); }
+
+    v = argus_conn_params_get(&params, "OAUTH2CLIENTSECRET");
+    if (!v) v = argus_conn_params_get(&params, "CLIENTSECRET");
+    if (v) { free(dbc->oauth_client_secret); dbc->oauth_client_secret = strdup(v); }
+
+    v = argus_conn_params_get(&params, "OAUTH2SCOPE");
+    if (!v) v = argus_conn_params_get(&params, "SCOPE");
+    if (v) { free(dbc->oauth_scope); dbc->oauth_scope = strdup(v); }
+
     v = argus_conn_params_get(&params, "TRINOPROTOCOL");
     if (!v) v = argus_conn_params_get(&params, "TRINO_PROTOCOL");
     if (v) {

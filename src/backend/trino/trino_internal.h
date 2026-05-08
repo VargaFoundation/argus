@@ -7,11 +7,21 @@
 #include "argus/types.h"
 #include "argus/backend.h"
 
+/* Authentication mode (derived from AuthMech + credentials) */
+typedef enum {
+    TRINO_AUTH_NONE = 0,    /* X-Trino-User only (no credentials) */
+    TRINO_AUTH_BASIC,       /* HTTP Basic (LDAP / password) — requires TLS */
+    TRINO_AUTH_BEARER,      /* JWT / OAuth2 access token in Authorization header */
+    TRINO_AUTH_NEGOTIATE    /* Kerberos / SPNEGO via libcurl Negotiate */
+} trino_auth_mode_t;
+
 /* Trino connection state */
 typedef struct trino_conn {
     CURL               *curl;
     char               *base_url;       /* e.g. "http://host:port" or "https://..." */
     char               *user;
+    char               *password;       /* Basic password or Bearer token (NULL if none) */
+    trino_auth_mode_t   auth_mode;
     char               *catalog;
     char               *schema;
     struct curl_slist   *default_headers;

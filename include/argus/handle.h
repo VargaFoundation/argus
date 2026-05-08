@@ -78,6 +78,12 @@ struct argus_dbc {
     int          log_level;
     char        *log_file;
 
+    /* OAuth2 client-credentials (M2M) — used by Trino when AuthMech=OAUTH2 */
+    char        *oauth_token_url;     /* IdP token endpoint */
+    char        *oauth_client_id;
+    char        *oauth_client_secret;
+    char        *oauth_scope;         /* optional */
+
     /* SQLBrowseConnect accumulated keywords */
     char        *browse_buf;
 
