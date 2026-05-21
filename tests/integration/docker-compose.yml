@@ -100,3 +100,47 @@ services:
     depends_on:
       kudu-master:
         condition: service_healthy
+
+  # ── Spark Thrift Server ────────────────────────────────────────────────
+  # Spark's Thrift Server is HiveServer2-compatible; Argus reaches it through
+  # the Hive backend. Exposed on host port 10010 to avoid clashing with the
+  # Hive container on 10000. NOTE: template — the start command/options may need
+  # tuning for the chosen Spark image version.
+  spark-thrift:
+    image: apache/spark:3.5.3
+    container_name: argus-spark-thrift
+    ports:
+      - "10010:10000"   # Spark Thrift Server (HiveServer2 protocol)
+    command: >-
+      bash -c "/opt/spark/sbin/start-thriftserver.sh
+      --master 'local[2]'
+      --hiveconf hive.server2.thrift.port=10000
+      --hiveconf hive.server2.authentication=NOSASL
+      && tail -F /opt/spark/logs/*.out"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/10000"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  # ── Flink SQL Gateway (HiveServer2 endpoint) ───────────────────────────
+  # Flink's SQL Gateway can expose a HiveServer2 endpoint (FLIP-223), reached
+  # through the Hive backend. Exposed on host port 10011. NOTE: template — a
+  # production setup also requires the flink-sql-connector-hive jar on the
+  # classpath and gateway endpoint configuration; validate locally.
+  flink-sql-gateway:
+    image: flink:1.18
+    container_name: argus-flink-sql-gateway
+    ports:
+      - "10011:10000"   # SQL Gateway hiveserver2 endpoint
+    command: >-
+      bash -c "/opt/flink/bin/sql-gateway.sh start-foreground
+      -Dsql-gateway.endpoint.type=hiveserver2
+      -Dsql-gateway.endpoint.hiveserver2.thrift.port=10000"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/10000"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
