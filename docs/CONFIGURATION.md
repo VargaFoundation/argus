@@ -103,6 +103,32 @@ DRIVER=Argus;BACKEND=trino;HOST=trino.example.com;PORT=8080;UID=analyst;DATABASE
 - DATABASE parameter maps to Trino catalog
 - Catalog operations via `information_schema` queries
 - Headers: X-Trino-User, X-Trino-Catalog, X-Trino-Schema
+- **Authentication** (`AuthMech`):
+  - `BASIC` / `LDAP` / `PLAIN` (or supplying `PWD`): HTTP Basic — requires TLS (`SSL=1`).
+  - `JWT` / `BEARER`: token in `PWD`, sent as `Authorization: Bearer <token>`.
+  - `OAUTH2` / `CLIENT_CREDENTIALS`: machine-to-machine OAuth2 — Argus fetches a
+    token from the IdP token endpoint and uses it as the bearer. Params:
+    `OAuth2TokenEndpoint` (`TokenURI`), `ClientId`, `ClientSecret`, optional `Scope`.
+  - `GSSAPI` / `KERBEROS`: SPNEGO/Negotiate via libcurl using a `kinit` ticket.
+
+  ```
+  DRIVER=Argus;BACKEND=trino;HOST=trino;PORT=8443;SSL=1;UID=analyst;PWD={secret};AuthMech=LDAP
+  DRIVER=Argus;BACKEND=trino;HOST=trino;PORT=8443;SSL=1;AuthMech=OAUTH2;OAuth2TokenEndpoint=https://idp/token;ClientId=cid;ClientSecret=csec;Scope=trino
+  ```
+
+## Connecting to Spark and Flink (via the Hive backend)
+
+Apache Spark (Thrift Server) and Apache Flink (SQL Gateway `hiveserver2` endpoint)
+both speak the HiveServer2 protocol, so they are reached with `BACKEND=hive` — no
+separate backend is required.
+
+```
+DRIVER=Argus;BACKEND=hive;HOST=spark-thrift;PORT=10000;UID=spark;AuthMech=NOSASL
+DRIVER=Argus;BACKEND=hive;HOST=flink-gateway;PORT=10000;UID=flink;AuthMech=NOSASL
+```
+
+> Spark Connect (gRPC) is a DataFrame API, not a SQL wire protocol, and is not
+> reachable over ODBC; use the Thrift Server.
 
 ## DSN Examples
 
