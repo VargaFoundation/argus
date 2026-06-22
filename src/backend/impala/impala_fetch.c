@@ -405,9 +405,13 @@ int impala_fetch_results(argus_backend_conn_t raw_conn,
     if (num_cols) *num_cols = ncols;
     cache->num_cols = ncols;
 
-    /* Determine number of rows from first column */
-    GObject *first_col = (GObject *)g_ptr_array_index(tcolumns, 0);
-    int nrows = get_column_row_count(first_col);
+    /* Determine the row count as the max populated length across all columns
+     * (the first column may be entirely NULL, e.g. a NULL TABLE_CAT). */
+    int nrows = 0;
+    for (int c = 0; c < ncols; c++) {
+        int rc = get_column_row_count((GObject *)g_ptr_array_index(tcolumns, c));
+        if (rc > nrows) nrows = rc;
+    }
 
     if (nrows == 0) {
         g_object_unref(row_set);
