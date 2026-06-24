@@ -59,6 +59,11 @@ int hive_get_schemas(argus_backend_conn_t conn,
 int hive_get_catalogs(argus_backend_conn_t conn,
                       argus_backend_op_t *out_op);
 
+int hive_get_primary_keys(argus_backend_conn_t conn,
+                          const char *catalog, const char *schema,
+                          const char *table_name,
+                          argus_backend_op_t *out_op);
+
 /* Hive backend vtable */
 static const argus_backend_t hive_backend = {
     .name                  = "hive",
@@ -76,6 +81,7 @@ static const argus_backend_t hive_backend = {
     .get_type_info         = hive_get_type_info,
     .get_schemas           = hive_get_schemas,
     .get_catalogs          = hive_get_catalogs,
+    .get_primary_keys      = hive_get_primary_keys,
 };
 
 const argus_backend_t *argus_hive_backend_get(void)

@@ -429,6 +429,70 @@ int impala_get_schemas(argus_backend_conn_t raw_conn,
     return 0;
 }
 
+/* ── GetPrimaryKeys via TCLIService ──────────────────────────── */
+
+int impala_get_primary_keys(argus_backend_conn_t raw_conn,
+                            const char *catalog,
+                            const char *schema,
+                            const char *table_name,
+                            argus_backend_op_t *out_op)
+{
+    impala_conn_t *conn = (impala_conn_t *)raw_conn;
+    if (!conn || !conn->client) return -1;
+
+    GError *error = NULL;
+
+    TGetPrimaryKeysReq *req = g_object_new(TYPE_T_GET_PRIMARY_KEYS_REQ, NULL);
+    g_object_set(req, "sessionHandle", conn->session_handle, NULL);
+    if (catalog && *catalog)
+        g_object_set(req, "catalogName", catalog, NULL);
+    if (schema && *schema)
+        g_object_set(req, "schemaName", schema, NULL);
+    if (table_name && *table_name)
+        g_object_set(req, "tableName", table_name, NULL);
+
+    TGetPrimaryKeysResp *resp = g_object_new(TYPE_T_GET_PRIMARY_KEYS_RESP, NULL);
+
+    gboolean ok = t_c_l_i_service_client_get_primary_keys(
+        conn->client, &resp, req, &error);
+
+    if (!ok || !resp) {
+        if (error) g_error_free(error);
+        g_object_unref(req);
+        if (resp) g_object_unref(resp);
+        return -1;
+    }
+
+    TStatus *status = NULL;
+    g_object_get(resp, "status", &status, NULL);
+    if (status) {
+        TStatusCode status_code;
+        g_object_get(status, "statusCode", &status_code, NULL);
+        g_object_unref(status);
+        if (status_code == T_STATUS_CODE_ERROR_STATUS) {
+            g_object_unref(req);
+            g_object_unref(resp);
+            return -1;
+        }
+    }
+
+    impala_operation_t *op = impala_operation_new();
+    if (!op) {
+        g_object_unref(req);
+        g_object_unref(resp);
+        return -1;
+    }
+
+    g_object_get(resp, "operationHandle", &op->op_handle, NULL);
+    op->has_result_set = true;
+
+    g_object_unref(req);
+    g_object_unref(resp);
+
+    *out_op = op;
+    return 0;
+}
+
 /* ── GetCatalogs via TCLIService ─────────────────────────────── */
 
 int impala_get_catalogs(argus_backend_conn_t raw_conn,

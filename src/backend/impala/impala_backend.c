@@ -59,6 +59,11 @@ int impala_get_schemas(argus_backend_conn_t conn,
 int impala_get_catalogs(argus_backend_conn_t conn,
                         argus_backend_op_t *out_op);
 
+int impala_get_primary_keys(argus_backend_conn_t conn,
+                            const char *catalog, const char *schema,
+                            const char *table_name,
+                            argus_backend_op_t *out_op);
+
 /* Impala backend vtable */
 static const argus_backend_t impala_backend = {
     .name                  = "impala",
@@ -76,6 +81,7 @@ static const argus_backend_t impala_backend = {
     .get_type_info         = impala_get_type_info,
     .get_schemas           = impala_get_schemas,
     .get_catalogs          = impala_get_catalogs,
+    .get_primary_keys      = impala_get_primary_keys,
 };
 
 const argus_backend_t *argus_impala_backend_get(void)
