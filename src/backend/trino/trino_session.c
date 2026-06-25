@@ -7,6 +7,9 @@
 #include <strings.h>
 #include <stdio.h>
 
+/* Forward declarations for the OAuth2 token-refresh path. */
+static int trino_refresh_oauth_token(trino_conn_t *conn);
+
 /* ── Helper: Apply SSL and timeout settings to curl ─────────────── */
 
 static void trino_apply_curl_settings(trino_conn_t *conn, CURL *curl)
@@ -109,6 +112,27 @@ int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
 
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    /* OAuth2 (M2M) access token may have expired; refresh once and retry. */
+    if (http_code == 401 && conn->oauth_m2m &&
+        trino_refresh_oauth_token(conn) == 0) {
+        free(resp->data);
+        resp->data = NULL;
+        resp->size = 0;
+        curl_easy_reset(curl);
+        trino_apply_curl_settings(conn, curl);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
+        res = curl_easy_perform(curl);
+        if (res != CURLE_OK)
+            return -1;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    }
+
     if (http_code >= 400)
         return -1;
 
@@ -139,6 +163,26 @@ int trino_http_get(trino_conn_t *conn, const char *url,
 
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    /* OAuth2 (M2M) access token may have expired; refresh once and retry. */
+    if (http_code == 401 && conn->oauth_m2m &&
+        trino_refresh_oauth_token(conn) == 0) {
+        free(resp->data);
+        resp->data = NULL;
+        resp->size = 0;
+        curl_easy_reset(curl);
+        trino_apply_curl_settings(conn, curl);
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
+        res = curl_easy_perform(curl);
+        if (res != CURLE_OK)
+            return -1;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    }
+
     if (http_code >= 400)
         return -1;
 
@@ -163,17 +207,20 @@ int trino_http_delete(trino_conn_t *conn, const char *url)
 
 /* ── OAuth2 client-credentials: fetch an access token from the IdP ─── */
 
-static int trino_fetch_oauth_token(trino_conn_t *conn, argus_dbc_t *dbc,
-                                   char **out_token)
+static int trino_fetch_oauth_token(trino_conn_t *conn, char **out_token)
 {
     *out_token = NULL;
+    if (!conn->oauth_token_url || !conn->oauth_client_id ||
+        !conn->oauth_client_secret)
+        return -1;
+
     CURL *c = curl_easy_init();
     if (!c) return -1;
 
     /* Build a client_secret_post body (widely accepted: Keycloak/Okta/Auth0). */
-    char *eid = curl_easy_escape(c, dbc->oauth_client_id, 0);
-    char *esec = curl_easy_escape(c, dbc->oauth_client_secret, 0);
-    char *escope = dbc->oauth_scope ? curl_easy_escape(c, dbc->oauth_scope, 0) : NULL;
+    char *eid = curl_easy_escape(c, conn->oauth_client_id, 0);
+    char *esec = curl_easy_escape(c, conn->oauth_client_secret, 0);
+    char *escope = conn->oauth_scope ? curl_easy_escape(c, conn->oauth_scope, 0) : NULL;
     char body[2048];
     if (escope)
         snprintf(body, sizeof(body),
@@ -188,7 +235,7 @@ static int trino_fetch_oauth_token(trino_conn_t *conn, argus_dbc_t *dbc,
         NULL, "Content-Type: application/x-www-form-urlencoded");
     trino_response_t resp = {0};
 
-    curl_easy_setopt(c, CURLOPT_URL, dbc->oauth_token_url);
+    curl_easy_setopt(c, CURLOPT_URL, conn->oauth_token_url);
     curl_easy_setopt(c, CURLOPT_POST, 1L);
     curl_easy_setopt(c, CURLOPT_POSTFIELDS, body);
     curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
@@ -233,6 +280,61 @@ static int trino_fetch_oauth_token(trino_conn_t *conn, argus_dbc_t *dbc,
     free(resp.data);
     curl_easy_cleanup(c);
     return ret;
+}
+
+/* ── (Re)build the default request headers from connection state ── */
+
+static void trino_build_default_headers(trino_conn_t *conn)
+{
+    if (conn->default_headers) {
+        curl_slist_free_all(conn->default_headers);
+        conn->default_headers = NULL;
+    }
+
+    char header_buf[2048];
+
+    snprintf(header_buf, sizeof(header_buf), "X-Trino-User: %s", conn->user);
+    conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+
+    snprintf(header_buf, sizeof(header_buf), "X-Trino-Catalog: %s", conn->catalog);
+    conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+
+    snprintf(header_buf, sizeof(header_buf), "X-Trino-Schema: %s", conn->schema);
+    conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+
+    if (conn->app_name && conn->app_name[0]) {
+        snprintf(header_buf, sizeof(header_buf), "X-Trino-Source: %s", conn->app_name);
+        conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+    }
+
+    if (conn->protocol_version == 2) {
+        conn->default_headers = curl_slist_append(
+            conn->default_headers,
+            "X-Trino-Client-Capabilities: CLIENT_OUTCOME_URI");
+    }
+
+    if (conn->auth_mode == TRINO_AUTH_BEARER && conn->password) {
+        snprintf(header_buf, sizeof(header_buf),
+                 "Authorization: Bearer %s", conn->password);
+        conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+    }
+}
+
+/* ── Re-fetch an OAuth2 (M2M) access token and refresh the header ── */
+
+static int trino_refresh_oauth_token(trino_conn_t *conn)
+{
+    if (!conn->oauth_m2m) return -1;
+
+    char *tok = NULL;
+    if (trino_fetch_oauth_token(conn, &tok) != 0 || !tok)
+        return -1;
+
+    free(conn->password);
+    conn->password = tok;
+    trino_build_default_headers(conn);
+    ARGUS_LOG_INFO("Trino: OAuth2 access token refreshed after 401");
+    return 0;
 }
 
 /* ── Connect to Trino ────────────────────────────────────────── */
@@ -330,8 +432,15 @@ int trino_connect(argus_dbc_t *dbc,
      * set together with the token endpoint + client credentials. */
     if (conn->auth_mode == TRINO_AUTH_BEARER &&
         dbc->oauth_token_url && dbc->oauth_client_id && dbc->oauth_client_secret) {
+        /* Retain the params so the access token can be refreshed on a 401. */
+        conn->oauth_m2m = true;
+        conn->oauth_token_url = strdup(dbc->oauth_token_url);
+        conn->oauth_client_id = strdup(dbc->oauth_client_id);
+        conn->oauth_client_secret = strdup(dbc->oauth_client_secret);
+        if (dbc->oauth_scope) conn->oauth_scope = strdup(dbc->oauth_scope);
+
         char *tok = NULL;
-        if (trino_fetch_oauth_token(conn, dbc, &tok) != 0 || !tok) {
+        if (trino_fetch_oauth_token(conn, &tok) != 0 || !tok) {
             argus_set_error(&dbc->diag, "08001",
                 "[Argus][Trino] OAuth2 client-credentials token request failed", 0);
             curl_easy_cleanup(conn->curl);
@@ -348,44 +457,19 @@ int trino_connect(argus_dbc_t *dbc,
         ARGUS_LOG_INFO("Trino: obtained OAuth2 access token via client-credentials");
     }
 
-    /* Build default headers */
-    char header_buf[256];
+    /* Retain the application name so headers can be rebuilt on token refresh. */
+    if (dbc->app_name && dbc->app_name[0])
+        conn->app_name = strdup(dbc->app_name);
 
-    snprintf(header_buf, sizeof(header_buf), "X-Trino-User: %s", conn->user);
-    conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+    /* Build the default request headers (X-Trino-*, optional Bearer token). */
+    trino_build_default_headers(conn);
 
-    snprintf(header_buf, sizeof(header_buf), "X-Trino-Catalog: %s", conn->catalog);
-    conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
-
-    snprintf(header_buf, sizeof(header_buf), "X-Trino-Schema: %s", conn->schema);
-    conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
-
-    /* Add application name if specified */
-    if (dbc->app_name && dbc->app_name[0]) {
-        snprintf(header_buf, sizeof(header_buf), "X-Trino-Source: %s", dbc->app_name);
-        conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
-        ARGUS_LOG_DEBUG("Trino application name: %s", dbc->app_name);
-    }
-
-    /* Add v2 spooling capability header if protocol version is 2 */
-    if (conn->protocol_version == 2) {
-        conn->default_headers = curl_slist_append(
-            conn->default_headers,
-            "X-Trino-Client-Capabilities: CLIENT_OUTCOME_URI");
-        ARGUS_LOG_DEBUG("Trino v2 spooling protocol enabled");
-    }
-
-    /* Bearer (JWT/OAuth2) auth is a static Authorization header. */
-    if (conn->auth_mode == TRINO_AUTH_BEARER && conn->password) {
-        char auth_hdr[2048];
-        snprintf(auth_hdr, sizeof(auth_hdr), "Authorization: Bearer %s", conn->password);
-        conn->default_headers = curl_slist_append(conn->default_headers, auth_hdr);
+    if (conn->auth_mode == TRINO_AUTH_BEARER && conn->password)
         ARGUS_LOG_DEBUG("Trino: JWT/OAuth2 bearer token auth enabled");
-    } else if (conn->auth_mode == TRINO_AUTH_NEGOTIATE) {
+    else if (conn->auth_mode == TRINO_AUTH_NEGOTIATE)
         ARGUS_LOG_DEBUG("Trino: Kerberos/SPNEGO (Negotiate) auth enabled");
-    } else if (conn->auth_mode == TRINO_AUTH_BASIC) {
+    else if (conn->auth_mode == TRINO_AUTH_BASIC)
         ARGUS_LOG_DEBUG("Trino: HTTP Basic (password) auth enabled");
-    }
 
     /* Verify connectivity with a lightweight request */
     trino_response_t resp = {0};
@@ -464,6 +548,13 @@ void trino_disconnect(argus_backend_conn_t raw_conn)
     free(conn->password);
     free(conn->catalog);
     free(conn->schema);
+    free(conn->app_name);
+
+    /* Free OAuth2 (M2M) refresh params */
+    free(conn->oauth_token_url);
+    free(conn->oauth_client_id);
+    free(conn->oauth_client_secret);
+    free(conn->oauth_scope);
 
     /* Free SSL/TLS fields */
     free(conn->ssl_cert_file);

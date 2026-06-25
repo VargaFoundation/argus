@@ -150,8 +150,9 @@ Spark/Flink en conditions réelles.
    (cf. cluster clemlab : Hive HTTP+SPNEGO+SSL confirmé, endpoint renvoie bien
    `401 Negotiate`).*
 2. **OAuth2/OIDC + JWT sur HTTP** (Trino d'abord, puis Hive/Impala en mode HTTP) :
-   bearer + refresh, client-credentials (M2M), auth-code + loopback PKCE (SSO
-   navigateur), device-code (headless), OIDC discovery. Mutualisé dans `common/`.
+   bearer (✅), client-credentials M2M (✅), **refresh automatique du token sur 401
+   (✅)** ; restent auth-code + loopback PKCE (SSO navigateur), device-code
+   (headless), OIDC discovery. Mutualisé dans `common/`.
    *Le plus demandé pour la BI cloud ; même approche libcurl que SPNEGO.*
 3. **Kerberos/GSSAPI sur Thrift binaire** (Hive/Impala) : nécessite une couche SASL
    maison (voir contrainte ci-dessus). Paramètres `KrbRealm`, `KrbHostFQDN`,

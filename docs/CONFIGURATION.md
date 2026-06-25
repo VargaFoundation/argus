@@ -110,6 +110,8 @@ DRIVER=Argus;BACKEND=trino;HOST=trino.example.com;PORT=8080;UID=analyst;DATABASE
   - `OAUTH2` / `CLIENT_CREDENTIALS`: machine-to-machine OAuth2 — Argus fetches a
     token from the IdP token endpoint and uses it as the bearer. Params:
     `OAuth2TokenEndpoint` (`TokenURI`), `ClientId`, `ClientSecret`, optional `Scope`.
+    The access token is **re-fetched automatically** if the server returns `401`
+    (token expiry), and the request is retried transparently.
   - `GSSAPI` / `KERBEROS`: SPNEGO/Negotiate via libcurl using a `kinit` ticket.
 
   ```

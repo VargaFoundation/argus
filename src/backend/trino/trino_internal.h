@@ -24,7 +24,16 @@ typedef struct trino_conn {
     trino_auth_mode_t   auth_mode;
     char               *catalog;
     char               *schema;
+    char               *app_name;       /* X-Trino-Source (NULL if unset) */
     struct curl_slist   *default_headers;
+
+    /* OAuth2 client-credentials (M2M) params, retained so the access token can
+     * be transparently re-fetched when the server returns 401 (token expiry). */
+    bool                oauth_m2m;
+    char               *oauth_token_url;
+    char               *oauth_client_id;
+    char               *oauth_client_secret;
+    char               *oauth_scope;
 
     /* SSL/TLS settings (from DBC) */
     bool                ssl_enabled;
