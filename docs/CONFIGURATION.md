@@ -59,6 +59,7 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | hive | 10000 |
 | impala | 21050 |
 | trino | 8080 |
+| mysql | 3306 |
 
 ### Authentication Mechanisms
 
@@ -115,6 +116,27 @@ DRIVER=Argus;BACKEND=trino;HOST=trino.example.com;PORT=8080;UID=analyst;DATABASE
   DRIVER=Argus;BACKEND=trino;HOST=trino;PORT=8443;SSL=1;UID=analyst;PWD={secret};AuthMech=LDAP
   DRIVER=Argus;BACKEND=trino;HOST=trino;PORT=8443;SSL=1;AuthMech=OAUTH2;OAuth2TokenEndpoint=https://idp/token;ClientId=cid;ClientSecret=csec;Scope=trino
   ```
+
+### MySQL-wire (BACKEND=mysql)
+
+A single backend serves every engine that speaks the MySQL client/server
+protocol, via libmariadb. This covers **StarRocks**, **Apache Doris** and
+**ClickHouse** (MySQL interface) as well as MySQL/MariaDB themselves.
+
+```
+DRIVER=Argus;BACKEND=mysql;HOST=starrocks-fe;PORT=9030;UID=root;DATABASE=analytics
+DRIVER=Argus;BACKEND=mysql;HOST=doris-fe;PORT=9030;UID=admin;PWD={secret};DATABASE=ods
+DRIVER=Argus;BACKEND=mysql;HOST=clickhouse;PORT=9004;UID=default;DATABASE=default
+```
+
+- Protocol: MySQL client/server wire protocol (libmariadb)
+- Default port: 3306 — **set PORT explicitly** for StarRocks/Doris FE (`9030`)
+  and ClickHouse (`9004`)
+- A database is reported as an ODBC **catalog** (`TABLE_CAT`); the schema column
+  is left empty, following the MySQL Connector/ODBC convention
+- Catalog operations run against `information_schema`
+- `SSL=1` enables TLS (`SSLCertFile`/`SSLKeyFile`/`SSLCAFile`, `SSLVerify` honored)
+- Requires a build with libmariadb (`libmariadb-dev`); auto-detected at cmake time
 
 ## Connecting to Spark and Flink (via the Hive backend)
 

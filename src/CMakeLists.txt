@@ -175,6 +175,26 @@ if(ARGUS_BUILD_KUDU)
     list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_KUDU)
 endif()
 
+# Conditionally add MySQL-wire backend (StarRocks/Doris/ClickHouse/MySQL)
+if(ARGUS_BUILD_MYSQL)
+    list(APPEND ARGUS_SOURCES
+        backend/mysql/mywire_backend.c
+        backend/mysql/mywire_metadata.c
+        backend/mysql/mywire_types.c
+    )
+    list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend/mysql
+        ${LIBMARIADB_INCLUDE_DIRS}
+    )
+    list(APPEND ARGUS_LINK_LIBS
+        ${LIBMARIADB_LIBRARIES}
+    )
+    list(APPEND ARGUS_LINK_DIRS
+        ${LIBMARIADB_LIBRARY_DIRS}
+    )
+    list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_MYSQL)
+endif()
+
 # Windows version resource (embeds version/company info in the DLL)
 if(WIN32)
     configure_file(

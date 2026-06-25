@@ -20,6 +20,9 @@ extern const argus_backend_t *argus_phoenix_backend_get(void);
 #ifdef ARGUS_HAS_KUDU
 extern const argus_backend_t *argus_kudu_backend_get(void);
 #endif
+#ifdef ARGUS_HAS_MYSQL
+extern const argus_backend_t *argus_mysql_backend_get(void);
+#endif
 
 void argus_backend_register(const argus_backend_t *backend)
 {
@@ -55,5 +58,8 @@ void argus_backends_init(void)
 #endif
 #ifdef ARGUS_HAS_KUDU
     argus_backend_register(argus_kudu_backend_get());
+#endif
+#ifdef ARGUS_HAS_MYSQL
+    argus_backend_register(argus_mysql_backend_get());
 #endif
 }

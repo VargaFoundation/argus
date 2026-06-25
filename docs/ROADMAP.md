@@ -169,7 +169,8 @@ Spark/Flink en conditions réelles.
 
 ### Phase 3 — Nouveaux backends à fort levier
 1. **Backend MySQL-wire** (`src/backend/mysql/`) → StarRocks + Doris + ClickHouse.
-   Dépendance `libmariadb`, auto-détectée. Suivre `docs/ADDING_BACKENDS.md`.
+   Dépendance `libmariadb`, auto-détectée. ✅ **Implémenté** (`BACKEND=mysql`,
+   `mywire_*` : connect/execute/fetch/metadata + catalogue via `information_schema`).
 2. **Backend Druid** (`src/backend/druid/`) en réutilisant le code Avatica de Phoenix
    (factoriser l'Avatica commun dans `src/backend/common/avatica_*.c`).
 3. **Backend Pinot** (HTTP/JSON) si la demande se confirme.

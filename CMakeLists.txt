@@ -90,8 +90,25 @@ else()
     message(STATUS "Kudu backend: DISABLED (install libkudu-client-dev to enable)")
 endif()
 
-if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO AND NOT ARGUS_BUILD_PHOENIX AND NOT ARGUS_BUILD_KUDU)
-    message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino/Phoenix) or libkudu_client (for Kudu).")
+# Optional: MySQL-wire backend (StarRocks/Doris/ClickHouse/MySQL/MariaDB)
+pkg_check_modules(LIBMARIADB libmariadb)
+if(NOT LIBMARIADB_FOUND)
+    pkg_check_modules(LIBMARIADB mariadb)
+endif()
+if(NOT LIBMARIADB_FOUND)
+    pkg_check_modules(LIBMARIADB libmysqlclient)
+endif()
+
+if(LIBMARIADB_FOUND)
+    set(ARGUS_BUILD_MYSQL ON)
+    message(STATUS "MySQL-wire backend: ENABLED (libmariadb/mysqlclient found)")
+else()
+    set(ARGUS_BUILD_MYSQL OFF)
+    message(STATUS "MySQL-wire backend: DISABLED (install libmariadb-dev to enable)")
+endif()
+
+if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO AND NOT ARGUS_BUILD_PHOENIX AND NOT ARGUS_BUILD_KUDU AND NOT ARGUS_BUILD_MYSQL)
+    message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino/Phoenix) or libkudu_client (for Kudu) or libmariadb-dev (for MySQL-wire: StarRocks/Doris/ClickHouse).")
 endif()
 
 # POSIX extensions needed for strdup/strndup in C11 mode
