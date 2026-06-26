@@ -183,6 +183,7 @@ Spark/Flink en conditions réelles.
    moteurs append-mostly).
 2. Ajouter `get_primary_keys`/`get_statistics` pour Hive et Impala.
 3. **Backend/chemin Arrow Flight SQL** (`src/backend/flightsql/`) → Dremio, InfluxDB 3,
+   *(design détaillé : voir `docs/FLIGHTSQL_DESIGN.md`)*
    Doris, StarRocks ; fondations d'une future surface **ADBC** (anticipe la bascule
    Power BI 2026-2027).
 4. Décision sur **Kudu** : déprécier le parser SQL maison ou l'assumer comme niche.
