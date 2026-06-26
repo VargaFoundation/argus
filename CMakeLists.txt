@@ -107,8 +107,18 @@ else()
     message(STATUS "MySQL-wire backend: DISABLED (install libmariadb-dev to enable)")
 endif()
 
-if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO AND NOT ARGUS_BUILD_PHOENIX AND NOT ARGUS_BUILD_KUDU AND NOT ARGUS_BUILD_MYSQL)
-    message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino/Phoenix) or libkudu_client (for Kudu) or libmariadb-dev (for MySQL-wire: StarRocks/Doris/ClickHouse).")
+# Optional: Arrow Flight SQL backend (Dremio / InfluxDB 3 / Doris / StarRocks)
+pkg_check_modules(ARROW_FLIGHT_SQL arrow-flight-sql)
+if(ARROW_FLIGHT_SQL_FOUND)
+    set(ARGUS_BUILD_FLIGHTSQL ON)
+    message(STATUS "Arrow Flight SQL backend: ENABLED (arrow-flight-sql ${ARROW_FLIGHT_SQL_VERSION})")
+else()
+    set(ARGUS_BUILD_FLIGHTSQL OFF)
+    message(STATUS "Arrow Flight SQL backend: DISABLED (install libarrow-flight-sql-dev to enable)")
+endif()
+
+if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO AND NOT ARGUS_BUILD_PHOENIX AND NOT ARGUS_BUILD_KUDU AND NOT ARGUS_BUILD_MYSQL AND NOT ARGUS_BUILD_FLIGHTSQL)
+    message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino/Phoenix) or libkudu_client (for Kudu) or libmariadb-dev (for MySQL-wire: StarRocks/Doris/ClickHouse) or libarrow-flight-sql-dev (for Arrow Flight SQL: Dremio/InfluxDB 3).")
 endif()
 
 # POSIX extensions needed for strdup/strndup in C11 mode

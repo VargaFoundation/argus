@@ -1,9 +1,29 @@
-# Arrow Flight SQL backend — design & implementation plan
+# Arrow Flight SQL backend — design & status
 
-Status: **design only — not yet implemented.** This document captures the
-architecture so the work can be scheduled and reviewed; no code path exists yet.
-It is deliberately separate from the implemented backends to avoid shipping a
-half-wired feature.
+Status: **initial implementation landed** in `src/backend/flightsql/`, behind the
+`ARGUS_BUILD_FLIGHTSQL` cmake switch (auto-detected from `arrow-flight-sql`).
+Reaches Dremio, InfluxDB 3.x, Apache Doris and StarRocks (`BACKEND=flightsql`).
+
+What exists:
+- `flightsql_convert.{h,cpp}` — Arrow `Schema`/`RecordBatch` → ODBC columns + text
+  cells. Depends only on plain libarrow and is unit tested
+  (`tests/unit/test_flightsql_convert.cpp`, runs without a live endpoint).
+- `flightsql_backend.cpp` — the vtable over `arrow::flight::sql::FlightSqlClient`:
+  connect (TCP/TLS + basic-token or bearer auth), execute, multi-endpoint
+  `DoGet` fetch, result metadata, and the native metadata RPCs (GetTables,
+  GetDbSchemas, GetCatalogs, GetPrimaryKeys, GetXdbcTypeInfo).
+- cmake gating + registry wiring (`argus_flightsql_backend_get`).
+
+What still needs doing / validation:
+- **Build + run in an environment with `libarrow-flight-sql-dev`** (Arrow C++ is
+  not in the default Ubuntu repos; the local sandbox could not link it). Compile
+  the backend TU and run the integration path against a live Dremio/InfluxDB 3 or
+  a `pyarrow.flight` mock.
+- Map `GetColumns` output (currently `GetTables(include_schema=true)`) into the
+  exact ODBC `SQLColumns` shape.
+- The Arrow-native (zero-copy) fetch path — see Phase 2 in `ROADMAP.md`.
+
+The sections below remain the reference for the architecture and the type mapping.
 
 ## Why
 

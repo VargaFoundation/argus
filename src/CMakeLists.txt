@@ -195,6 +195,31 @@ if(ARGUS_BUILD_MYSQL)
     list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_MYSQL)
 endif()
 
+# Conditionally add Arrow Flight SQL backend (Dremio/InfluxDB 3/Doris/StarRocks)
+if(ARGUS_BUILD_FLIGHTSQL)
+    enable_language(CXX)
+    # Arrow's modern headers require C++17 (>= 18.0 needs C++20). Use C++20 to
+    # cover both; the convert/backend TUs are the only C++20 units besides Kudu.
+    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+    list(APPEND ARGUS_SOURCES
+        backend/flightsql/flightsql_backend.cpp
+        backend/flightsql/flightsql_convert.cpp
+    )
+    list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend/flightsql
+        ${ARROW_FLIGHT_SQL_INCLUDE_DIRS}
+    )
+    list(APPEND ARGUS_LINK_LIBS
+        ${ARROW_FLIGHT_SQL_LIBRARIES}
+    )
+    list(APPEND ARGUS_LINK_DIRS
+        ${ARROW_FLIGHT_SQL_LIBRARY_DIRS}
+    )
+    list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_FLIGHTSQL)
+endif()
+
 # Windows version resource (embeds version/company info in the DLL)
 if(WIN32)
     configure_file(

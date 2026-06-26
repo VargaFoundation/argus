@@ -59,6 +59,28 @@ if(ARGUS_BUILD_KUDU)
     argus_add_unit_test(test_kudu_sql_parser unit/test_kudu_sql_parser.c)
 endif()
 
+# Flight SQL Arrow->ODBC conversion (plain libarrow, no live endpoint needed)
+if(ARGUS_BUILD_FLIGHTSQL)
+    add_executable(test_flightsql_convert unit/test_flightsql_convert.cpp)
+    set_target_properties(test_flightsql_convert PROPERTIES
+        CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_include_directories(test_flightsql_convert PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src/backend/flightsql
+        ${ARROW_FLIGHT_SQL_INCLUDE_DIRS}
+    )
+    target_link_libraries(test_flightsql_convert PRIVATE
+        argus_odbc_static
+        ${ARROW_FLIGHT_SQL_LIBRARIES}
+        stdc++
+    )
+    target_link_directories(test_flightsql_convert PRIVATE
+        ${ARROW_FLIGHT_SQL_LIBRARY_DIRS}
+    )
+    add_test(NAME test_flightsql_convert COMMAND test_flightsql_convert)
+    set_tests_properties(test_flightsql_convert PROPERTIES LABELS "unit")
+endif()
+
 # Integration tests (optional)
 if(BUILD_INTEGRATION_TESTS)
     function(argus_add_integration_test name source)

@@ -60,6 +60,7 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | impala | 21050 |
 | trino | 8080 |
 | mysql | 3306 |
+| flightsql | 32010 |
 
 ### Authentication Mechanisms
 
@@ -139,6 +140,23 @@ DRIVER=Argus;BACKEND=mysql;HOST=clickhouse;PORT=9004;UID=default;DATABASE=defaul
 - Catalog operations run against `information_schema`
 - `SSL=1` enables TLS (`SSLCertFile`/`SSLKeyFile`/`SSLCAFile`, `SSLVerify` honored)
 - Requires a build with libmariadb (`libmariadb-dev`); auto-detected at cmake time
+
+### Arrow Flight SQL (BACKEND=flightsql)
+
+Reaches any engine exposing an Arrow Flight SQL endpoint — **Dremio**,
+**InfluxDB 3.x**, **Apache Doris** and **StarRocks** — over gRPC.
+
+```
+DRIVER=Argus;BACKEND=flightsql;HOST=dremio;PORT=32010;UID=user;PWD={secret}
+DRIVER=Argus;BACKEND=flightsql;HOST=influxdb3;PORT=443;SSL=1;PWD={token}
+```
+
+- Protocol: Arrow Flight SQL (gRPC); columnar results converted to text cells
+- Default port: 32010 (Dremio); set PORT explicitly per engine
+- Auth: UID+PWD → Flight handshake (basic token); PWD alone → `Bearer` token (JWT)
+- `SSL=1` uses a TLS gRPC channel
+- Requires a build with `libarrow-flight-sql-dev` (auto-detected at cmake time).
+  See `docs/FLIGHTSQL_DESIGN.md`.
 
 ## Connecting to Spark and Flink (via the Hive backend)
 
