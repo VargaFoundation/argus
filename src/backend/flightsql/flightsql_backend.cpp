@@ -13,6 +13,7 @@ extern "C" {
 
 #include <cstdlib>
 #include <cstring>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -61,7 +62,6 @@ static int flightsql_connect(argus_dbc_t* dbc,
                              const char* auth_mechanism,
                              argus_backend_conn_t* out_conn)
 {
-    (void)database;
     (void)auth_mechanism;
     if (!out_conn || !host) return -1;
 
@@ -106,6 +106,11 @@ static int flightsql_connect(argus_dbc_t* dbc,
         conn->call_options.headers.emplace_back(
             "authorization", std::string("Bearer ") + password);
     }
+
+    /* InfluxDB 3 (and other multi-tenant servers) select the target database via
+     * a gRPC "database" call header rather than a SQL catalog. */
+    if (database && *database)
+        conn->call_options.headers.emplace_back("database", database);
 
     conn->client = std::make_unique<flightsql::FlightSqlClient>(shared_client);
     *out_conn = conn;
@@ -301,11 +306,27 @@ static int flightsql_get_tables(argus_backend_conn_t raw_conn,
     if (catalog && *catalog)    { cat = catalog;    cat_p = &cat; }
     if (schema && *schema)      { sch = schema;     sch_p = &sch; }
     if (table_name && *table_name) { tbl = table_name; tbl_p = &tbl; }
-    if (table_types && *table_types) types.emplace_back(table_types);
+
+    /* table_types is an ODBC comma-separated list (e.g. "TABLE,VIEW", possibly
+     * quoted). Split it, and translate the ODBC name "TABLE" to the SQL-standard
+     * "BASE TABLE" that Flight SQL servers (InfluxDB 3, Dremio, …) report. */
+    if (table_types && *table_types) {
+        std::stringstream ss(table_types);
+        std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            size_t a = tok.find_first_not_of(" '\"");
+            size_t b = tok.find_last_not_of(" '\"");
+            if (a == std::string::npos) continue;
+            std::string t = tok.substr(a, b - a + 1);
+            if (t == "TABLE") t = "BASE TABLE";
+            types.push_back(t);
+        }
+    }
 
     return run_to_op(conn,
         conn->client->GetTables(conn->call_options, cat_p, sch_p, tbl_p,
-                                /*include_schema=*/false, &types),
+                                /*include_schema=*/false,
+                                types.empty() ? nullptr : &types),
         out_op);
 }
 

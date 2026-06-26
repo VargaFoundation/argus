@@ -1,8 +1,15 @@
 # Arrow Flight SQL backend — design & status
 
-Status: **implemented and building against Arrow C++ 24.0.0**, behind the
-`ARGUS_BUILD_FLIGHTSQL` cmake switch (auto-detected from `arrow-flight-sql`).
-Reaches Dremio, InfluxDB 3.x, Apache Doris and StarRocks (`BACKEND=flightsql`).
+Status: **implemented, building against Arrow C++ 24.0.0, and validated
+end-to-end against a live InfluxDB 3 Core**, behind the `ARGUS_BUILD_FLIGHTSQL`
+cmake switch (auto-detected from `arrow-flight-sql`). Reaches Dremio,
+InfluxDB 3.x, Apache Doris and StarRocks (`BACKEND=flightsql`).
+
+End-to-end validation (InfluxDB 3 Core 3.10.0, `--without-auth`, `:8181`):
+`SELECT host, usage, cores FROM cpu` returns the 3 written rows with correct
+string/double/int conversion; `SQLTables` returns the `iox.cpu` table via the
+`GetTables` RPC. Reproduce with the smoke tests in the scratchpad against
+`BACKEND=flightsql;HOST=127.0.0.1;PORT=8181;DATABASE=testdb`.
 
 What exists and is verified:
 - `flightsql_convert.{h,cpp}` — Arrow `Schema`/`RecordBatch` → ODBC columns + text
@@ -43,9 +50,19 @@ CC=gcc-14 CXX=g++-14 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build && (cd build && ctest -L unit)   # -> test_flightsql_convert passes
 ```
 
+## Server specifics learned from the InfluxDB 3 run
+
+- **Database selection** — InfluxDB 3 selects the target database with a gRPC
+  `database` call header, not a SQL catalog. The backend sends the `DATABASE`
+  connection attribute as that header on every call (harmless for servers that
+  ignore it).
+- **Table types** — ODBC clients ask `SQLTables` for type `"TABLE"`, but Flight
+  SQL servers report `"BASE TABLE"`. `get_tables` parses the ODBC comma list and
+  translates `TABLE` → `BASE TABLE` so BI tools see user tables.
+
 What still needs doing / validation:
-- **Runtime against a live endpoint** — connect/execute/fetch is compiled but not
-  yet exercised against a real Dremio/InfluxDB 3 (or a `pyarrow.flight` mock).
+- Validate against **Dremio** and **Doris/StarRocks** Flight SQL too (auth via
+  basic-token handshake / bearer; different catalog conventions).
 - Map `GetColumns` output (currently `GetTables(include_schema=true)`) into the
   exact ODBC `SQLColumns` shape.
 - The Arrow-native (zero-copy) fetch path — see Phase 2 in `ROADMAP.md`.

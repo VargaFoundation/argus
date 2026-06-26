@@ -183,9 +183,9 @@ Spark/Flink en conditions réelles.
    moteurs append-mostly).
 2. Ajouter `get_primary_keys`/`get_statistics` pour Hive et Impala.
 3. **Backend/chemin Arrow Flight SQL** (`src/backend/flightsql/`) → Dremio, InfluxDB 3,
-   *(implémenté derrière `ARGUS_BUILD_FLIGHTSQL` ; **compile contre Arrow C++ 24** —
-   GCC 14 + C++20 — et la couche de conversion Arrow→ODBC est testée et passe ;
-   reste : valider connect/execute/fetch contre un endpoint réel. Voir
+   *(implémenté derrière `ARGUS_BUILD_FLIGHTSQL` ; compile contre Arrow C++ 24
+   (GCC 14 + C++20) ; **validé end-to-end contre InfluxDB 3 Core** — SELECT +
+   SQLTables. Reste : Dremio/Doris, et `SQLColumns` exact. Voir
    `docs/FLIGHTSQL_DESIGN.md`)*
    Doris, StarRocks ; fondations d'une future surface **ADBC** (anticipe la bascule
    Power BI 2026-2027).

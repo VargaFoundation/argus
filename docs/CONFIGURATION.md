@@ -152,8 +152,11 @@ DRIVER=Argus;BACKEND=flightsql;HOST=influxdb3;PORT=443;SSL=1;PWD={token}
 ```
 
 - Protocol: Arrow Flight SQL (gRPC); columnar results converted to text cells
-- Default port: 32010 (Dremio); set PORT explicitly per engine
+- Default port: 32010 (Dremio); set PORT explicitly per engine (InfluxDB 3: 8181)
+- `DATABASE` is sent as the gRPC `database` call header (how InfluxDB 3 selects
+  the target database)
 - Auth: UID+PWD → Flight handshake (basic token); PWD alone → `Bearer` token (JWT)
+- **Validated end-to-end** against InfluxDB 3 Core (`SELECT` + `SQLTables`)
 - `SSL=1` uses a TLS gRPC channel
 - Requires a build with `libarrow-flight-sql-dev` (from the Apache Arrow APT repo)
   and **GCC 14+** with **C++20** — Arrow 24's headers don't compile on GCC 13.
