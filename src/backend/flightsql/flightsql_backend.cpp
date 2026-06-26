@@ -335,25 +335,27 @@ static int flightsql_get_columns(argus_backend_conn_t raw_conn,
                                  const char* table_name, const char* column_name,
                                  argus_backend_op_t* out_op)
 {
-    /* Flight SQL has no dedicated GetColumns RPC; GetTables(include_schema=true)
-     * carries the column schema. A future refinement maps that schema into the
-     * ODBC SQLColumns shape. For now request the table(s) with schema. */
-    (void)column_name;
     auto* conn = static_cast<flightsql_conn*>(raw_conn);
     if (!conn || !conn->client) return -1;
 
-    std::string cat, sch, tbl;
-    const std::string* cat_p = nullptr;
-    const std::string* sch_p = nullptr;
-    const std::string* tbl_p = nullptr;
-    if (catalog && *catalog)    { cat = catalog;    cat_p = &cat; }
-    if (schema && *schema)      { sch = schema;     sch_p = &sch; }
-    if (table_name && *table_name) { tbl = table_name; tbl_p = &tbl; }
+    /* Flight SQL has no dedicated GetColumns RPC (the native GetTables only
+     * carries a serialized Arrow schema, not the ODBC SQLColumns shape). Query
+     * information_schema.columns instead, which every Flight SQL engine we
+     * target (InfluxDB 3, Dremio, Doris, StarRocks) exposes, aliasing to the
+     * ODBC column names — the same approach as the Trino/MySQL backends. */
+    std::string q =
+        "SELECT table_catalog AS TABLE_CAT, table_schema AS TABLE_SCHEM, "
+        "table_name AS TABLE_NAME, column_name AS COLUMN_NAME, "
+        "data_type AS TYPE_NAME, ordinal_position AS ORDINAL_POSITION, "
+        "is_nullable AS IS_NULLABLE "
+        "FROM information_schema.columns WHERE 1=1";
+    if (catalog && *catalog)    { q += " AND table_catalog = '"; q += catalog; q += "'"; }
+    if (schema && *schema)      { q += " AND table_schema LIKE '"; q += schema; q += "'"; }
+    if (table_name && *table_name) { q += " AND table_name LIKE '"; q += table_name; q += "'"; }
+    if (column_name && *column_name) { q += " AND column_name LIKE '"; q += column_name; q += "'"; }
+    q += " ORDER BY table_schema, table_name, ordinal_position";
 
-    return run_to_op(conn,
-        conn->client->GetTables(conn->call_options, cat_p, sch_p, tbl_p,
-                                /*include_schema=*/true, nullptr),
-        out_op);
+    return run_to_op(conn, conn->client->Execute(conn->call_options, q), out_op);
 }
 
 static int flightsql_get_schemas(argus_backend_conn_t raw_conn,

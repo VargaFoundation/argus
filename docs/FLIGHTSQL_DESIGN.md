@@ -5,11 +5,17 @@ end-to-end against a live InfluxDB 3 Core**, behind the `ARGUS_BUILD_FLIGHTSQL`
 cmake switch (auto-detected from `arrow-flight-sql`). Reaches Dremio,
 InfluxDB 3.x, Apache Doris and StarRocks (`BACKEND=flightsql`).
 
-End-to-end validation (InfluxDB 3 Core 3.10.0, `--without-auth`, `:8181`):
-`SELECT host, usage, cores FROM cpu` returns the 3 written rows with correct
-string/double/int conversion; `SQLTables` returns the `iox.cpu` table via the
-`GetTables` RPC. Reproduce with the smoke tests in the scratchpad against
-`BACKEND=flightsql;HOST=127.0.0.1;PORT=8181;DATABASE=testdb`.
+End-to-end validation (InfluxDB 3 Core 3.10.0, `--without-auth`, `:8181`,
+`BACKEND=flightsql;HOST=127.0.0.1;PORT=8181;DATABASE=testdb`):
+- `SELECT time, host, usage, cores, label FROM cpu` → correct rows, with
+  **timestamp** (`2024-06-10 06:13:20.000000000`), string, double, int and NULL
+  all converting correctly.
+- `SQLColumns(cpu)` → the 6 real columns with types (`cores` Int64, `time`
+  Timestamp(ns) NOT NULL, `usage` Float64, …) via `information_schema.columns`.
+- `SQLTables` → `iox.cpu` via `GetTables` (with the `TABLE`→`BASE TABLE` mapping).
+- `SQLGetTypeInfo` → 19-column type list via `GetXdbcTypeInfo`.
+- `SQLPrimaryKeys(cpu)` → `GetPrimaryKeys` runs, 0 rows (time-series, no PKs).
+- `SQLStatistics(cpu)` → empty (no indexes), via the ODBC-layer fallback.
 
 What exists and is verified:
 - `flightsql_convert.{h,cpp}` — Arrow `Schema`/`RecordBatch` → ODBC columns + text
@@ -60,11 +66,17 @@ cmake --build build && (cd build && ctest -L unit)   # -> test_flightsql_convert
   SQL servers report `"BASE TABLE"`. `get_tables` parses the ODBC comma list and
   translates `TABLE` → `BASE TABLE` so BI tools see user tables.
 
+`SQLColumns` is implemented as an `information_schema.columns` query over the
+Execute path (Flight SQL has no native GetColumns RPC, and `GetTables`'
+`include_schema` only carries a serialized Arrow blob, not the ODBC shape) —
+the same approach as the Trino/MySQL backends.
+
 What still needs doing / validation:
-- Validate against **Dremio** and **Doris/StarRocks** Flight SQL too (auth via
-  basic-token handshake / bearer; different catalog conventions).
-- Map `GetColumns` output (currently `GetTables(include_schema=true)`) into the
-  exact ODBC `SQLColumns` shape.
+- **Auth at runtime** — the Bearer/basic-token path is the same as the
+  (validated) Trino bearer path but was not exercised against InfluxDB here
+  (`--object-store memory` + auth needs a persistent token store to bootstrap).
+- Validate against **Dremio** and **Doris/StarRocks** Flight SQL too (different
+  catalog conventions; auth via basic-token handshake / bearer).
 - The Arrow-native (zero-copy) fetch path — see Phase 2 in `ROADMAP.md`.
 
 The sections below remain the reference for the architecture and the type mapping.

@@ -184,9 +184,9 @@ Spark/Flink en conditions réelles.
 2. Ajouter `get_primary_keys`/`get_statistics` pour Hive et Impala.
 3. **Backend/chemin Arrow Flight SQL** (`src/backend/flightsql/`) → Dremio, InfluxDB 3,
    *(implémenté derrière `ARGUS_BUILD_FLIGHTSQL` ; compile contre Arrow C++ 24
-   (GCC 14 + C++20) ; **validé end-to-end contre InfluxDB 3 Core** — SELECT +
-   SQLTables. Reste : Dremio/Doris, et `SQLColumns` exact. Voir
-   `docs/FLIGHTSQL_DESIGN.md`)*
+   (GCC 14 + C++20) ; **validé end-to-end contre InfluxDB 3 Core** — SELECT (avec
+   timestamps), SQLColumns, SQLTables, SQLPrimaryKeys, SQLGetTypeInfo. Reste :
+   Dremio/Doris + auth runtime. Voir `docs/FLIGHTSQL_DESIGN.md`)*
    Doris, StarRocks ; fondations d'une future surface **ADBC** (anticipe la bascule
    Power BI 2026-2027).
 4. Décision sur **Kudu** : déprécier le parser SQL maison ou l'assumer comme niche.
