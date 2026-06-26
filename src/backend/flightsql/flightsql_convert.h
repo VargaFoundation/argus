@@ -13,6 +13,16 @@
 #include <arrow/type_fwd.h>
 #include "argus/types.h"
 
+/*
+ * unixODBC's <sql.h> (pulled in via argus/types.h) does `#define BOOL int`,
+ * which collides with arrow::Type::BOOL and corrupts the Arrow type headers.
+ * Drop the macro for the Flight SQL translation units; nothing here relies on
+ * it (the ODBC C type is SQL_C_BIT, not BOOL).
+ */
+#ifdef BOOL
+#undef BOOL
+#endif
+
 /* Map an Arrow logical type id to an ODBC SQL type. */
 SQLSMALLINT flightsql_arrow_to_sql_type(int arrow_type_id);
 

@@ -1,24 +1,51 @@
 # Arrow Flight SQL backend — design & status
 
-Status: **initial implementation landed** in `src/backend/flightsql/`, behind the
+Status: **implemented and building against Arrow C++ 24.0.0**, behind the
 `ARGUS_BUILD_FLIGHTSQL` cmake switch (auto-detected from `arrow-flight-sql`).
 Reaches Dremio, InfluxDB 3.x, Apache Doris and StarRocks (`BACKEND=flightsql`).
 
-What exists:
+What exists and is verified:
 - `flightsql_convert.{h,cpp}` — Arrow `Schema`/`RecordBatch` → ODBC columns + text
-  cells. Depends only on plain libarrow and is unit tested
-  (`tests/unit/test_flightsql_convert.cpp`, runs without a live endpoint).
+  cells. Depends only on plain libarrow. **Unit tested and passing**
+  (`tests/unit/test_flightsql_convert.cpp`, runs without a live endpoint:
+  schema→columns, typed values, NULLs, multi-batch append).
 - `flightsql_backend.cpp` — the vtable over `arrow::flight::sql::FlightSqlClient`:
   connect (TCP/TLS + basic-token or bearer auth), execute, multi-endpoint
   `DoGet` fetch, result metadata, and the native metadata RPCs (GetTables,
-  GetDbSchemas, GetCatalogs, GetPrimaryKeys, GetXdbcTypeInfo).
+  GetDbSchemas, GetCatalogs, GetPrimaryKeys, GetXdbcTypeInfo). **Compiles clean
+  against Arrow 24**; the whole project links `libarrow-flight-sql` and the
+  20 existing unit tests still pass.
 - cmake gating + registry wiring (`argus_flightsql_backend_get`).
 
+## Build requirements (learned from the Arrow 24 build)
+
+- **Apache Arrow APT repo** — Arrow C++ is *not* in the default Ubuntu repos.
+  Install `apache-arrow-apt-source` first, then `libarrow-flight-sql-dev`
+  (pulls `libarrow-dev`, `libarrow-flight-dev`, gRPC, protobuf, …).
+- **GCC 14+** — Arrow 24's `type.h` (the `CTypeImpl` template with a nested-enum
+  non-type parameter) hits a parser bug in GCC 13; it compiles on GCC 14.
+  Configure with `-DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14`
+  (or `CC=gcc-14 CXX=g++-14`).
+- **C++20** — required by modern Arrow headers (`std::span`/`std::bit_width`);
+  set for the Flight SQL target.
+- **`BOOL` macro clash** — unixODBC's `<sql.h>` does `#define BOOL int`, which
+  corrupts `arrow::Type::BOOL`; the Flight SQL headers `#undef BOOL` after the
+  ODBC headers. The argus C headers are wrapped in `extern "C"` from the C++ TU
+  (they have no guards of their own), as the Kudu backend does.
+
+Build it:
+```
+sudo apt install -y -V ca-certificates lsb-release wget
+wget https://apache.jfrog.io/artifactory/arrow/ubuntu/apache-arrow-apt-source-latest-noble.deb
+sudo apt install -y -V ./apache-arrow-apt-source-latest-noble.deb
+sudo apt update && sudo apt install -y -V libarrow-flight-sql-dev g++-14 gcc-14
+CC=gcc-14 CXX=g++-14 cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build && (cd build && ctest -L unit)   # -> test_flightsql_convert passes
+```
+
 What still needs doing / validation:
-- **Build + run in an environment with `libarrow-flight-sql-dev`** (Arrow C++ is
-  not in the default Ubuntu repos; the local sandbox could not link it). Compile
-  the backend TU and run the integration path against a live Dremio/InfluxDB 3 or
-  a `pyarrow.flight` mock.
+- **Runtime against a live endpoint** — connect/execute/fetch is compiled but not
+  yet exercised against a real Dremio/InfluxDB 3 (or a `pyarrow.flight` mock).
 - Map `GetColumns` output (currently `GetTables(include_schema=true)`) into the
   exact ODBC `SQLColumns` shape.
 - The Arrow-native (zero-copy) fetch path — see Phase 2 in `ROADMAP.md`.

@@ -155,8 +155,9 @@ DRIVER=Argus;BACKEND=flightsql;HOST=influxdb3;PORT=443;SSL=1;PWD={token}
 - Default port: 32010 (Dremio); set PORT explicitly per engine
 - Auth: UID+PWD → Flight handshake (basic token); PWD alone → `Bearer` token (JWT)
 - `SSL=1` uses a TLS gRPC channel
-- Requires a build with `libarrow-flight-sql-dev` (auto-detected at cmake time).
-  See `docs/FLIGHTSQL_DESIGN.md`.
+- Requires a build with `libarrow-flight-sql-dev` (from the Apache Arrow APT repo)
+  and **GCC 14+** with **C++20** — Arrow 24's headers don't compile on GCC 13.
+  Auto-detected at cmake time. See `docs/FLIGHTSQL_DESIGN.md` for the exact steps.
 
 ## Connecting to Spark and Flink (via the Hive backend)
 

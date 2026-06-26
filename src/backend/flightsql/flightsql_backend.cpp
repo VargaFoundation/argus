@@ -1,9 +1,15 @@
 #include "flightsql_internal.h"
 #include "flightsql_convert.h"
 
+#include <arrow/ipc/dictionary.h>
+
+/* The argus C headers have no extern "C" guards; wrap them so the C functions
+ * they declare (e.g. argus_log_write) keep C linkage, as the Kudu backend does. */
+extern "C" {
 #include "argus/backend.h"
 #include "argus/handle.h"
 #include "argus/log.h"
+}
 
 #include <cstdlib>
 #include <cstring>
@@ -124,6 +130,7 @@ static int run_to_op(flightsql_conn* conn,
                      arrow::Result<std::unique_ptr<flight::FlightInfo>> info_res,
                      argus_backend_op_t* out_op)
 {
+    (void)conn;
     if (!info_res.ok()) {
         ARGUS_LOG_ERROR("Flight SQL: request failed: %s",
                         info_res.status().ToString().c_str());
@@ -264,10 +271,11 @@ static int flightsql_get_result_metadata(argus_backend_conn_t raw_conn,
     /* Metadata is materialized on first fetch; fall back to the FlightInfo
      * schema when present. */
     if (op->info) {
-        std::shared_ptr<arrow::Schema> schema;
-        auto st = op->info->GetSchema(nullptr, &schema);
-        if (st.ok() && schema) {
-            *num_cols = flightsql_schema_to_columns(schema, columns);
+        arrow::ipc::DictionaryMemo memo;
+        auto schema_res = op->info->GetSchema(&memo);
+        if (schema_res.ok() && schema_res.ValueOrDie()) {
+            *num_cols = flightsql_schema_to_columns(schema_res.ValueOrDie(),
+                                                    columns);
             return 0;
         }
     }

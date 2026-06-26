@@ -121,6 +121,13 @@ if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO AND NOT ARGUS_BUILD
     message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino/Phoenix) or libkudu_client (for Kudu) or libmariadb-dev (for MySQL-wire: StarRocks/Doris/ClickHouse) or libarrow-flight-sql-dev (for Arrow Flight SQL: Dremio/InfluxDB 3).")
 endif()
 
+# Kudu and Flight SQL are C++ backends. Enable CXX here at the top-level scope:
+# calling enable_language(CXX) from a subdirectory breaks CMake's regenerate step
+# ("required internal CMake variable not set").
+if(ARGUS_BUILD_KUDU OR ARGUS_BUILD_FLIGHTSQL)
+    enable_language(CXX)
+endif()
+
 # POSIX extensions needed for strdup/strndup in C11 mode
 if(NOT WIN32)
     add_compile_definitions(_GNU_SOURCE)

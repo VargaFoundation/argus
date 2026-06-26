@@ -197,9 +197,8 @@ endif()
 
 # Conditionally add Arrow Flight SQL backend (Dremio/InfluxDB 3/Doris/StarRocks)
 if(ARGUS_BUILD_FLIGHTSQL)
-    enable_language(CXX)
-    # Arrow's modern headers require C++17 (>= 18.0 needs C++20). Use C++20 to
-    # cover both; the convert/backend TUs are the only C++20 units besides Kudu.
+    # CXX is enabled at the top-level scope (see top CMakeLists.txt). Arrow's
+    # modern headers require C++17 (Arrow >= 18 needs C++20); use C++20.
     set(CMAKE_CXX_STANDARD 20)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
