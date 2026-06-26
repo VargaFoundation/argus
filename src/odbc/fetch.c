@@ -1129,6 +1129,9 @@ SQLRETURN SQL_API SQLFetchScroll(
             stmt->row_status_ptr[i] = SQL_ROW_NOROW;
     }
 
+    /* Record rowset bounds (for SQLSetPos SQL_POSITION / SQL_REFRESH) */
+    stmt->scroll_rowset_start = (size_t)new_pos;
+
     /* Update position to after the fetched rows */
     stmt->scroll_position = (size_t)new_pos + rows_fetched;
 
@@ -1661,17 +1664,58 @@ SQLRETURN SQL_API SQLSetPos(
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     if (Operation == SQL_POSITION) {
-        /* Position the cursor within the scroll cache */
+        /* Position the cursor on a row within the current rowset. RowNumber is
+         * 1-based within the rowset; 0 leaves the position unchanged. */
         if (stmt->scroll_cached && RowNumber > 0) {
-            size_t target = (size_t)(RowNumber - 1);
-            if (target < stmt->scroll_row_count) {
-                stmt->scroll_position = target + 1;
-                return SQL_SUCCESS;
+            size_t target = stmt->scroll_rowset_start + (size_t)(RowNumber - 1);
+            if (target >= stmt->scroll_position ||
+                target >= stmt->scroll_row_count) {
+                return argus_set_error(&stmt->diag, "HY107",
+                                       "[Argus] Row value out of range", 0);
             }
-            return argus_set_error(&stmt->diag, "HY109",
-                                   "[Argus] Invalid cursor position", 0);
+            /* Point GetData at the chosen row. */
+            stmt->row_cache.current_row = target;
+            return SQL_SUCCESS;
         }
         return SQL_SUCCESS;
+    }
+
+    if (Operation == SQL_REFRESH) {
+        /* Re-deliver the current rowset (or a single row of it) into the bound
+         * application buffers from the static scroll cache. */
+        if (!stmt->scroll_cached) {
+            return argus_set_error(&stmt->diag, "HYC00",
+                "[Argus] SQLSetPos SQL_REFRESH requires a static cursor", 0);
+        }
+
+        size_t start = stmt->scroll_rowset_start;
+        size_t end   = stmt->scroll_position;   /* exclusive */
+        if (end > stmt->scroll_row_count) end = stmt->scroll_row_count;
+
+        /* SQL_REFRESH must not advance the fetch counters. */
+        unsigned long saved_total = stmt->rows_fetched_total;
+        SQLRETURN final_ret = SQL_SUCCESS;
+
+        if (RowNumber > 0) {
+            size_t abs_row = start + (size_t)(RowNumber - 1);
+            if (abs_row >= end) {
+                return argus_set_error(&stmt->diag, "HY107",
+                                       "[Argus] Row value out of range", 0);
+            }
+            final_ret = deliver_scroll_row(stmt, abs_row,
+                                           (SQLULEN)(RowNumber - 1));
+        } else {
+            SQLULEN slot = 0;
+            for (size_t r = start; r < end; r++, slot++) {
+                SQLRETURN ret = deliver_scroll_row(stmt, r, slot);
+                if (ret == SQL_ERROR) { final_ret = SQL_ERROR; break; }
+                if (ret == SQL_SUCCESS_WITH_INFO)
+                    final_ret = SQL_SUCCESS_WITH_INFO;
+            }
+        }
+
+        stmt->rows_fetched_total = saved_total;
+        return final_ret;
     }
 
     return argus_set_error(&stmt->diag, "HYC00",

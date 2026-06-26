@@ -177,7 +177,10 @@ Spark/Flink en conditions réelles.
 3. **Backend Pinot** (HTTP/JSON) si la demande se confirme.
 
 ### Phase 4 — Conformité ODBC & modernité
-1. Compléter `SQLSetPos`, `SQLBulkOperations`, `SQLDescribeParam`, async complet.
+1. Compléter `SQLSetPos` (✅ `SQL_POSITION` + `SQL_REFRESH` sur curseur statique),
+   `SQLBulkOperations`, `SQLDescribeParam`, async complet. Restent les opérations
+   `SQL_UPDATE`/`SQL_DELETE`/`SQL_ADD` (génération de DML, peu pertinent pour les
+   moteurs append-mostly).
 2. Ajouter `get_primary_keys`/`get_statistics` pour Hive et Impala.
 3. **Backend/chemin Arrow Flight SQL** (`src/backend/flightsql/`) → Dremio, InfluxDB 3,
    Doris, StarRocks ; fondations d'une future surface **ADBC** (anticipe la bascule

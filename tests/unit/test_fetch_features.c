@@ -5,6 +5,8 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <setjmp.h>
+#include <stdlib.h>
+#include <string.h>
 #include <cmocka.h>
 #include <sql.h>
 #include <sqlext.h>
@@ -43,6 +45,70 @@ static void test_setpos_stub(void **state)
 
     /* SQL_UPDATE should fail with HYC00 */
     ret = SQLSetPos((SQLHSTMT)stmt, 1, SQL_UPDATE, SQL_LOCK_NO_CHANGE);
+    assert_int_equal(ret, SQL_ERROR);
+
+    argus_free_stmt(stmt);
+    argus_env_t *env = dbc->env;
+    dbc->connected = false;
+    argus_free_dbc(dbc);
+    argus_free_env(env);
+}
+
+/* ── Test: SQLSetPos SQL_REFRESH re-delivers the rowset ─────── */
+
+static void test_setpos_refresh(void **state)
+{
+    (void)state;
+
+    argus_dbc_t *dbc = create_dbc();
+    dbc->connected = true;
+    argus_stmt_t *stmt = NULL;
+    argus_alloc_stmt(dbc, &stmt);
+
+    /* One VARCHAR column. */
+    stmt->num_cols = 1;
+    stmt->columns[0].sql_type = SQL_VARCHAR;
+
+    /* Build a 3-row static scroll cache. */
+    const char *vals[3] = { "alpha", "beta", "gamma" };
+    stmt->scroll_rows = calloc(3, sizeof(argus_row_t));
+    for (int i = 0; i < 3; i++) {
+        stmt->scroll_rows[i].cells = calloc(1, sizeof(argus_cell_t));
+        stmt->scroll_rows[i].cells[0].data = strdup(vals[i]);
+        stmt->scroll_rows[i].cells[0].data_len = strlen(vals[i]);
+        stmt->scroll_rows[i].cells[0].is_null = false;
+    }
+    stmt->scroll_row_count = 3;
+    stmt->scroll_cached = true;
+    stmt->scroll_rowset_start = 0;
+    stmt->scroll_position = 3;     /* a rowset covering all three rows */
+    stmt->row_array_size = 3;
+
+    /* Bind column 1 to a column-wise array of 3 slots (stride 16). */
+    char buf[3][16];
+    SQLLEN ind[3];
+    memset(buf, 0, sizeof(buf));
+    stmt->bindings[0].target_type    = SQL_C_CHAR;
+    stmt->bindings[0].target_value   = buf;
+    stmt->bindings[0].buffer_length  = 16;
+    stmt->bindings[0].str_len_or_ind = ind;
+    stmt->bindings[0].bound          = true;
+
+    /* RowNumber 0: refresh the whole rowset. */
+    SQLRETURN ret = SQLSetPos((SQLHSTMT)stmt, 0, SQL_REFRESH, SQL_LOCK_NO_CHANGE);
+    assert_int_equal(ret, SQL_SUCCESS);
+    assert_string_equal(buf[0], "alpha");
+    assert_string_equal(buf[1], "beta");
+    assert_string_equal(buf[2], "gamma");
+
+    /* RowNumber 3: refresh a single row into slot 2. */
+    memset(buf, 0, sizeof(buf));
+    ret = SQLSetPos((SQLHSTMT)stmt, 3, SQL_REFRESH, SQL_LOCK_NO_CHANGE);
+    assert_int_equal(ret, SQL_SUCCESS);
+    assert_string_equal(buf[2], "gamma");
+
+    /* RowNumber beyond the rowset: HY107 (out of range). */
+    ret = SQLSetPos((SQLHSTMT)stmt, 4, SQL_REFRESH, SQL_LOCK_NO_CHANGE);
     assert_int_equal(ret, SQL_ERROR);
 
     argus_free_stmt(stmt);
@@ -244,6 +310,7 @@ int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_setpos_stub),
+        cmocka_unit_test(test_setpos_refresh),
         cmocka_unit_test(test_bulkops_stub),
         cmocka_unit_test(test_scroll_options_stub),
         cmocka_unit_test(test_describe_param),

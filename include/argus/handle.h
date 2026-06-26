@@ -171,6 +171,7 @@ struct argus_stmt {
     /* Cursor type for scrollable cursors */
     SQLULEN                 cursor_type;        /* SQL_CURSOR_FORWARD_ONLY or SQL_CURSOR_STATIC */
     size_t                  scroll_position;    /* absolute position in full cache */
+    size_t                  scroll_rowset_start; /* abs. start of current rowset (for SQLSetPos) */
     argus_row_t            *scroll_rows;        /* full result set cache */
     size_t                  scroll_row_count;   /* number of rows in scroll cache */
     bool                    scroll_cached;      /* true if full cache built */
