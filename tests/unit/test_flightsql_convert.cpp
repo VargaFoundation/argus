@@ -44,6 +44,36 @@ static std::shared_ptr<arrow::RecordBatch> make_batch()
     return arrow::RecordBatch::Make(schema, 3, {id_a, name_a, val_a});
 }
 
+/* Second scenario: the types InfluxDB 3 actually returns — boolean, timestamp,
+ * and dictionary-encoded utf8 (tag columns). */
+static std::shared_ptr<arrow::RecordBatch> make_batch2()
+{
+    arrow::BooleanBuilder flag;
+    (void)flag.Append(true);
+    (void)flag.Append(false);
+
+    auto ts_type = arrow::timestamp(arrow::TimeUnit::MICRO);
+    arrow::TimestampBuilder ts(ts_type, arrow::default_memory_pool());
+    (void)ts.Append(1000000);   /* 1970-01-01 00:00:01 UTC */
+    (void)ts.Append(2000000);
+
+    arrow::StringDictionaryBuilder region;
+    (void)region.Append("eu");
+    (void)region.Append("us");
+
+    std::shared_ptr<arrow::Array> flag_a, ts_a, region_a;
+    (void)flag.Finish(&flag_a);
+    (void)ts.Finish(&ts_a);
+    (void)region.Finish(&region_a);
+
+    auto schema = arrow::schema({
+        arrow::field("flag", arrow::boolean(), true),
+        arrow::field("ts", ts_type, true),
+        arrow::field("region", arrow::dictionary(arrow::int32(), arrow::utf8()), true),
+    });
+    return arrow::RecordBatch::Make(schema, 2, {flag_a, ts_a, region_a});
+}
+
 int main(void)
 {
     auto batch = make_batch();
@@ -88,7 +118,28 @@ int main(void)
     assert(cache.num_rows == 6);
     assert(std::strcmp(cache.rows[3].cells[1].data, "alpha") == 0);
 
-    std::printf("test_flightsql_convert: OK (%zu rows, %d cols)\n",
+    /* --- Scenario 2: bool / timestamp / dictionary(utf8) --- */
+    auto b2 = make_batch2();
+    argus_column_desc_t c2[ARGUS_MAX_COLUMNS];
+    int n2 = flightsql_schema_to_columns(b2->schema(), c2);
+    assert(n2 == 3);
+    assert(c2[0].sql_type == SQL_BIT);
+    assert(c2[1].sql_type == SQL_TYPE_TIMESTAMP);
+    assert(c2[2].sql_type == SQL_VARCHAR);   /* dictionary(utf8) -> value type */
+
+    argus_row_cache_t ch2;
+    std::memset(&ch2, 0, sizeof(ch2));
+    rc = flightsql_append_batch(b2, &ch2);
+    assert(rc == 0);
+    assert(ch2.num_rows == 2);
+    assert(std::strcmp(ch2.rows[0].cells[0].data, "true") == 0);
+    assert(std::strcmp(ch2.rows[1].cells[0].data, "false") == 0);
+    assert(std::strstr(ch2.rows[0].cells[1].data, "1970-01-01") != nullptr);
+    assert(std::strcmp(ch2.rows[0].cells[2].data, "eu") == 0);   /* dict decoded */
+    assert(std::strcmp(ch2.rows[1].cells[2].data, "us") == 0);
+
+    std::printf("test_flightsql_convert: OK (scenario1 %zu rows %d cols; "
+                "scenario2 bool/timestamp/dict OK)\n",
                 cache.num_rows, cache.num_cols);
     return 0;
 }

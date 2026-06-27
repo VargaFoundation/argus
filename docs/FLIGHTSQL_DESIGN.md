@@ -143,6 +143,8 @@ mirroring the Kudu wiring.
 - `date32/64` → `SQL_TYPE_DATE`; `time32/64` → `SQL_TYPE_TIME`
 - `timestamp` → `SQL_TYPE_TIMESTAMP`
 - `list/struct/map` → `SQL_VARCHAR` (JSON-encoded), matching the Trino backend
+- `dictionary(index, value)` → unwrapped to the **value** type for both the SQL
+  type and the cell text (InfluxDB 3 tag columns are `Dictionary(Int32, Utf8)`)
 
 ## Auth
 

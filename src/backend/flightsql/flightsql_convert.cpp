@@ -93,6 +93,11 @@ void flightsql_field_to_column(const std::shared_ptr<arrow::Field>& field,
         std::strlen(reinterpret_cast<char*>(col->name)));
 
     auto type = field->type();
+    /* Dictionary-encoded columns (e.g. InfluxDB tags are Dictionary(Int32,Utf8))
+     * are surfaced as their decoded value type. */
+    if (type && type->id() == arrow::Type::DICTIONARY)
+        type = std::static_pointer_cast<arrow::DictionaryType>(type)->value_type();
+
     col->sql_type = flightsql_arrow_to_sql_type(type ? type->id() : arrow::Type::NA);
     col->column_size = column_size_for(col->sql_type, type);
     col->decimal_digits = decimal_digits_for(col->sql_type, type);
@@ -172,6 +177,25 @@ int flightsql_append_batch(const std::shared_ptr<arrow::RecordBatch>& batch,
             case arrow::Type::LARGE_STRING: {
                 auto a = std::static_pointer_cast<arrow::LargeStringArray>(array);
                 text.assign(a->GetView(r));
+                break;
+            }
+            case arrow::Type::DICTIONARY: {
+                /* Decode to the dictionary value (InfluxDB tag columns are
+                 * Dictionary(Int32, Utf8)); GetScalar()->ToString() on a
+                 * dictionary scalar does not yield the plain value. */
+                auto da = std::static_pointer_cast<arrow::DictionaryArray>(array);
+                int64_t idx = da->GetValueIndex(r);
+                auto values = da->dictionary();
+                if (values->type_id() == arrow::Type::STRING) {
+                    text.assign(std::static_pointer_cast<arrow::StringArray>(
+                        values)->GetView(idx));
+                } else if (values->type_id() == arrow::Type::LARGE_STRING) {
+                    text.assign(std::static_pointer_cast<arrow::LargeStringArray>(
+                        values)->GetView(idx));
+                } else {
+                    auto sc = values->GetScalar(idx);
+                    if (sc.ok()) text = sc.ValueOrDie()->ToString();
+                }
                 break;
             }
             default: {
