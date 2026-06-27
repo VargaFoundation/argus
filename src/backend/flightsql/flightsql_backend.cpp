@@ -113,6 +113,19 @@ static int flightsql_connect(argus_dbc_t* dbc,
         conn->call_options.headers.emplace_back("database", database);
 
     conn->client = std::make_unique<flightsql::FlightSqlClient>(shared_client);
+
+    /* Flight's Connect is lazy and does not itself authenticate, so validate the
+     * connection with a lightweight metadata RPC. This makes SQLConnect fail
+     * fast on bad credentials or an unreachable server, as ODBC expects, rather
+     * than only surfacing the error on the first query. */
+    auto check = conn->client->GetCatalogs(conn->call_options);
+    if (!check.ok()) {
+        ARGUS_LOG_ERROR("Flight SQL: connection validation failed: %s",
+                        check.status().ToString().c_str());
+        delete conn;
+        return -1;
+    }
+
     *out_conn = conn;
     return 0;
 }
