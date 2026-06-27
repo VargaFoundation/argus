@@ -74,6 +74,29 @@ static std::shared_ptr<arrow::RecordBatch> make_batch2()
     return arrow::RecordBatch::Make(schema, 2, {flag_a, ts_a, region_a});
 }
 
+/* Third scenario: decimal128 (precision/scale) and date32. */
+static std::shared_ptr<arrow::RecordBatch> make_batch3()
+{
+    auto dec_type = arrow::decimal128(10, 2);
+    arrow::Decimal128Builder dec(dec_type);
+    (void)dec.Append(arrow::Decimal128(12345));   /* 123.45 at scale 2 */
+    (void)dec.Append(arrow::Decimal128(-67890));  /* -678.90 */
+
+    arrow::Date32Builder dt;
+    (void)dt.Append(19884);   /* 2024-06-10 */
+    (void)dt.Append(0);       /* 1970-01-01 */
+
+    std::shared_ptr<arrow::Array> dec_a, dt_a;
+    (void)dec.Finish(&dec_a);
+    (void)dt.Finish(&dt_a);
+
+    auto schema = arrow::schema({
+        arrow::field("amount", dec_type, true),
+        arrow::field("day", arrow::date32(), true),
+    });
+    return arrow::RecordBatch::Make(schema, 2, {dec_a, dt_a});
+}
+
 int main(void)
 {
     auto batch = make_batch();
@@ -138,8 +161,27 @@ int main(void)
     assert(std::strcmp(ch2.rows[0].cells[2].data, "eu") == 0);   /* dict decoded */
     assert(std::strcmp(ch2.rows[1].cells[2].data, "us") == 0);
 
+    /* --- Scenario 3: decimal128(10,2) / date32 --- */
+    auto b3 = make_batch3();
+    argus_column_desc_t c3[ARGUS_MAX_COLUMNS];
+    int n3 = flightsql_schema_to_columns(b3->schema(), c3);
+    assert(n3 == 2);
+    assert(c3[0].sql_type == SQL_DECIMAL);
+    assert(c3[0].column_size == 10);     /* precision */
+    assert(c3[0].decimal_digits == 2);   /* scale */
+    assert(c3[1].sql_type == SQL_TYPE_DATE);
+
+    argus_row_cache_t ch3;
+    std::memset(&ch3, 0, sizeof(ch3));
+    rc = flightsql_append_batch(b3, &ch3);
+    assert(rc == 0);
+    assert(ch3.num_rows == 2);
+    assert(std::strcmp(ch3.rows[0].cells[0].data, "123.45") == 0);
+    assert(std::strcmp(ch3.rows[1].cells[0].data, "-678.90") == 0);
+    assert(std::strstr(ch3.rows[0].cells[1].data, "2024-06-10") != nullptr);
+
     std::printf("test_flightsql_convert: OK (scenario1 %zu rows %d cols; "
-                "scenario2 bool/timestamp/dict OK)\n",
+                "scenario2 bool/ts/dict; scenario3 decimal/date)\n",
                 cache.num_rows, cache.num_cols);
     return 0;
 }
