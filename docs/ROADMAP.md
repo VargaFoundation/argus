@@ -172,8 +172,9 @@ Spark/Flink en conditions réelles.
 1. **Backend MySQL-wire** (`src/backend/mysql/`) → StarRocks + Doris + ClickHouse.
    Dépendance `libmariadb`, auto-détectée. ✅ **Implémenté et validé** (`BACKEND=mysql`,
    `mywire_*` : connect/execute/fetch/metadata + catalogue via `information_schema`).
-   Validé end-to-end contre MariaDB 11 : SELECT (int/varchar/decimal/bigint/double/
-   date/datetime/NULL), SQLTables, SQLColumns, SQLPrimaryKeys, SQLGetTypeInfo.
+   Validé end-to-end contre **MariaDB 11** (SELECT int/varchar/decimal/bigint/double/
+   date/datetime/NULL, SQLTables, SQLColumns, SQLPrimaryKeys, SQLGetTypeInfo) **et
+   ClickHouse** (interface MySQL :9004) — un seul backend, deux moteurs.
 2. **Backend Druid** (`src/backend/druid/`) en réutilisant le code Avatica de Phoenix
    (factoriser l'Avatica commun dans `src/backend/common/avatica_*.c`).
 3. **Backend Pinot** (HTTP/JSON) si la demande se confirme.
