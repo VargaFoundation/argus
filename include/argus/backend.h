@@ -109,6 +109,12 @@ typedef struct argus_backend {
                           unsigned short unique,
                           unsigned short reserved,
                           argus_backend_op_t *out_op);
+
+    /* Most recent backend/server error message (optional, may be NULL). Writes
+     * up to buflen-1 chars + NUL into buf; returns true if a message was
+     * available. Lets the ODBC layer surface the real server error (e.g.
+     * "table not found") instead of a generic one. */
+    bool (*get_last_error)(argus_backend_conn_t conn, char *buf, size_t buflen);
 } argus_backend_t;
 
 /* Backend registry */

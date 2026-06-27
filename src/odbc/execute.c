@@ -616,8 +616,18 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
         stmt->errors_total++;
         if (dbc) dbc->errors_total++;
         if (stmt->diag.count == 0) {
-            argus_set_error(&stmt->diag, "HY000",
-                            "[Argus] Backend execution failed", 0);
+            char errbuf[512];
+            if (dbc->backend->get_last_error &&
+                dbc->backend->get_last_error(dbc->backend_conn,
+                                             errbuf, sizeof(errbuf)) &&
+                errbuf[0]) {
+                char msg[600];
+                snprintf(msg, sizeof(msg), "[Argus] %s", errbuf);
+                argus_set_error(&stmt->diag, "HY000", msg, 0);
+            } else {
+                argus_set_error(&stmt->diag, "HY000",
+                                "[Argus] Backend execution failed", 0);
+            }
         }
         return SQL_ERROR;
     }

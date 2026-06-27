@@ -25,6 +25,7 @@ struct flightsql_conn {
     arrow::flight::FlightCallOptions call_options;  /* carries auth headers */
     std::string host;
     int         port = 0;
+    std::string last_error;   /* message from the most recent failed RPC */
 };
 
 /* One executed statement: the FlightInfo plus a lazily-materialized result. */

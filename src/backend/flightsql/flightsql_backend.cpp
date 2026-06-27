@@ -148,12 +148,13 @@ static int run_to_op(flightsql_conn* conn,
                      arrow::Result<std::unique_ptr<flight::FlightInfo>> info_res,
                      argus_backend_op_t* out_op)
 {
-    (void)conn;
     if (!info_res.ok()) {
+        conn->last_error = info_res.status().ToString();
         ARGUS_LOG_ERROR("Flight SQL: request failed: %s",
-                        info_res.status().ToString().c_str());
+                        conn->last_error.c_str());
         return -1;
     }
+    conn->last_error.clear();
     auto* op = new (std::nothrow) flightsql_op();
     if (!op) return -1;
     op->info = std::move(info_res).ValueOrDie();
@@ -426,6 +427,18 @@ static int flightsql_get_primary_keys(argus_backend_conn_t raw_conn,
         conn->client->GetPrimaryKeys(conn->call_options, ref), out_op);
 }
 
+/* ── Last error message ──────────────────────────────────────── */
+
+static bool flightsql_get_last_error(argus_backend_conn_t raw_conn,
+                                     char* buf, size_t buflen)
+{
+    auto* conn = static_cast<flightsql_conn*>(raw_conn);
+    if (!conn || conn->last_error.empty() || buflen == 0) return false;
+    std::strncpy(buf, conn->last_error.c_str(), buflen - 1);
+    buf[buflen - 1] = '\0';
+    return true;
+}
+
 /* ── Backend vtable ──────────────────────────────────────────── */
 
 static const argus_backend_t flightsql_backend = {
@@ -446,6 +459,7 @@ static const argus_backend_t flightsql_backend = {
     /* get_catalogs         */ flightsql_get_catalogs,
     /* get_primary_keys     */ flightsql_get_primary_keys,
     /* get_statistics       */ nullptr,
+    /* get_last_error       */ flightsql_get_last_error,
 };
 
 extern "C" const argus_backend_t* argus_flightsql_backend_get(void)

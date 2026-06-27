@@ -281,6 +281,20 @@ static int mywire_fetch_results(argus_backend_conn_t raw_conn,
     return 0;
 }
 
+/* ── Last error message ──────────────────────────────────────── */
+
+static bool mywire_get_last_error(argus_backend_conn_t raw_conn,
+                                  char *buf, size_t buflen)
+{
+    mywire_conn_t *conn = (mywire_conn_t *)raw_conn;
+    if (!conn || !conn->mysql || buflen == 0) return false;
+    const char *e = mysql_error(conn->mysql);
+    if (!e || !*e) return false;
+    strncpy(buf, e, buflen - 1);
+    buf[buflen - 1] = '\0';
+    return true;
+}
+
 /* ── Backend vtable ──────────────────────────────────────────── */
 
 static const argus_backend_t mywire_backend = {
@@ -300,6 +314,7 @@ static const argus_backend_t mywire_backend = {
     .get_schemas           = mywire_get_schemas,
     .get_catalogs          = mywire_get_catalogs,
     .get_primary_keys      = mywire_get_primary_keys,
+    .get_last_error        = mywire_get_last_error,
 };
 
 const argus_backend_t *argus_mysql_backend_get(void)
