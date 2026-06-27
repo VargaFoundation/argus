@@ -672,6 +672,25 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
         }
     }
 
+    /* Asynchronous backends (e.g. Trino) only surface a query error while the
+     * result is being polled for metadata, after execute() itself returned ok.
+     * If the backend now reports an error, fail the statement instead of
+     * returning success and then no rows. Gated on get_last_error, so
+     * synchronous backends (which already failed above) are unaffected. */
+    if (dbc->backend->get_last_error) {
+        char errbuf[512];
+        if (dbc->backend->get_last_error(dbc->backend_conn,
+                                         errbuf, sizeof(errbuf)) && errbuf[0]) {
+            char msg[600];
+            snprintf(msg, sizeof(msg), "[Argus] %s", errbuf);
+            argus_set_error(&stmt->diag, "HY000", msg, 0);
+            stmt->executed = false;
+            stmt->errors_total++;
+            if (dbc) dbc->errors_total++;
+            return SQL_ERROR;
+        }
+    }
+
     return SQL_SUCCESS;
 }
 

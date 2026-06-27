@@ -48,6 +48,10 @@ typedef struct trino_conn {
 
     /* Protocol version: 1 = v1, 2 = v2 spooling */
     int                 protocol_version;
+
+    /* Message of the most recent server query error (empty if none). Trino
+     * runs queries asynchronously, so the error appears while polling. */
+    char                last_error[512];
 } trino_conn_t;
 
 /* Trino operation state */
@@ -72,6 +76,10 @@ SQLSMALLINT trino_type_decimal_digits(SQLSMALLINT sql_type);
 /* Helper to create/free operations */
 trino_operation_t *trino_operation_new(void);
 void trino_operation_free(trino_operation_t *op);
+
+/* Store a server error message (from a response's "error" member) on the
+ * connection so the ODBC layer can surface it; clears it when absent. */
+void trino_capture_error(trino_conn_t *conn, JsonObject *obj);
 
 /* CURL response buffer */
 typedef struct trino_response {

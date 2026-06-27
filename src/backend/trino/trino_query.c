@@ -29,6 +29,8 @@ int trino_execute(argus_backend_conn_t raw_conn,
     trino_conn_t *conn = (trino_conn_t *)raw_conn;
     if (!conn || !query) return -1;
 
+    conn->last_error[0] = '\0';
+
     /* POST /v1/statement with SQL as body */
     char stmt_url[1024];
     snprintf(stmt_url, sizeof(stmt_url), "%s/v1/statement", conn->base_url);
@@ -54,6 +56,7 @@ int trino_execute(argus_backend_conn_t raw_conn,
 
     /* Check for error */
     if (json_object_has_member(obj, "error")) {
+        trino_capture_error(conn, obj);
         g_object_unref(parser);
         free(resp.data);
         return -1;

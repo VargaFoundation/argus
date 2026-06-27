@@ -563,3 +563,30 @@ void trino_disconnect(argus_backend_conn_t raw_conn)
 
     free(conn);
 }
+
+/* ── Server error message capture ────────────────────────────── */
+
+void trino_capture_error(trino_conn_t *conn, JsonObject *obj)
+{
+    if (!conn || !obj) return;
+    conn->last_error[0] = '\0';
+    if (!json_object_has_member(obj, "error")) return;
+
+    JsonObject *err = json_object_get_object_member(obj, "error");
+    if (err && json_object_has_member(err, "message")) {
+        const char *m = json_object_get_string_member(err, "message");
+        if (m && *m) {
+            strncpy(conn->last_error, m, sizeof(conn->last_error) - 1);
+            conn->last_error[sizeof(conn->last_error) - 1] = '\0';
+        }
+    }
+}
+
+bool trino_get_last_error(argus_backend_conn_t raw_conn, char *buf, size_t buflen)
+{
+    trino_conn_t *conn = (trino_conn_t *)raw_conn;
+    if (!conn || !conn->last_error[0] || buflen == 0) return false;
+    strncpy(buf, conn->last_error, buflen - 1);
+    buf[buflen - 1] = '\0';
+    return true;
+}

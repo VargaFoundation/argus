@@ -188,6 +188,7 @@ int trino_fetch_results(argus_backend_conn_t raw_conn,
 
         /* Check for error */
         if (json_object_has_member(obj, "error")) {
+            trino_capture_error(conn, obj);
             g_object_unref(parser);
             free(resp.data);
             return -1;
@@ -297,6 +298,15 @@ int trino_get_result_metadata(argus_backend_conn_t raw_conn,
 
         JsonNode *root = json_parser_get_root(parser);
         JsonObject *obj = json_node_get_object(root);
+
+        /* The query may have failed during planning/execution; the error
+         * surfaces here while polling for the result. */
+        if (json_object_has_member(obj, "error")) {
+            trino_capture_error(conn, obj);
+            g_object_unref(parser);
+            free(resp.data);
+            return -1;
+        }
 
         /* Parse column metadata */
         if (json_object_has_member(obj, "columns")) {

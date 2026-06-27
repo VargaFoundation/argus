@@ -73,6 +73,8 @@ int trino_get_statistics(argus_backend_conn_t conn,
                           unsigned short reserved,
                           argus_backend_op_t *out_op);
 
+bool trino_get_last_error(argus_backend_conn_t conn, char *buf, size_t buflen);
+
 /* Trino backend vtable */
 static const argus_backend_t trino_backend = {
     .name                  = "trino",
@@ -92,6 +94,7 @@ static const argus_backend_t trino_backend = {
     .get_catalogs          = trino_get_catalogs,
     .get_primary_keys      = trino_get_primary_keys,
     .get_statistics        = trino_get_statistics,
+    .get_last_error        = trino_get_last_error,
 };
 
 const argus_backend_t *argus_trino_backend_get(void)
