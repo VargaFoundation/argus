@@ -52,9 +52,33 @@ int mywire_get_tables(argus_backend_conn_t conn,
     if (table_name && *table_name)
         off += snprintf(query + off, sizeof(query) - (size_t)off,
                         " AND table_name LIKE '%s'", table_name);
-    if (table_types && *table_types)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_type IN ('%s')", table_types);
+    if (table_types && *table_types) {
+        /* The ODBC type list ("TABLE,VIEW", possibly quoted) must be turned
+         * into a proper quoted IN list, translating the ODBC name "TABLE" to
+         * information_schema's "BASE TABLE". */
+        char in_list[256];
+        int n = 0;
+        char tmp[256];
+        strncpy(tmp, table_types, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
+        char *save = NULL;
+        for (char *tok = strtok_r(tmp, ",", &save); tok;
+             tok = strtok_r(NULL, ",", &save)) {
+            while (*tok == ' ' || *tok == '\'' || *tok == '"') tok++;
+            char *end = tok + strlen(tok);
+            while (end > tok &&
+                   (end[-1] == ' ' || end[-1] == '\'' || end[-1] == '"'))
+                *--end = '\0';
+            if (!*tok) continue;
+            const char *mapped =
+                (strcmp(tok, "TABLE") == 0) ? "BASE TABLE" : tok;
+            n += snprintf(in_list + n, sizeof(in_list) - (size_t)n,
+                          "%s'%s'", n ? "," : "", mapped);
+        }
+        if (n > 0)
+            off += snprintf(query + off, sizeof(query) - (size_t)off,
+                            " AND table_type IN (%s)", in_list);
+    }
 
     snprintf(query + off, sizeof(query) - (size_t)off,
              " ORDER BY table_schema, table_name");
