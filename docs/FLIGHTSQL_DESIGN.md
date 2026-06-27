@@ -71,12 +71,20 @@ Execute path (Flight SQL has no native GetColumns RPC, and `GetTables`'
 `include_schema` only carries a serialized Arrow blob, not the ODBC shape) —
 the same approach as the Trino/MySQL backends.
 
+### Validated against a second engine: Dremio
+
+Dremio OSS (Flight SQL `:32010`, Docker) exercised the **basic-token handshake**
+auth (`AuthenticateBasicToken`, from `UID`+`PWD`) and a different catalog model:
+connect succeeds, `SELECT` over `INFORMATION_SCHEMA` returns rows, `SQLTables`,
+`SQLColumns` and `SQLGetTypeInfo` all work. Auth is now validated on **both
+mechanisms** — Bearer token (InfluxDB 3) and basic-token handshake (Dremio).
+
+This surfaced a `table_types` nuance: InfluxDB reports user tables as
+`BASE TABLE`, Dremio as `TABLE` (and `SYSTEM_TABLE` for system objects). So an
+ODBC `SQLTables(...,"TABLE")` now requests **both** `TABLE` and `BASE TABLE`.
+
 What still needs doing / validation:
-- **Auth at runtime** — the Bearer/basic-token path is the same as the
-  (validated) Trino bearer path but was not exercised against InfluxDB here
-  (`--object-store memory` + auth needs a persistent token store to bootstrap).
-- Validate against **Dremio** and **Doris/StarRocks** Flight SQL too (different
-  catalog conventions; auth via basic-token handshake / bearer).
+- Validate against **Doris/StarRocks** Flight SQL too (yet another catalog model).
 - The Arrow-native (zero-copy) fetch path — see Phase 2 in `ROADMAP.md`.
 
 The sections below remain the reference for the architecture and the type mapping.

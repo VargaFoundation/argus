@@ -321,8 +321,9 @@ static int flightsql_get_tables(argus_backend_conn_t raw_conn,
     if (table_name && *table_name) { tbl = table_name; tbl_p = &tbl; }
 
     /* table_types is an ODBC comma-separated list (e.g. "TABLE,VIEW", possibly
-     * quoted). Split it, and translate the ODBC name "TABLE" to the SQL-standard
-     * "BASE TABLE" that Flight SQL servers (InfluxDB 3, Dremio, …) report. */
+     * quoted). Split it. ODBC clients use "TABLE", but Flight SQL servers differ
+     * on the spelling: InfluxDB 3 reports user tables as the SQL-standard
+     * "BASE TABLE" while Dremio uses "TABLE". Request both so either matches. */
     if (table_types && *table_types) {
         std::stringstream ss(table_types);
         std::string tok;
@@ -331,8 +332,8 @@ static int flightsql_get_tables(argus_backend_conn_t raw_conn,
             size_t b = tok.find_last_not_of(" '\"");
             if (a == std::string::npos) continue;
             std::string t = tok.substr(a, b - a + 1);
-            if (t == "TABLE") t = "BASE TABLE";
             types.push_back(t);
+            if (t == "TABLE") types.push_back("BASE TABLE");
         }
     }
 
