@@ -153,7 +153,8 @@ DRIVER=Argus;BACKEND=flightsql;HOST=dremio;PORT=32010;UID=user;PWD={secret}
 DRIVER=Argus;BACKEND=flightsql;HOST=influxdb3;PORT=443;SSL=1;PWD={token}
 ```
 
-- Protocol: Arrow Flight SQL (gRPC); columnar results converted to text cells
+- Protocol: Arrow Flight SQL (gRPC); record batches are **streamed** lazily
+  (one block per fetch, bounded memory) and converted to text cells
 - Default port: 32010 (Dremio); set PORT explicitly per engine (InfluxDB 3: 8181)
 - `DATABASE` is sent as the gRPC `database` call header (how InfluxDB 3 selects
   the target database)

@@ -31,10 +31,17 @@ struct flightsql_conn {
 /* One executed statement: the FlightInfo plus a lazily-materialized result. */
 struct flightsql_op {
     std::unique_ptr<arrow::flight::FlightInfo> info;
-    bool                 fetched = false;          /* result drained into cache */
     bool                 metadata_fetched = false;
     argus_column_desc_t* columns = nullptr;
     int                  num_cols = 0;
+
+    /* Streaming state: a Flight result can be sharded across endpoints, each a
+     * stream of record batches. Rather than draining everything into memory on
+     * the first fetch, we walk endpoints/batches lazily and hand the ODBC layer
+     * one block (up to the requested batch size) per fetch_results call. */
+    size_t               endpoint_idx = 0;
+    std::unique_ptr<arrow::flight::FlightStreamReader> reader;
+    bool                 done = false;             /* all endpoints exhausted */
 };
 
 #endif /* ARGUS_FLIGHTSQL_INTERNAL_H */

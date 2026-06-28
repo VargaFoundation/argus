@@ -27,32 +27,6 @@ namespace flightsql = arrow::flight::sql;
  * (flightsql_convert.cpp) is independently unit tested.
  */
 
-/* ── Helper: drain one stream reader into the row cache ──────── */
-
-static int drain_reader(flight::FlightStreamReader* reader,
-                        argus_row_cache_t* cache,
-                        argus_column_desc_t* columns, int* num_cols,
-                        bool* have_meta)
-{
-    if (!*have_meta) {
-        auto schema_res = reader->GetSchema();
-        if (schema_res.ok() && columns && num_cols) {
-            *num_cols = flightsql_schema_to_columns(schema_res.ValueOrDie(),
-                                                    columns);
-            *have_meta = true;
-        }
-    }
-
-    while (true) {
-        auto chunk_res = reader->Next();
-        if (!chunk_res.ok()) return -1;
-        flight::FlightStreamChunk chunk = std::move(chunk_res).ValueOrDie();
-        if (!chunk.data) break;            /* end of stream */
-        if (flightsql_append_batch(chunk.data, cache) != 0) return -1;
-    }
-    return 0;
-}
-
 /* ── Connection lifecycle ────────────────────────────────────── */
 
 static int flightsql_connect(argus_dbc_t* dbc,
@@ -208,66 +182,97 @@ static int flightsql_fetch_results(argus_backend_conn_t raw_conn,
                                    argus_column_desc_t* columns,
                                    int* num_cols)
 {
-    (void)max_rows;
     auto* conn = static_cast<flightsql_conn*>(raw_conn);
     auto* op = static_cast<flightsql_op*>(raw_op);
     if (!conn || !conn->client || !op || !cache) return -1;
 
-    /* Already drained: hand back cached metadata, report exhaustion. */
-    if (op->fetched) {
-        if (columns && num_cols && op->columns) {
+    /* Copy whatever column metadata we already have to the caller. */
+    auto provide_meta = [&]() {
+        if (columns && num_cols && op->columns && op->metadata_fetched) {
             std::memcpy(columns, op->columns,
                         static_cast<size_t>(op->num_cols) *
                             sizeof(argus_column_desc_t));
             *num_cols = op->num_cols;
         }
+    };
+
+    if (op->done) {
+        provide_meta();
         cache->num_rows = 0;
         cache->exhausted = true;
         return 0;
     }
 
-    bool have_meta = false;
-    int local_cols = 0;
-    argus_column_desc_t local_meta[ARGUS_MAX_COLUMNS];
+    const auto& endpoints = op->info->endpoints();
+    /* Accumulate up to one ODBC block per call (bounded memory); when no block
+     * size is given, return after the first non-empty batch. */
+    const size_t target = (max_rows > 0) ? static_cast<size_t>(max_rows) : 1;
 
-    /* Flight can shard a result across endpoints; drain them in order. */
-    for (const auto& endpoint : op->info->endpoints()) {
-        auto reader_res = conn->client->DoGet(conn->call_options,
-                                              endpoint.ticket);
-        if (!reader_res.ok()) {
-            ARGUS_LOG_ERROR("Flight SQL: DoGet failed: %s",
-                            reader_res.status().ToString().c_str());
+    while (true) {
+        /* Open the next endpoint's stream on demand. */
+        if (!op->reader) {
+            if (op->endpoint_idx >= endpoints.size()) {
+                op->done = true;
+                provide_meta();
+                cache->exhausted = true;   /* hand back any accumulated rows */
+                return 0;
+            }
+            auto reader_res = conn->client->DoGet(
+                conn->call_options, endpoints[op->endpoint_idx].ticket);
+            if (!reader_res.ok()) {
+                ARGUS_LOG_ERROR("Flight SQL: DoGet failed: %s",
+                                reader_res.status().ToString().c_str());
+                return -1;
+            }
+            op->reader = std::move(reader_res).ValueOrDie();
+
+            /* Capture column metadata from the first stream's schema. */
+            if (!op->metadata_fetched) {
+                auto schema_res = op->reader->GetSchema();
+                if (schema_res.ok() && schema_res.ValueOrDie()) {
+                    argus_column_desc_t local_meta[ARGUS_MAX_COLUMNS];
+                    int local_cols = flightsql_schema_to_columns(
+                        schema_res.ValueOrDie(), local_meta);
+                    op->columns = static_cast<argus_column_desc_t*>(
+                        std::calloc(static_cast<size_t>(
+                                        local_cols > 0 ? local_cols : 1),
+                                    sizeof(argus_column_desc_t)));
+                    if (op->columns) {
+                        std::memcpy(op->columns, local_meta,
+                                    static_cast<size_t>(local_cols) *
+                                        sizeof(argus_column_desc_t));
+                        op->num_cols = local_cols;
+                        op->metadata_fetched = true;
+                    }
+                }
+            }
+        }
+
+        provide_meta();
+
+        auto chunk_res = op->reader->Next();
+        if (!chunk_res.ok()) {
+            ARGUS_LOG_ERROR("Flight SQL: stream read failed: %s",
+                            chunk_res.status().ToString().c_str());
             return -1;
         }
-        auto reader = std::move(reader_res).ValueOrDie();
-        if (drain_reader(reader.get(), cache, local_meta, &local_cols,
-                         &have_meta) != 0)
-            return -1;
-    }
-
-    /* Cache metadata for subsequent get_result_metadata / fetch calls. */
-    if (have_meta) {
-        op->columns = static_cast<argus_column_desc_t*>(
-            std::calloc(static_cast<size_t>(local_cols > 0 ? local_cols : 1),
-                        sizeof(argus_column_desc_t)));
-        if (op->columns) {
-            std::memcpy(op->columns, local_meta,
-                        static_cast<size_t>(local_cols) *
-                            sizeof(argus_column_desc_t));
-            op->num_cols = local_cols;
-            op->metadata_fetched = true;
+        flight::FlightStreamChunk chunk = std::move(chunk_res).ValueOrDie();
+        if (!chunk.data) {
+            /* End of this endpoint's stream; advance to the next one. */
+            op->reader.reset();
+            op->endpoint_idx++;
+            continue;
         }
-        if (columns && num_cols) {
-            std::memcpy(columns, local_meta,
-                        static_cast<size_t>(local_cols) *
-                            sizeof(argus_column_desc_t));
-            *num_cols = local_cols;
+        if (flightsql_append_batch(chunk.data, cache) != 0) return -1;
+
+        /* The ODBC layer treats a 0-row block as end-of-data, so keep reading
+         * past empty batches; return once the block has rows. */
+        if (cache->num_rows == 0) continue;
+        if (cache->num_rows >= target) {
+            cache->exhausted = false;
+            return 0;
         }
     }
-
-    op->fetched = true;
-    cache->exhausted = true;
-    return 0;
 }
 
 static int flightsql_get_result_metadata(argus_backend_conn_t raw_conn,
