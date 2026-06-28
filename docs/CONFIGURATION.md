@@ -61,6 +61,7 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | trino | 8080 |
 | mysql | 3306 |
 | flightsql | 32010 |
+| pinot | 8000 |
 
 ### Authentication Mechanisms
 
@@ -161,6 +162,24 @@ DRIVER=Argus;BACKEND=flightsql;HOST=influxdb3;PORT=443;SSL=1;PWD={token}
 - Requires a build with `libarrow-flight-sql-dev` (from the Apache Arrow APT repo)
   and **GCC 14+** with **C++20** — Arrow 24's headers don't compile on GCC 13.
   Auto-detected at cmake time. See `docs/FLIGHTSQL_DESIGN.md` for the exact steps.
+
+### Apache Pinot (BACKEND=pinot)
+
+Real-time OLAP datastore. Argus queries the Pinot **broker**'s synchronous SQL
+endpoint (`POST /query/sql`) and lists tables from the **controller** (`/tables`,
+default port 9000 on the same host).
+
+```
+DRIVER=Argus;BACKEND=pinot;HOST=pinot-broker;PORT=8000
+DRIVER=Argus;BACKEND=pinot;HOST=pinot;PORT=8000;UID=user;PWD={secret}
+```
+
+- Protocol: HTTP/JSON (`/query/sql`); the whole result arrives in one response
+- Default port: 8000 (broker); table listing uses the controller on `:9000`
+- Optional HTTP Basic auth via `UID`/`PWD`; `SSL=1` for HTTPS
+- `SQLTables` lists the cluster's tables; query errors surface the real Pinot
+  message. **Validated end-to-end** against a Pinot QuickStart cluster
+- Requires libcurl + json-glib (auto-detected at cmake time)
 
 ## Connecting to Spark and Flink (via the Hive backend)
 

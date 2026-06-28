@@ -150,6 +150,28 @@ if(ARGUS_BUILD_PHOENIX)
     list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_PHOENIX)
 endif()
 
+# Conditionally add Pinot backend (HTTP/JSON SQL; libcurl + json-glib)
+if(ARGUS_BUILD_PINOT)
+    list(APPEND ARGUS_SOURCES
+        backend/pinot/pinot_backend.c
+        backend/pinot/pinot_types.c
+    )
+    list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend/pinot
+        ${LIBCURL_INCLUDE_DIRS}
+        ${JSON_GLIB_INCLUDE_DIRS}
+    )
+    list(APPEND ARGUS_LINK_LIBS
+        ${LIBCURL_LIBRARIES}
+        ${JSON_GLIB_LIBRARIES}
+    )
+    list(APPEND ARGUS_LINK_DIRS
+        ${LIBCURL_LIBRARY_DIRS}
+        ${JSON_GLIB_LIBRARY_DIRS}
+    )
+    list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_PINOT)
+endif()
+
 # Conditionally add Kudu backend (requires libkudu_client C++ library)
 if(ARGUS_BUILD_KUDU)
     enable_language(CXX)

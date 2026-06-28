@@ -177,7 +177,7 @@ Spark/Flink en conditions réelles.
    ClickHouse** (interface MySQL :9004) — un seul backend, deux moteurs.
 2. **Backend Druid** (`src/backend/druid/`) en réutilisant le code Avatica de Phoenix
    (factoriser l'Avatica commun dans `src/backend/common/avatica_*.c`).
-3. **Backend Pinot** (HTTP/JSON) si la demande se confirme.
+3. **Backend Pinot** (`src/backend/pinot/`) — ✅ **implémenté et validé** (HTTP/JSON `/query/sql`, SQLTables via le controller ; validé contre un cluster Pinot QuickStart).
 
 ### Phase 4 — Conformité ODBC & modernité
 1. Compléter `SQLSetPos` (✅ `SQL_POSITION` + `SQL_REFRESH` sur curseur statique),
