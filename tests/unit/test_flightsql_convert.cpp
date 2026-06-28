@@ -120,11 +120,15 @@ int main(void)
     assert(cache.num_rows == 3);
     assert(cache.num_cols == 3);
 
-    /* Row 0: 1 / alpha / 1.5 */
+    /* Row 0: 1 / alpha / 1.5. Numeric columns are stored as native typed
+     * values (no per-cell string allocated); the string column stays text. */
     assert(!cache.rows[0].cells[0].is_null);
-    assert(std::strcmp(cache.rows[0].cells[0].data, "1") == 0);
+    assert(cache.rows[0].cells[0].native_kind == ARGUS_NATIVE_I64);
+    assert(cache.rows[0].cells[0].native.i64 == 1);
+    assert(cache.rows[0].cells[0].data == nullptr);   /* no text allocated */
     assert(std::strcmp(cache.rows[0].cells[1].data, "alpha") == 0);
-    assert(std::strcmp(cache.rows[0].cells[2].data, "1.5") == 0);
+    assert(cache.rows[0].cells[2].native_kind == ARGUS_NATIVE_F64);
+    assert(cache.rows[0].cells[2].native.f64 == 1.5);
 
     /* Row 1: NULL id, string still present */
     assert(cache.rows[1].cells[0].is_null);
@@ -132,8 +136,9 @@ int main(void)
     assert(std::strcmp(cache.rows[1].cells[1].data, "beta") == 0);
 
     /* Row 2 */
-    assert(std::strcmp(cache.rows[2].cells[0].data, "3") == 0);
-    assert(std::strcmp(cache.rows[2].cells[2].data, "3.5") == 0);
+    assert(cache.rows[2].cells[0].native_kind == ARGUS_NATIVE_I64);
+    assert(cache.rows[2].cells[0].native.i64 == 3);
+    assert(cache.rows[2].cells[2].native.f64 == 3.5);
 
     /* Appending a second batch grows the cache (multi-endpoint results). */
     rc = flightsql_append_batch(batch, &cache);
@@ -155,8 +160,10 @@ int main(void)
     rc = flightsql_append_batch(b2, &ch2);
     assert(rc == 0);
     assert(ch2.num_rows == 2);
-    assert(std::strcmp(ch2.rows[0].cells[0].data, "true") == 0);
-    assert(std::strcmp(ch2.rows[1].cells[0].data, "false") == 0);
+    /* BOOL is stored natively (1/0); SQLGetData formats it on demand. */
+    assert(ch2.rows[0].cells[0].native_kind == ARGUS_NATIVE_I64);
+    assert(ch2.rows[0].cells[0].native.i64 == 1);
+    assert(ch2.rows[1].cells[0].native.i64 == 0);
     assert(std::strstr(ch2.rows[0].cells[1].data, "1970-01-01") != nullptr);
     assert(std::strcmp(ch2.rows[0].cells[2].data, "eu") == 0);   /* dict decoded */
     assert(std::strcmp(ch2.rows[1].cells[2].data, "us") == 0);

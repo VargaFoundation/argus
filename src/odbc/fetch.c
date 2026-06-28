@@ -114,6 +114,74 @@ static SQLRETURN convert_cell_to_target(
         return SQL_SUCCESS;
     }
 
+    /* Typed fast path: a cell carrying a native value converts straight to a
+     * numeric C type, skipping the strtoll/strtod round-trip. Non-numeric
+     * targets fall through to the text path below (materializing text from the
+     * native value first when the cell has no string form). */
+    if (cell->native_kind != ARGUS_NATIVE_NONE) {
+        long long iv = (cell->native_kind == ARGUS_NATIVE_I64)
+                       ? cell->native.i64 : (long long)cell->native.f64;
+        double dv = (cell->native_kind == ARGUS_NATIVE_F64)
+                    ? cell->native.f64 : (double)cell->native.i64;
+        switch (target_type) {
+        case SQL_C_SLONG:
+        case SQL_C_LONG:
+            if (target_value) *(SQLINTEGER *)target_value = (SQLINTEGER)iv;
+            if (str_len_or_ind) *str_len_or_ind = sizeof(SQLINTEGER);
+            return SQL_SUCCESS;
+        case SQL_C_SSHORT:
+        case SQL_C_SHORT:
+            if (iv < -32768 || iv > 32767)
+                return argus_set_error(diag, "22003",
+                                       "[Argus] Numeric value out of range", 0);
+            if (target_value) *(SQLSMALLINT *)target_value = (SQLSMALLINT)iv;
+            if (str_len_or_ind) *str_len_or_ind = sizeof(SQLSMALLINT);
+            return SQL_SUCCESS;
+        case SQL_C_STINYINT:
+        case SQL_C_TINYINT:
+            if (iv < -128 || iv > 127)
+                return argus_set_error(diag, "22003",
+                                       "[Argus] Numeric value out of range", 0);
+            if (target_value) *(SQLSCHAR *)target_value = (SQLSCHAR)iv;
+            if (str_len_or_ind) *str_len_or_ind = sizeof(SQLSCHAR);
+            return SQL_SUCCESS;
+        case SQL_C_SBIGINT:
+            if (target_value) *(SQLBIGINT *)target_value = (SQLBIGINT)iv;
+            if (str_len_or_ind) *str_len_or_ind = sizeof(SQLBIGINT);
+            return SQL_SUCCESS;
+        case SQL_C_FLOAT:
+            if (target_value) *(SQLREAL *)target_value = (SQLREAL)dv;
+            if (str_len_or_ind) *str_len_or_ind = sizeof(SQLREAL);
+            return SQL_SUCCESS;
+        case SQL_C_DOUBLE:
+            if (target_value) *(SQLDOUBLE *)target_value = (SQLDOUBLE)dv;
+            if (str_len_or_ind) *str_len_or_ind = sizeof(SQLDOUBLE);
+            return SQL_SUCCESS;
+        case SQL_C_BIT:
+            if (target_value) *(unsigned char *)target_value = (iv != 0) ? 1 : 0;
+            if (str_len_or_ind) *str_len_or_ind = 1;
+            return SQL_SUCCESS;
+        default:
+            break;   /* text-ish target: handled below */
+        }
+
+        if (!cell->data) {
+            /* No string form yet: format the native value and reuse the text
+             * path unchanged via a plain (text-only) cell. */
+            char tmp[64];
+            int n = (cell->native_kind == ARGUS_NATIVE_I64)
+                    ? snprintf(tmp, sizeof(tmp), "%lld", iv)
+                    : snprintf(tmp, sizeof(tmp), "%.17g", dv);
+            argus_cell_t tc;
+            tc.data = tmp;
+            tc.data_len = (n > 0) ? (size_t)n : 0;
+            tc.is_null = false;
+            tc.native_kind = ARGUS_NATIVE_NONE;
+            return convert_cell_to_target(&tc, target_type, target_value,
+                                          buffer_length, str_len_or_ind, diag);
+        }
+    }
+
     switch (target_type) {
     case SQL_C_CHAR:
     case SQL_C_DEFAULT: {

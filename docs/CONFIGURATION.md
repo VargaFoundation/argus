@@ -154,7 +154,9 @@ DRIVER=Argus;BACKEND=flightsql;HOST=influxdb3;PORT=443;SSL=1;PWD={token}
 ```
 
 - Protocol: Arrow Flight SQL (gRPC); record batches are **streamed** lazily
-  (one block per fetch, bounded memory) and converted to text cells
+  (one block per fetch, bounded memory). Numeric columns are kept as **native
+  typed values** (no per-cell string), so SQLGetData converts straight to the
+  requested C type; text/other types fall back to a string cell
 - Default port: 32010 (Dremio); set PORT explicitly per engine (InfluxDB 3: 8181)
 - `DATABASE` is sent as the gRPC `database` call header (how InfluxDB 3 selects
   the target database)

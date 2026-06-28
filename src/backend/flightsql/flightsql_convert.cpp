@@ -167,6 +167,54 @@ int flightsql_append_batch(const std::shared_ptr<arrow::RecordBatch>& batch,
                 continue;
             }
 
+            /* Numeric columns are stored as native typed values: no per-cell
+             * string is allocated, and SQLGetData converts straight to the
+             * requested C type (text is formatted on demand only if asked). */
+            auto set_i64 = [&](int64_t v) {
+                cell->native_kind = ARGUS_NATIVE_I64;
+                cell->native.i64 = v;
+                cell->is_null = false; cell->data = nullptr; cell->data_len = 0;
+            };
+            auto set_f64 = [&](double v) {
+                cell->native_kind = ARGUS_NATIVE_F64;
+                cell->native.f64 = v;
+                cell->is_null = false; cell->data = nullptr; cell->data_len = 0;
+            };
+            switch (array->type_id()) {
+            case arrow::Type::BOOL:
+                set_i64(std::static_pointer_cast<arrow::BooleanArray>(array)->Value(r) ? 1 : 0);
+                continue;
+            case arrow::Type::INT8:
+                set_i64(std::static_pointer_cast<arrow::Int8Array>(array)->Value(r));
+                continue;
+            case arrow::Type::INT16:
+                set_i64(std::static_pointer_cast<arrow::Int16Array>(array)->Value(r));
+                continue;
+            case arrow::Type::INT32:
+                set_i64(std::static_pointer_cast<arrow::Int32Array>(array)->Value(r));
+                continue;
+            case arrow::Type::INT64:
+                set_i64(std::static_pointer_cast<arrow::Int64Array>(array)->Value(r));
+                continue;
+            case arrow::Type::UINT8:
+                set_i64(std::static_pointer_cast<arrow::UInt8Array>(array)->Value(r));
+                continue;
+            case arrow::Type::UINT16:
+                set_i64(std::static_pointer_cast<arrow::UInt16Array>(array)->Value(r));
+                continue;
+            case arrow::Type::UINT32:
+                set_i64(std::static_pointer_cast<arrow::UInt32Array>(array)->Value(r));
+                continue;
+            case arrow::Type::FLOAT:
+                set_f64(std::static_pointer_cast<arrow::FloatArray>(array)->Value(r));
+                continue;
+            case arrow::Type::DOUBLE:
+                set_f64(std::static_pointer_cast<arrow::DoubleArray>(array)->Value(r));
+                continue;
+            default:
+                break;   /* strings, decimals, dates, etc. → text below */
+            }
+
             std::string text;
             switch (array->type_id()) {
             case arrow::Type::STRING: {

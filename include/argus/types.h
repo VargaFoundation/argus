@@ -8,6 +8,7 @@
 #include <sqlext.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 /* Maximum column name length */
 #define ARGUS_MAX_COLUMN_NAME 256
@@ -40,11 +41,30 @@ typedef struct argus_col_binding {
     bool         bound;             /* whether this column is bound */
 } argus_col_binding_t;
 
-/* A single cell value in our row cache */
+/* Native value kind for a cell (zero = none, so calloc'd cells default to the
+ * text representation and existing backends are unaffected). */
+typedef enum argus_native_kind {
+    ARGUS_NATIVE_NONE = 0,  /* value lives in `data` (string) */
+    ARGUS_NATIVE_I64,       /* value lives in `native.i64` */
+    ARGUS_NATIVE_F64        /* value lives in `native.f64` */
+} argus_native_kind_t;
+
+/* A single cell value in our row cache.
+ *
+ * A cell may carry a native (typed) value to avoid the value->text->value
+ * round-trip on numeric columns. When `native_kind` is non-zero, numeric
+ * SQLGetData targets read the native value directly; text targets fall back to
+ * `data` (or format the native value on demand if `data` is NULL). Backends
+ * that only produce text leave `native_kind` at ARGUS_NATIVE_NONE. */
 typedef struct argus_cell {
-    char   *data;       /* string representation of the value (owned) */
+    char   *data;       /* string representation of the value (owned, may be NULL) */
     size_t  data_len;   /* length of data (not including NUL) */
     bool    is_null;    /* whether this cell is NULL */
+    uint8_t native_kind;            /* argus_native_kind_t */
+    union {
+        int64_t i64;
+        double  f64;
+    } native;
 } argus_cell_t;
 
 /* A row in the row cache */
