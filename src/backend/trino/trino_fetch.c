@@ -159,6 +159,21 @@ int trino_fetch_results(argus_backend_conn_t raw_conn,
         *num_cols = op->num_cols;
     }
 
+    /* Deliver any rows that get_result_metadata had to read off the stream
+     * (Trino interleaves columns and data in one response for small results). */
+    if (op->prefetch) {
+        cache->rows = op->prefetch->rows;
+        cache->num_rows = op->prefetch->num_rows;
+        cache->capacity = op->prefetch->capacity;
+        cache->num_cols = op->prefetch->num_cols;
+        cache->current_row = 0;
+        free(op->prefetch);   /* rows ownership transferred to cache */
+        op->prefetch = NULL;
+        if (!op->next_uri)
+            cache->exhausted = true;
+        return 0;
+    }
+
     /* No more data to fetch */
     if (!op->next_uri) {
         cache->num_rows = 0;
@@ -310,12 +325,19 @@ int trino_get_result_metadata(argus_backend_conn_t raw_conn,
 
         /* Parse column metadata */
         if (json_object_has_member(obj, "columns")) {
-            JsonNode *columns_node = json_object_get_member(obj, "columns");
-            op->columns = calloc(ARGUS_MAX_COLUMNS, sizeof(argus_column_desc_t));
-            if (op->columns) {
+            if (!op->columns)
+                op->columns = calloc(ARGUS_MAX_COLUMNS,
+                                     sizeof(argus_column_desc_t));
+            if (op->columns && op->num_cols == 0) {
+                JsonNode *columns_node = json_object_get_member(obj, "columns");
                 trino_parse_columns(columns_node, op->columns, &op->num_cols);
-                op->metadata_fetched = true;
             }
+            /* A SELECT stops here and fetches data lazily. An update statement
+             * (INSERT/UPDATE/DELETE/...) carries "updateType" and only applies
+             * its write once the client drains the query to FINISHED, so keep
+             * polling rather than abandoning it mid-flight. */
+            if (op->columns && !json_object_has_member(obj, "updateType"))
+                op->metadata_fetched = true;
         }
 
         /* Update nextUri */
@@ -326,6 +348,23 @@ int trino_get_result_metadata(argus_backend_conn_t raw_conn,
                 json_object_get_string_member(obj, "nextUri"));
         } else {
             op->finished = true;
+        }
+
+        /* Trino can return columns and the first data rows in the same
+         * response. Since this response is now consumed, stash that data for
+         * the next fetch_results rather than dropping it (small results would
+         * otherwise come back with zero rows). */
+        if (op->metadata_fetched && !op->prefetch &&
+            json_object_has_member(obj, "data")) {
+            JsonNode *data_node = json_object_get_member(obj, "data");
+            if (JSON_NODE_HOLDS_ARRAY(data_node)) {
+                op->prefetch = calloc(1, sizeof(argus_row_cache_t));
+                if (op->prefetch) {
+                    argus_row_cache_init(op->prefetch);
+                    trino_parse_data(data_node, op->prefetch,
+                                     op->num_cols > 0 ? op->num_cols : 1);
+                }
+            }
         }
 
         g_object_unref(parser);

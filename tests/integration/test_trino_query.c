@@ -249,6 +249,71 @@ static void test_get_columns(void **state)
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 }
 
+/* ── Test: SQLTables actually finds a real table ─────────────── */
+/* Regression: an ODBC "TABLE" filter must match Trino's "BASE TABLE". */
+
+static void test_get_tables_finds_table(void **state)
+{
+    (void)state;
+
+    SQLHSTMT stmt;
+    SQLAllocHandle(SQL_HANDLE_STMT, g_dbc, &stmt);
+
+    SQLExecDirect(stmt,
+        (SQLCHAR *)"CREATE TABLE IF NOT EXISTS memory.argus_test.argus_tbl_find "
+                   "(id INTEGER)",
+        SQL_NTS);
+    SQLFreeStmt(stmt, SQL_CLOSE);
+
+    SQLRETURN ret = SQLTables(stmt,
+                              (SQLCHAR *)"memory", SQL_NTS,
+                              (SQLCHAR *)"argus_test", SQL_NTS,
+                              (SQLCHAR *)"argus_tbl_find", SQL_NTS,
+                              (SQLCHAR *)"TABLE", SQL_NTS);
+    assert_int_equal(ret, SQL_SUCCESS);
+
+    int found = 0;
+    while (SQLFetch(stmt) == SQL_SUCCESS) {
+        SQLCHAR name[128];
+        SQLLEN ind;
+        SQLGetData(stmt, 3, SQL_C_CHAR, name, sizeof(name), &ind);
+        if (strcmp((char *)name, "argus_tbl_find") == 0) found = 1;
+    }
+    assert_int_equal(found, 1);
+
+    SQLFreeStmt(stmt, SQL_CLOSE);
+    SQLExecDirect(stmt,
+        (SQLCHAR *)"DROP TABLE IF EXISTS memory.argus_test.argus_tbl_find",
+        SQL_NTS);
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+}
+
+/* ── Test: a bad query surfaces the real Trino error ─────────── */
+/* Regression: Trino runs async, so a query error used to be swallowed
+ * (SUCCESS + 0 rows) instead of surfacing as SQL_ERROR with a message. */
+
+static void test_error_message(void **state)
+{
+    (void)state;
+
+    SQLHSTMT stmt;
+    SQLAllocHandle(SQL_HANDLE_STMT, g_dbc, &stmt);
+
+    SQLRETURN ret = SQLExecDirect(stmt,
+        (SQLCHAR *)"SELECT * FROM memory.argus_test.no_such_table_xyz", SQL_NTS);
+    assert_int_equal(ret, SQL_ERROR);
+
+    SQLCHAR sqlstate[6], msg[512];
+    SQLINTEGER native;
+    SQLSMALLINT len;
+    assert_int_equal(SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sqlstate,
+                                   &native, msg, sizeof(msg), &len),
+                     SQL_SUCCESS);
+    assert_non_null(strstr((char *)msg, "no_such_table_xyz"));
+
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+}
+
 /* ── Main ─────────────────────────────────────────────────────── */
 
 int main(void)
@@ -257,7 +322,9 @@ int main(void)
         cmocka_unit_test(test_select_literal),
         cmocka_unit_test(test_create_and_query_table),
         cmocka_unit_test(test_get_tables),
+        cmocka_unit_test(test_get_tables_finds_table),
         cmocka_unit_test(test_get_columns),
+        cmocka_unit_test(test_error_message),
     };
     return cmocka_run_group_tests_name("trino_query", tests, setup, teardown);
 }

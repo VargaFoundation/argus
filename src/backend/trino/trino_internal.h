@@ -66,6 +66,11 @@ typedef struct trino_operation {
     /* Cached column metadata */
     argus_column_desc_t *columns;
     int                  num_cols;
+
+    /* First data batch that get_result_metadata had to read off the stream
+     * (Trino can send columns + data in the same response); delivered by the
+     * next fetch_results. NULL when there is none. */
+    argus_row_cache_t   *prefetch;
 } trino_operation_t;
 
 /* Type mapping helpers */

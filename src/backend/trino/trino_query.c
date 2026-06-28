@@ -17,6 +17,10 @@ void trino_operation_free(trino_operation_t *op)
     free(op->query_id);
     free(op->next_uri);
     free(op->columns);
+    if (op->prefetch) {
+        argus_row_cache_free(op->prefetch);
+        free(op->prefetch);
+    }
     free(op);
 }
 
@@ -79,13 +83,16 @@ int trino_execute(argus_backend_conn_t raw_conn,
         op->next_uri = strdup(json_object_get_string_member(obj, "nextUri"));
     }
 
-    /* Parse column metadata if present in first response */
+    /* Parse column metadata if present in first response. An update statement
+     * (updateType) must still be drained to FINISHED, so do not mark metadata
+     * as fetched for it (that would stop the polling that applies the write). */
     if (json_object_has_member(obj, "columns")) {
         JsonNode *columns_node = json_object_get_member(obj, "columns");
         op->columns = calloc(ARGUS_MAX_COLUMNS, sizeof(argus_column_desc_t));
         if (op->columns) {
             trino_parse_columns(columns_node, op->columns, &op->num_cols);
-            op->metadata_fetched = true;
+            if (!json_object_has_member(obj, "updateType"))
+                op->metadata_fetched = true;
         }
     }
 
