@@ -6,6 +6,7 @@
 #include <sqlext.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 /*
  * Integration tests: Connect to a real Trino instance.
