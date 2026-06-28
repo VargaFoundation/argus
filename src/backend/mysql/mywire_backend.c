@@ -27,6 +27,14 @@ static int mywire_connect(argus_dbc_t *dbc,
     /* Full Unicode over the wire. */
     mysql_options(conn->mysql, MYSQL_SET_CHARSET_NAME, "utf8mb4");
 
+    /* Always use TCP: an ODBC HOST means a network host, even when it is
+     * "localhost" (libmariadb would otherwise default to a local unix socket,
+     * which does not exist when the server is remote or in a container). */
+    {
+        unsigned int proto = MYSQL_PROTOCOL_TCP;
+        mysql_options(conn->mysql, MYSQL_OPT_PROTOCOL, &proto);
+    }
+
     if (dbc && dbc->connect_timeout_sec > 0) {
         unsigned int t = (unsigned int)dbc->connect_timeout_sec;
         mysql_options(conn->mysql, MYSQL_OPT_CONNECT_TIMEOUT, &t);
