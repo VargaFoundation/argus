@@ -143,4 +143,10 @@ if(BUILD_INTEGRATION_TESTS)
         argus_add_integration_test(test_flightsql_connect integration/test_flightsql_connect.c)
         argus_add_integration_test(test_flightsql_query integration/test_flightsql_query.c)
     endif()
+
+    # Fetch-path micro-benchmark tool (manual; needs a live backend)
+    add_executable(argus_bench bench/bench.c)
+    target_include_directories(argus_bench PRIVATE
+        ${CMAKE_SOURCE_DIR}/include ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(argus_bench PRIVATE argus_odbc)
 endif()
