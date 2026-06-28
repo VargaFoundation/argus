@@ -28,6 +28,8 @@ int phoenix_execute(argus_backend_conn_t raw_conn,
     phoenix_conn_t *conn = (phoenix_conn_t *)raw_conn;
     if (!conn || !query) return -1;
 
+    conn->last_error[0] = '\0';
+
     int stmt_id = conn->next_statement_id++;
 
     /* Build prepareAndExecute request */
@@ -107,6 +109,18 @@ int phoenix_execute(argus_backend_conn_t raw_conn,
 
     *out_op = op;
     return 0;
+}
+
+/* ── Last error message ──────────────────────────────────────── */
+
+bool phoenix_get_last_error(argus_backend_conn_t raw_conn, char *buf,
+                            size_t buflen)
+{
+    phoenix_conn_t *conn = (phoenix_conn_t *)raw_conn;
+    if (!conn || !conn->last_error[0] || buflen == 0) return false;
+    strncpy(buf, conn->last_error, buflen - 1);
+    buf[buflen - 1] = '\0';
+    return true;
 }
 
 /* ── Get operation status ─────────────────────────────────────── */

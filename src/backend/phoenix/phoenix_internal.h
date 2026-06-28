@@ -27,6 +27,8 @@ typedef struct phoenix_conn {
     /* Timeout settings */
     int                 connect_timeout_sec;
     int                 query_timeout_sec;
+
+    char                last_error[512]; /* most recent Avatica error message */
 } phoenix_conn_t;
 
 /* Phoenix operation state */

@@ -65,6 +65,8 @@ int phoenix_get_primary_keys(argus_backend_conn_t conn,
                               const char *table_name,
                               argus_backend_op_t *out_op);
 
+bool phoenix_get_last_error(argus_backend_conn_t conn, char *buf, size_t buflen);
+
 /* Phoenix backend vtable */
 static const argus_backend_t phoenix_backend = {
     .name                  = "phoenix",
@@ -83,6 +85,7 @@ static const argus_backend_t phoenix_backend = {
     .get_schemas           = phoenix_get_schemas,
     .get_catalogs          = phoenix_get_catalogs,
     .get_primary_keys      = phoenix_get_primary_keys,
+    .get_last_error        = phoenix_get_last_error,
 };
 
 const argus_backend_t *argus_phoenix_backend_get(void)

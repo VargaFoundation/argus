@@ -166,6 +166,10 @@ int phoenix_avatica_request(phoenix_conn_t *conn, const char *request_type,
         const char *err = json_object_get_string_member(resp_obj,
                                                          "errorMessage");
         ARGUS_LOG_ERROR("Avatica error: %s", err ? err : "unknown");
+        if (err) {
+            strncpy(conn->last_error, err, sizeof(conn->last_error) - 1);
+            conn->last_error[sizeof(conn->last_error) - 1] = '\0';
+        }
         g_object_unref(parser);
         return -1;
     }
