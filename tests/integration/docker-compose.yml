@@ -164,3 +164,34 @@ services:
       timeout: 10s
       retries: 12
       start_period: 20s
+
+  # ── InfluxDB 3 Core (Arrow Flight SQL backend) ─────────────────────────
+  # Flight SQL on the HTTP/gRPC port 8181, auth disabled for tests. The
+  # one-shot seed container below writes the "cpu" table into db "testdb".
+  influxdb3:
+    image: quay.io/influxdb/influxdb3-core:latest
+    container_name: argus-influxdb3
+    ports:
+      - "8181:8181"
+    command: >-
+      serve --node-id node0 --object-store memory
+      --without-auth --http-bind 0.0.0.0:8181
+
+  influxdb3-seed:
+    image: curlimages/curl:latest
+    container_name: argus-influxdb3-seed
+    depends_on:
+      - influxdb3
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        for i in $$(seq 1 30); do
+          curl -fsS http://influxdb3:8181/health >/dev/null 2>&1 && break
+          sleep 2
+        done
+        curl -sS "http://influxdb3:8181/api/v3/write_lp?db=testdb&precision=nanosecond" \
+          --data-binary 'cpu,host=alpha,region=eu usage=0.5,cores=4i,label="prod" 1718000000000000000
+        cpu,host=beta,region=us usage=0.7,cores=8i 1718000001000000000
+        cpu,host=gamma,region=eu usage=0.9,cores=16i 1718000002000000000'
