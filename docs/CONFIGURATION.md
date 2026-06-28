@@ -62,6 +62,7 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | mysql | 3306 |
 | flightsql | 32010 |
 | pinot | 8000 |
+| druid | 8888 |
 
 ### Authentication Mechanisms
 
@@ -180,6 +181,26 @@ DRIVER=Argus;BACKEND=pinot;HOST=pinot;PORT=8000;UID=user;PWD={secret}
 - `SQLTables` lists the cluster's tables; query errors surface the real Pinot
   message. **Validated end-to-end** against a Pinot QuickStart cluster
 - Requires libcurl + json-glib (auto-detected at cmake time)
+
+### Apache Druid (BACKEND=druid)
+
+Real-time analytics database. Argus queries the broker/router's synchronous SQL
+endpoint (`POST /druid/v2/sql`, `resultFormat=array`) and uses Druid's full
+`INFORMATION_SCHEMA` for catalog operations (like the Trino backend).
+
+```
+DRIVER=Argus;BACKEND=druid;HOST=druid-router;PORT=8888
+DRIVER=Argus;BACKEND=druid;HOST=broker;PORT=8082;UID=user;PWD={secret}
+```
+
+- Protocol: HTTP/JSON (`/druid/v2/sql`); whole result in one response
+- Default port: 8888 (router); the broker is 8082
+- `SQLTables`/`SQLColumns`/`SQLSchemas` via `INFORMATION_SCHEMA`; query errors
+  surface the real Druid `errorMessage`
+- Optional HTTP Basic auth (`UID`/`PWD`); `SSL=1` for HTTPS
+- Requires libcurl + json-glib (auto-detected). Implemented on the validated
+  Pinot/Trino HTTP-JSON pattern; runtime validation against a Druid cluster
+  is pending (Druid's stack is multi-service)
 
 ## Connecting to Spark and Flink (via the Hive backend)
 

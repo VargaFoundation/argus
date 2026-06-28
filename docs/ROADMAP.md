@@ -175,8 +175,7 @@ Spark/Flink en conditions réelles.
    Validé end-to-end contre **MariaDB 11** (SELECT int/varchar/decimal/bigint/double/
    date/datetime/NULL, SQLTables, SQLColumns, SQLPrimaryKeys, SQLGetTypeInfo) **et
    ClickHouse** (interface MySQL :9004) — un seul backend, deux moteurs.
-2. **Backend Druid** (`src/backend/druid/`) en réutilisant le code Avatica de Phoenix
-   (factoriser l'Avatica commun dans `src/backend/common/avatica_*.c`).
+2. **Backend Druid** (`src/backend/druid/`) — ✅ **implémenté** (HTTP/JSON `/druid/v2/sql`, catalogue via INFORMATION_SCHEMA ; build OK, validation runtime à faire — stack Druid multi-services).
 3. **Backend Pinot** (`src/backend/pinot/`) — ✅ **implémenté et validé** (HTTP/JSON `/query/sql`, SQLTables via le controller ; validé contre un cluster Pinot QuickStart).
 
 ### Phase 4 — Conformité ODBC & modernité
