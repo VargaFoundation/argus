@@ -30,6 +30,7 @@ typedef struct hive_conn {
     TSessionHandle         *session_handle;
     char                   *database;
     bool                    http_mode;      /* true when using HTTP transport */
+    char                    last_error[512]; /* most recent server error message */
 } hive_conn_t;
 
 /* Hive operation state */

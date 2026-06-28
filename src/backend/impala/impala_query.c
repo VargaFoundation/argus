@@ -28,6 +28,8 @@ int impala_execute(argus_backend_conn_t raw_conn,
     impala_conn_t *conn = (impala_conn_t *)raw_conn;
     if (!conn || !conn->client || !query) return -1;
 
+    conn->last_error[0] = '\0';
+
     GError *error = NULL;
 
     TExecuteStatementReq *req = g_object_new(
@@ -58,6 +60,13 @@ int impala_execute(argus_backend_conn_t raw_conn,
         TStatusCode status_code;
         g_object_get(status, "statusCode", &status_code, NULL);
         if (status_code == T_STATUS_CODE_ERROR_STATUS) {
+            char *emsg = NULL;
+            g_object_get(status, "errorMessage", &emsg, NULL);
+            if (emsg) {
+                strncpy(conn->last_error, emsg, sizeof(conn->last_error) - 1);
+                conn->last_error[sizeof(conn->last_error) - 1] = '\0';
+                g_free(emsg);
+            }
             g_object_unref(status);
             g_object_unref(req);
             g_object_unref(resp);
@@ -121,9 +130,30 @@ int impala_get_operation_status(argus_backend_conn_t raw_conn,
                  op_state == T_OPERATION_STATE_CANCELED_STATE ||
                  op_state == T_OPERATION_STATE_CLOSED_STATE);
 
+    if (op_state == T_OPERATION_STATE_ERROR_STATE) {
+        char *emsg = NULL;
+        g_object_get(resp, "errorMessage", &emsg, NULL);
+        if (emsg) {
+            strncpy(conn->last_error, emsg, sizeof(conn->last_error) - 1);
+            conn->last_error[sizeof(conn->last_error) - 1] = '\0';
+            g_free(emsg);
+        }
+    }
+
     g_object_unref(req);
     g_object_unref(resp);
     return 0;
+}
+
+/* ── Last error message ──────────────────────────────────────── */
+
+bool impala_get_last_error(argus_backend_conn_t raw_conn, char *buf, size_t buflen)
+{
+    impala_conn_t *conn = (impala_conn_t *)raw_conn;
+    if (!conn || !conn->last_error[0] || buflen == 0) return false;
+    strncpy(buf, conn->last_error, buflen - 1);
+    buf[buflen - 1] = '\0';
+    return true;
 }
 
 /* ── Cancel a running operation ──────────────────────────────── */

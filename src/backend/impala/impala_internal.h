@@ -29,6 +29,7 @@ typedef struct impala_conn {
     TCLIServiceIf          *client;
     TSessionHandle         *session_handle;
     char                   *database;
+    char                    last_error[512]; /* most recent server error message */
 } impala_conn_t;
 
 /* Impala operation state */

@@ -64,6 +64,8 @@ int hive_get_primary_keys(argus_backend_conn_t conn,
                           const char *table_name,
                           argus_backend_op_t *out_op);
 
+bool hive_get_last_error(argus_backend_conn_t conn, char *buf, size_t buflen);
+
 /* Hive backend vtable */
 static const argus_backend_t hive_backend = {
     .name                  = "hive",
@@ -82,6 +84,7 @@ static const argus_backend_t hive_backend = {
     .get_schemas           = hive_get_schemas,
     .get_catalogs          = hive_get_catalogs,
     .get_primary_keys      = hive_get_primary_keys,
+    .get_last_error        = hive_get_last_error,
 };
 
 const argus_backend_t *argus_hive_backend_get(void)
