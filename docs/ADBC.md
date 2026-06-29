@@ -22,9 +22,12 @@ Column types are mapped to Arrow:
 
 | SQL type | Arrow type | C Data format |
 |---|---|---|
-| TINYINT/SMALLINT/INTEGER/BIGINT/BIT | int64 | `l` |
+| TINYINT/SMALLINT/INTEGER/BIGINT | int64 | `l` |
 | REAL/FLOAT/DOUBLE | double | `g` |
-| everything else | utf8 | `u` |
+| BIT | bool | `b` |
+| DATE | date32 (days) | `tdD` |
+| TIMESTAMP | timestamp, microseconds | `tsu:` |
+| everything else (incl. DECIMAL) | utf8 | `u` |
 
 The Arrow C Data Interface is a stable, dependency-free ABI, so the driver emits
 it without linking any Arrow library.
@@ -63,7 +66,8 @@ emitted stream is imported by Arrow C++'s own `ImportRecordBatchReader`, yieldin
 
 Covers `SELECT` to a materialized record batch with int64/double/utf8 columns,
 plus the driver-manager `AdbcDriverInit` vtable (ADBC 1.0.0), so the driver loads
-via any ADBC driver manager by name. Planned next: richer Arrow types
-(decimal, timestamp, date), batched streaming (emit one Arrow batch per fetch
+via any ADBC driver manager by name, and typed Arrow output for
+int64/double/bool/date32/timestamp/utf8 (DECIMAL stays utf8 to preserve
+arbitrary precision). Planned next: batched streaming (emit one Arrow batch per fetch
 block rather than materializing), bind parameters, and the ADBC metadata calls
 (`GetObjects`, `GetTableSchema`).

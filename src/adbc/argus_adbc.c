@@ -205,6 +205,31 @@ static void root_schema_release(struct ArrowSchema* s)
     s->release = NULL;
 }
 
+/* Days since 1970-01-01 for a proleptic-Gregorian date (Howard Hinnant's
+ * algorithm; no library needed). */
+static int64_t days_from_civil(int y, unsigned m, unsigned d)
+{
+    y -= (m <= 2);
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    unsigned yoe = (unsigned)(y - era * 400);
+    unsigned doy = (153u * (m + (m > 2 ? -3u : 9u)) + 2u) / 5u + d - 1u;
+    unsigned doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+    return era * 146097 + (int64_t)doe - 719468;
+}
+
+/* Column kind -> Arrow C Data Interface format string. */
+static const char* kind_format(int kind)
+{
+    switch (kind) {
+    case 0:  return "l";      /* int64                      */
+    case 1:  return "g";      /* double                     */
+    case 3:  return "b";      /* boolean (bitmap)           */
+    case 4:  return "tdD";    /* date32 (days)              */
+    case 5:  return "tsu:";   /* timestamp, microseconds    */
+    default: return "u";      /* utf8                       */
+    }
+}
+
 /* Build a validity bitmap (1 bit/row, LSB-first) from per-row bytes, or NULL
  * when the column has no nulls. */
 static uint8_t* build_validity(const uint8_t* bytes, int64_t n, int64_t null_count)
@@ -235,14 +260,29 @@ static int build_child(const adbc_col_t* col, int64_t nrows, struct ArrowArray* 
         if (col->chars_len) memcpy(data, col->chars, col->chars_len);
         bufs[0] = validity; bufs[1] = offs; bufs[2] = data;
         out->n_buffers = 3; out->buffers = bufs;
-    } else {                          /* int64 / double: validity, data */
+    } else {                          /* fixed-width: validity, data */
         const void** bufs = calloc(2, sizeof(void*));
         if (!bufs) { free(validity); return -1; }
-        size_t esz = (col->kind == 0) ? sizeof(int64_t) : sizeof(double);
-        void* data = malloc(esz * (size_t)(nrows ? nrows : 1));
+        void* data = NULL;
+        size_t n = (size_t)(nrows ? nrows : 1);
+        if (col->kind == 1) {                         /* double */
+            data = malloc(sizeof(double) * n);
+            if (data) memcpy(data, col->f64, sizeof(double) * (size_t)nrows);
+        } else if (col->kind == 4) {                  /* date32: int32 days */
+            int32_t* d = malloc(sizeof(int32_t) * n);
+            data = d;
+            for (int64_t i = 0; d && i < nrows; i++) d[i] = (int32_t)col->i64[i];
+        } else if (col->kind == 3) {                  /* boolean: bitmap */
+            size_t nb = (size_t)((nrows + 7) / 8);
+            uint8_t* bm = calloc(nb ? nb : 1, 1);
+            data = bm;
+            for (int64_t i = 0; bm && i < nrows; i++)
+                if (col->i64[i]) bm[i / 8] |= (uint8_t)(1u << (i % 8));
+        } else {                                      /* int64 / timestamp(us) */
+            data = malloc(sizeof(int64_t) * n);
+            if (data) memcpy(data, col->i64, sizeof(int64_t) * (size_t)nrows);
+        }
         if (!data) { free(validity); free(bufs); return -1; }
-        if (col->kind == 0) memcpy(data, col->i64, sizeof(int64_t) * (size_t)nrows);
-        else                memcpy(data, col->f64, sizeof(double) * (size_t)nrows);
         bufs[0] = validity; bufs[1] = data;
         out->n_buffers = 2; out->buffers = bufs;
     }
@@ -260,7 +300,7 @@ static int stream_get_schema(struct ArrowArrayStream* self, struct ArrowSchema* 
     if (!out->children) return ENOMEM;
     for (int i = 0; i < s->ncols; i++) {
         struct ArrowSchema* ch = calloc(1, sizeof(struct ArrowSchema));
-        ch->format = (s->cols[i].kind == 0) ? "l" : (s->cols[i].kind == 1) ? "g" : "u";
+        ch->format = kind_format(s->cols[i].kind);
         ch->name = strdup(s->cols[i].name ? s->cols[i].name : "");
         ch->flags = ARROW_FLAG_NULLABLE;
         ch->release = child_schema_release;
@@ -345,9 +385,9 @@ static void col_reserve(adbc_col_t* col, int64_t nrows)
     int64_t cap = col->cap ? col->cap * 2 : 256;
     while (cap < nrows) cap *= 2;
     col->valid = realloc(col->valid, (size_t)cap);
-    if (col->kind == 0) col->i64 = realloc(col->i64, sizeof(int64_t) * (size_t)cap);
-    else if (col->kind == 1) col->f64 = realloc(col->f64, sizeof(double) * (size_t)cap);
-    else col->offsets = realloc(col->offsets, sizeof(int32_t) * (size_t)(cap + 1));
+    if (col->kind == 1) col->f64 = realloc(col->f64, sizeof(double) * (size_t)cap);
+    else if (col->kind == 2) col->offsets = realloc(col->offsets, sizeof(int32_t) * (size_t)(cap + 1));
+    else col->i64 = realloc(col->i64, sizeof(int64_t) * (size_t)cap);   /* int64/bool/date/ts */
     col->cap = cap;
 }
 
@@ -381,13 +421,18 @@ AdbcStatusCode AdbcStatementExecuteQuery(struct AdbcStatement* statement,
         SQLDescribeCol(stmt, (SQLUSMALLINT)(c + 1), cname, sizeof(cname), &cnl, &ctype, &csz, &cdd, &cnull);
         s->cols[c].name = strdup((char*)cname);
         switch (ctype) {
-        case SQL_TINYINT: case SQL_SMALLINT: case SQL_INTEGER:
-        case SQL_BIGINT:  case SQL_BIT:
-            s->cols[c].kind = 0; break;
+        case SQL_TINYINT: case SQL_SMALLINT: case SQL_INTEGER: case SQL_BIGINT:
+            s->cols[c].kind = 0; break;        /* int64    */
         case SQL_REAL: case SQL_FLOAT: case SQL_DOUBLE:
-            s->cols[c].kind = 1; break;
+            s->cols[c].kind = 1; break;        /* double   */
+        case SQL_BIT:
+            s->cols[c].kind = 3; break;        /* boolean  */
+        case SQL_TYPE_DATE: case SQL_DATE:
+            s->cols[c].kind = 4; break;        /* date32   */
+        case SQL_TYPE_TIMESTAMP: case SQL_TIMESTAMP:
+            s->cols[c].kind = 5; break;        /* timestamp(us) */
         default:
-            s->cols[c].kind = 2; s->cols[c].offsets = NULL; break;
+            s->cols[c].kind = 2; s->cols[c].offsets = NULL; break;   /* utf8 */
         }
     }
 
@@ -397,18 +442,41 @@ AdbcStatusCode AdbcStatementExecuteQuery(struct AdbcStatement* statement,
             adbc_col_t* col = &s->cols[c];
             col_reserve(col, nrows + 1);
             SQLLEN ind = 0;
-            if (col->kind == 0) {
-                SQLBIGINT v = 0;
-                SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_SBIGINT, &v, 0, &ind);
-                int valid = (ind != SQL_NULL_DATA);
-                col->i64[nrows] = valid ? (int64_t)v : 0;
-                col->valid[nrows] = (uint8_t)valid;
-                if (!valid) col->null_count++;
-            } else if (col->kind == 1) {
+            if (col->kind == 1) {
                 double v = 0;
                 SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_DOUBLE, &v, 0, &ind);
                 int valid = (ind != SQL_NULL_DATA);
                 col->f64[nrows] = valid ? v : 0;
+                col->valid[nrows] = (uint8_t)valid;
+                if (!valid) col->null_count++;
+            } else if (col->kind != 2) {
+                /* int64 / boolean / date32 / timestamp -> one int64 each */
+                int64_t outv = 0; int valid = 1;
+                if (col->kind == 0) {
+                    SQLBIGINT v = 0;
+                    SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_SBIGINT, &v, 0, &ind);
+                    valid = (ind != SQL_NULL_DATA); outv = (int64_t)v;
+                } else if (col->kind == 3) {
+                    unsigned char v = 0;
+                    SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_BIT, &v, 0, &ind);
+                    valid = (ind != SQL_NULL_DATA); outv = v ? 1 : 0;
+                } else if (col->kind == 4) {
+                    SQL_DATE_STRUCT v; memset(&v, 0, sizeof(v));
+                    SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_TYPE_DATE, &v, 0, &ind);
+                    valid = (ind != SQL_NULL_DATA);
+                    if (valid) outv = days_from_civil(v.year, v.month, v.day);
+                } else {  /* kind 5: timestamp -> microseconds since epoch */
+                    SQL_TIMESTAMP_STRUCT v; memset(&v, 0, sizeof(v));
+                    SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_TYPE_TIMESTAMP, &v, 0, &ind);
+                    valid = (ind != SQL_NULL_DATA);
+                    if (valid) {
+                        int64_t days = days_from_civil(v.year, v.month, v.day);
+                        outv = days * 86400LL * 1000000LL
+                             + ((int64_t)v.hour * 3600 + v.minute * 60 + v.second) * 1000000LL
+                             + (int64_t)v.fraction / 1000;
+                    }
+                }
+                col->i64[nrows] = valid ? outv : 0;
                 col->valid[nrows] = (uint8_t)valid;
                 if (!valid) col->null_count++;
             } else {
