@@ -70,5 +70,7 @@ via any ADBC driver manager by name, and typed Arrow output for
 int64/double/bool/date32/timestamp/utf8 (DECIMAL stays utf8 to preserve
 arbitrary precision), and **batched streaming** — the result statement stays open
 and each `get_next` pulls one Arrow batch (up to 4096 rows) lazily, so memory is
-bounded regardless of result size. Planned next: bind parameters and the ADBC
-metadata calls (`GetObjects`, `GetTableSchema`).
+bounded regardless of result size, and **bound parameters** (`AdbcStatementBind`)
+— the Arrow parameter array (row 0) is decoded and substituted into the query's
+`?` markers as SQL literals. Planned next: the ADBC metadata calls (`GetObjects`,
+`GetTableSchema`).

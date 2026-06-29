@@ -479,6 +479,26 @@ AdbcStatusCode AdbcStatementSetSqlQuery(struct AdbcStatement* statement,
     return ADBC_STATUS_OK;
 }
 
+/* Replace each top-level '?' marker with its bound literal. */
+static char* substitute_params(const char* q, char** params, int n)
+{
+    size_t cap = strlen(q) + 1;
+    for (int i = 0; i < n; i++) cap += (params[i] ? strlen(params[i]) : 4);
+    char* out = malloc(cap);
+    if (!out) return NULL;
+    char* p = out; int pi = 0;
+    for (const char* c = q; *c; c++) {
+        if (*c == '?' && pi < n) {
+            const char* v = params[pi] ? params[pi] : "NULL";
+            size_t l = strlen(v); memcpy(p, v, l); p += l; pi++;
+        } else {
+            *p++ = *c;
+        }
+    }
+    *p = '\0';
+    return out;
+}
+
 AdbcStatusCode AdbcStatementExecuteQuery(struct AdbcStatement* statement,
                                          struct ArrowArrayStream* out,
                                          int64_t* rows_affected, struct AdbcError* error)
@@ -489,7 +509,11 @@ AdbcStatusCode AdbcStatementExecuteQuery(struct AdbcStatement* statement,
 
     SQLHSTMT stmt;
     if (SQLAllocHandle(SQL_HANDLE_STMT, st->dbc, &stmt) != SQL_SUCCESS) { set_error(error, "alloc stmt failed"); return ADBC_STATUS_IO; }
-    if (!SQL_SUCCEEDED(SQLExecDirect(stmt, (SQLCHAR*)st->query, SQL_NTS))) {
+    char* subst = (st->nparams > 0) ? substitute_params(st->query, st->params, st->nparams) : NULL;
+    const char* exec_q = subst ? subst : st->query;
+    SQLRETURN er = SQLExecDirect(stmt, (SQLCHAR*)exec_q, SQL_NTS);
+    free(subst);
+    if (!SQL_SUCCEEDED(er)) {
         SQLCHAR sst[6], msg[300]; SQLINTEGER nat; SQLSMALLINT len; char buf[360] = "execute failed";
         if (SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, sst, &nat, msg, sizeof(msg), &len) == SQL_SUCCESS)
             snprintf(buf, sizeof(buf), "%s", (char*)msg);
@@ -561,12 +585,58 @@ AdbcStatusCode AdbcStatementPrepare(struct AdbcStatement* statement, struct Adbc
 
 /* ── Metadata + bind (implemented incrementally) ─────────────── */
 
+/* Render the row-0 value of one Arrow parameter array as a SQL literal. */
+static char* param_to_literal(const char* fmt, struct ArrowArray* arr)
+{
+    int64_t row = arr->offset;   /* first element */
+    const uint8_t* validity = (arr->n_buffers > 0) ? arr->buffers[0] : NULL;
+    if (validity && !((validity[row / 8] >> (row % 8)) & 1)) return strdup("NULL");
+
+    char buf[64];
+    switch (fmt[0]) {
+    case 'l': case 'i': case 's': case 'c': {   /* int family */
+        const int64_t* d64 = (fmt[0] == 'l') ? (const int64_t*)arr->buffers[1] : NULL;
+        long long v = d64 ? d64[row] : (long long)((const int32_t*)arr->buffers[1])[row];
+        snprintf(buf, sizeof(buf), "%lld", v); return strdup(buf);
+    }
+    case 'g': { const double* d = arr->buffers[1]; snprintf(buf, sizeof(buf), "%.17g", d[row]); return strdup(buf); }
+    case 'f': { const float* d = arr->buffers[1]; snprintf(buf, sizeof(buf), "%.9g", (double)d[row]); return strdup(buf); }
+    case 'b': { const uint8_t* bm = arr->buffers[1]; return strdup(((bm[row / 8] >> (row % 8)) & 1) ? "TRUE" : "FALSE"); }
+    case 'u': case 'U': {                        /* utf8: quote + escape */
+        const int32_t* off = arr->buffers[1];
+        const char* data = arr->buffers[2];
+        int32_t a = off[row], b = off[row + 1];
+        size_t len = (size_t)(b - a);
+        char* out = malloc(len * 2 + 3);
+        if (!out) return strdup("NULL");
+        char* p = out; *p++ = '\'';
+        for (size_t i = 0; i < len; i++) { if (data[a + i] == '\'') *p++ = '\''; *p++ = data[a + i]; }
+        *p++ = '\''; *p = '\0';
+        return out;
+    }
+    default: return strdup("NULL");
+    }
+}
+
 AdbcStatusCode AdbcStatementBind(struct AdbcStatement* statement, struct ArrowArray* values,
                                  struct ArrowSchema* schema, struct AdbcError* error)
 {
-    (void)statement; (void)values; (void)schema;
-    set_error(error, "StatementBind not implemented");
-    return ADBC_STATUS_NOT_IMPLEMENTED;
+    if (!statement || !statement->private_data || !values || !schema) {
+        set_error(error, "invalid bind args"); return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    adbc_stmt_t* st = statement->private_data;
+    /* The bind set is a struct array: one child per parameter, row 0 used. */
+    int n = (int)schema->n_children;
+    for (int i = 0; i < st->nparams; i++) free(st->params[i]);
+    free(st->params);
+    st->params = (n > 0) ? calloc((size_t)n, sizeof(char*)) : NULL;
+    st->nparams = n;
+    for (int i = 0; i < n; i++)
+        st->params[i] = param_to_literal(schema->children[i]->format, values->children[i]);
+
+    if (values->release) values->release(values);   /* ADBC: bind takes ownership */
+    if (schema->release) schema->release(schema);
+    return ADBC_STATUS_OK;
 }
 
 AdbcStatusCode AdbcConnectionGetTableSchema(struct AdbcConnection* connection,
