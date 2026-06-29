@@ -466,6 +466,90 @@ int pinot_get_tables(argus_backend_conn_t raw, const char *catalog,
     return 0;
 }
 
+/* ── SQLColumns via the controller /tables/{table}/schema ────── */
+
+int pinot_get_columns(argus_backend_conn_t raw, const char *catalog,
+                      const char *schema, const char *table_name,
+                      const char *column_name, argus_backend_op_t *out_op)
+{
+    (void)catalog; (void)schema;
+    pinot_conn_t *conn = (pinot_conn_t *)raw;
+    if (!conn || !out_op || !table_name || !*table_name) return -1;
+
+    char url[512];
+    snprintf(url, sizeof(url), "%s/tables/%s/schema", conn->controller_url, table_name);
+    pinot_response_t resp = {0};
+    pinot_op_t *op = op_new();
+    if (!op) return -1;
+
+    static const char *cn[7] = {"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME",
+                                "COLUMN_NAME", "DATA_TYPE", "TYPE_NAME", "IS_NULLABLE"};
+    op->num_cols = 7;
+    op->columns = calloc(7, sizeof(argus_column_desc_t));
+    if (op->columns)
+        for (int i = 0; i < 7; i++) {
+            strncpy((char *)op->columns[i].name, cn[i], ARGUS_MAX_COLUMN_NAME - 1);
+            op->columns[i].name_len = (SQLSMALLINT)strlen(cn[i]);
+            op->columns[i].sql_type = (i == 4) ? SQL_SMALLINT : SQL_VARCHAR;
+            op->columns[i].column_size = 128;
+            op->columns[i].nullable = SQL_NULLABLE;
+        }
+
+    static const char *specs[3] = {"dimensionFieldSpecs", "metricFieldSpecs",
+                                   "dateTimeFieldSpecs"};
+    if (http(conn, url, NULL, &resp) == 0 && resp.data) {
+        JsonParser *p = json_parser_new();
+        if (json_parser_load_from_data(p, resp.data, -1, NULL)) {
+            JsonObject *o = json_node_get_object(json_parser_get_root(p));
+            int total = 0;
+            for (int s = 0; s < 3 && o; s++)
+                if (json_object_has_member(o, specs[s]))
+                    total += (int)json_array_get_length(
+                        json_object_get_array_member(o, specs[s]));
+            if (total > 0) {
+                op->cache.rows = calloc((size_t)total, sizeof(argus_row_t));
+                op->cache.capacity = (size_t)total;
+                op->cache.num_cols = 7;
+                size_t r = 0;
+                for (int s = 0; s < 3; s++) {
+                    if (!json_object_has_member(o, specs[s])) continue;
+                    JsonArray *arr = json_object_get_array_member(o, specs[s]);
+                    int n = (int)json_array_get_length(arr);
+                    for (int i = 0; i < n; i++) {
+                        JsonObject *f = json_array_get_object_element(arr, (guint)i);
+                        const char *nm = (f && json_object_has_member(f, "name"))
+                            ? json_object_get_string_member(f, "name") : NULL;
+                        const char *dt = (f && json_object_has_member(f, "dataType"))
+                            ? json_object_get_string_member(f, "dataType") : "STRING";
+                        if (!nm) continue;
+                        if (column_name && *column_name && strcmp(nm, column_name) != 0)
+                            continue;
+                        argus_cell_t *cells = calloc(7, sizeof(argus_cell_t));
+                        if (!cells) break;
+                        cells[0].is_null = true;
+                        cells[1].is_null = true;
+                        cells[2].data = strdup(table_name); cells[2].data_len = strlen(table_name);
+                        cells[3].data = strdup(nm); cells[3].data_len = strlen(nm);
+                        char nb[8];
+                        int st = (int)pinot_type_to_sql_type(dt);
+                        int nl = snprintf(nb, sizeof(nb), "%d", st);
+                        cells[4].data = strdup(nb); cells[4].data_len = (size_t)nl;
+                        cells[5].data = strdup(dt); cells[5].data_len = strlen(dt);
+                        cells[6].data = strdup("YES"); cells[6].data_len = 3;
+                        op->cache.rows[r].cells = cells;
+                        r++;
+                    }
+                }
+                op->cache.num_rows = r;
+            }
+        }
+        g_object_unref(p);
+    }
+    free(resp.data);
+    *out_op = op;
+    return 0;
+}
+
 /* ── SQLGetTypeInfo (synthetic) ──────────────────────────────── */
 
 int pinot_get_type_info(argus_backend_conn_t raw, SQLSMALLINT sql_type,
@@ -505,7 +589,7 @@ static const argus_backend_t pinot_backend = {
     .fetch_results         = pinot_fetch_results,
     .get_result_metadata   = pinot_get_result_metadata,
     .get_tables            = pinot_get_tables,
-    .get_columns           = NULL,
+    .get_columns           = pinot_get_columns,
     .get_type_info         = pinot_get_type_info,
     .get_schemas           = NULL,
     .get_catalogs          = NULL,
