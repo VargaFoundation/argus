@@ -60,12 +60,15 @@ typedef struct {
 } adbc_col_t;
 
 typedef struct {
-    adbc_col_t* cols;
+    SQLHSTMT    stmt;        /* open result; rows pulled lazily per get_next */
+    adbc_col_t* cols;        /* template: kind + name per column */
     int         ncols;
-    int64_t     nrows;
-    int         delivered;
+    int64_t     batch_size;  /* max rows per emitted Arrow batch */
+    int         done;
     char        err[256];
 } adbc_stream_t;
+
+#define ADBC_BATCH_ROWS 4096
 
 /* ── Database ────────────────────────────────────────────────── */
 
@@ -290,6 +293,84 @@ static int build_child(const adbc_col_t* col, int64_t nrows, struct ArrowArray* 
     return 0;
 }
 
+static void col_reserve(adbc_col_t* col, int64_t nrows)
+{
+    if (nrows <= col->cap) return;
+    int64_t cap = col->cap ? col->cap * 2 : 256;
+    while (cap < nrows) cap *= 2;
+    col->valid = realloc(col->valid, (size_t)cap);
+    if (col->kind == 1) col->f64 = realloc(col->f64, sizeof(double) * (size_t)cap);
+    else if (col->kind == 2) col->offsets = realloc(col->offsets, sizeof(int32_t) * (size_t)(cap + 1));
+    else col->i64 = realloc(col->i64, sizeof(int64_t) * (size_t)cap);   /* int64/bool/date/ts */
+    col->cap = cap;
+}
+
+static void free_col_buffers(adbc_col_t* col)
+{
+    free(col->i64); free(col->f64); free(col->offsets);
+    free(col->chars); free(col->valid);
+}
+
+/* Read one result cell from the open statement into the collection column. */
+static void collect_cell(SQLHSTMT stmt, adbc_col_t* col, int c, int64_t row)
+{
+    col_reserve(col, row + 1);
+    SQLLEN ind = 0;
+    if (col->kind == 1) {
+        double v = 0;
+        SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_DOUBLE, &v, 0, &ind);
+        int valid = (ind != SQL_NULL_DATA);
+        col->f64[row] = valid ? v : 0;
+        col->valid[row] = (uint8_t)valid;
+        if (!valid) col->null_count++;
+    } else if (col->kind != 2) {
+        int64_t outv = 0; int valid = 1;
+        if (col->kind == 0) {
+            SQLBIGINT v = 0;
+            SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_SBIGINT, &v, 0, &ind);
+            valid = (ind != SQL_NULL_DATA); outv = (int64_t)v;
+        } else if (col->kind == 3) {
+            unsigned char v = 0;
+            SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_BIT, &v, 0, &ind);
+            valid = (ind != SQL_NULL_DATA); outv = v ? 1 : 0;
+        } else if (col->kind == 4) {
+            SQL_DATE_STRUCT v; memset(&v, 0, sizeof(v));
+            SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_TYPE_DATE, &v, 0, &ind);
+            valid = (ind != SQL_NULL_DATA);
+            if (valid) outv = days_from_civil(v.year, v.month, v.day);
+        } else {
+            SQL_TIMESTAMP_STRUCT v; memset(&v, 0, sizeof(v));
+            SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_TYPE_TIMESTAMP, &v, 0, &ind);
+            valid = (ind != SQL_NULL_DATA);
+            if (valid) {
+                int64_t days = days_from_civil(v.year, v.month, v.day);
+                outv = days * 86400LL * 1000000LL
+                     + ((int64_t)v.hour * 3600 + v.minute * 60 + v.second) * 1000000LL
+                     + (int64_t)v.fraction / 1000;
+            }
+        }
+        col->i64[row] = valid ? outv : 0;
+        col->valid[row] = (uint8_t)valid;
+        if (!valid) col->null_count++;
+    } else {
+        char vb[4096]; vb[0] = '\0';
+        SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_CHAR, vb, sizeof(vb), &ind);
+        int valid = (ind != SQL_NULL_DATA);
+        size_t vlen = valid ? strlen(vb) : 0;
+        if (row == 0) col->offsets[0] = 0;
+        if (col->chars_len + vlen + 1 > col->chars_cap) {
+            col->chars_cap = (col->chars_cap ? col->chars_cap : 4096);
+            while (col->chars_len + vlen + 1 > col->chars_cap) col->chars_cap *= 2;
+            col->chars = realloc(col->chars, col->chars_cap);
+        }
+        if (vlen) memcpy(col->chars + col->chars_len, vb, vlen);
+        col->chars_len += vlen;
+        col->offsets[row + 1] = (int32_t)col->chars_len;
+        col->valid[row] = (uint8_t)valid;
+        if (!valid) col->null_count++;
+    }
+}
+
 static int stream_get_schema(struct ArrowArrayStream* self, struct ArrowSchema* out)
 {
     adbc_stream_t* s = self->private_data;
@@ -314,10 +395,28 @@ static int stream_get_next(struct ArrowArrayStream* self, struct ArrowArray* out
 {
     adbc_stream_t* s = self->private_data;
     memset(out, 0, sizeof(*out));
-    if (s->delivered) return 0;     /* end of stream: released array */
-    s->delivered = 1;
+    if (s->done) return 0;          /* end of stream: released array */
 
-    out->length = s->nrows;
+    /* Pull up to batch_size rows from the open statement into temp columns. */
+    adbc_col_t* tc = calloc((size_t)s->ncols, sizeof(adbc_col_t));
+    if (!tc) return ENOMEM;
+    for (int i = 0; i < s->ncols; i++) tc[i].kind = s->cols[i].kind;
+
+    int64_t nrows = 0;
+    while (nrows < s->batch_size && SQLFetch(s->stmt) == SQL_SUCCESS) {
+        for (int c = 0; c < s->ncols; c++) collect_cell(s->stmt, &tc[c], c, nrows);
+        nrows++;
+    }
+
+    if (nrows == 0) {                /* result exhausted */
+        for (int i = 0; i < s->ncols; i++) free_col_buffers(&tc[i]);
+        free(tc);
+        if (s->stmt) { SQLFreeHandle(SQL_HANDLE_STMT, s->stmt); s->stmt = NULL; }
+        s->done = 1;
+        return 0;
+    }
+
+    out->length = nrows;
     out->n_children = s->ncols;
     out->children = calloc((size_t)s->ncols, sizeof(struct ArrowArray*));
     const void** root_bufs = calloc(1, sizeof(void*));  /* struct validity = NULL */
@@ -325,10 +424,13 @@ static int stream_get_next(struct ArrowArrayStream* self, struct ArrowArray* out
     out->n_buffers = 1; out->buffers = root_bufs;
     for (int i = 0; i < s->ncols; i++) {
         struct ArrowArray* ch = calloc(1, sizeof(struct ArrowArray));
-        if (!ch || build_child(&s->cols[i], s->nrows, ch) != 0) { free(ch); return ENOMEM; }
+        if (!ch || build_child(&tc[i], nrows, ch) != 0) { free(ch); return ENOMEM; }
         out->children[i] = ch;
     }
     out->release = root_array_release;
+
+    for (int i = 0; i < s->ncols; i++) free_col_buffers(&tc[i]);
+    free(tc);
     return 0;
 }
 
@@ -342,10 +444,8 @@ static void stream_release(struct ArrowArrayStream* self)
 {
     adbc_stream_t* s = self->private_data;
     if (s) {
-        for (int i = 0; i < s->ncols; i++) {
-            free(s->cols[i].name); free(s->cols[i].i64); free(s->cols[i].f64);
-            free(s->cols[i].offsets); free(s->cols[i].chars); free(s->cols[i].valid);
-        }
+        if (s->stmt) SQLFreeHandle(SQL_HANDLE_STMT, s->stmt);   /* abandoned early */
+        for (int i = 0; i < s->ncols; i++) free(s->cols[i].name);
         free(s->cols);
         free(s);
     }
@@ -377,18 +477,6 @@ AdbcStatusCode AdbcStatementSetSqlQuery(struct AdbcStatement* statement,
     free(st->query);
     st->query = query ? strdup(query) : NULL;
     return ADBC_STATUS_OK;
-}
-
-static void col_reserve(adbc_col_t* col, int64_t nrows)
-{
-    if (nrows <= col->cap) return;
-    int64_t cap = col->cap ? col->cap * 2 : 256;
-    while (cap < nrows) cap *= 2;
-    col->valid = realloc(col->valid, (size_t)cap);
-    if (col->kind == 1) col->f64 = realloc(col->f64, sizeof(double) * (size_t)cap);
-    else if (col->kind == 2) col->offsets = realloc(col->offsets, sizeof(int32_t) * (size_t)(cap + 1));
-    else col->i64 = realloc(col->i64, sizeof(int64_t) * (size_t)cap);   /* int64/bool/date/ts */
-    col->cap = cap;
 }
 
 AdbcStatusCode AdbcStatementExecuteQuery(struct AdbcStatement* statement,
@@ -436,71 +524,10 @@ AdbcStatusCode AdbcStatementExecuteQuery(struct AdbcStatement* statement,
         }
     }
 
-    int64_t nrows = 0;
-    while (SQLFetch(stmt) == SQL_SUCCESS) {
-        for (int c = 0; c < ncols; c++) {
-            adbc_col_t* col = &s->cols[c];
-            col_reserve(col, nrows + 1);
-            SQLLEN ind = 0;
-            if (col->kind == 1) {
-                double v = 0;
-                SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_DOUBLE, &v, 0, &ind);
-                int valid = (ind != SQL_NULL_DATA);
-                col->f64[nrows] = valid ? v : 0;
-                col->valid[nrows] = (uint8_t)valid;
-                if (!valid) col->null_count++;
-            } else if (col->kind != 2) {
-                /* int64 / boolean / date32 / timestamp -> one int64 each */
-                int64_t outv = 0; int valid = 1;
-                if (col->kind == 0) {
-                    SQLBIGINT v = 0;
-                    SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_SBIGINT, &v, 0, &ind);
-                    valid = (ind != SQL_NULL_DATA); outv = (int64_t)v;
-                } else if (col->kind == 3) {
-                    unsigned char v = 0;
-                    SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_BIT, &v, 0, &ind);
-                    valid = (ind != SQL_NULL_DATA); outv = v ? 1 : 0;
-                } else if (col->kind == 4) {
-                    SQL_DATE_STRUCT v; memset(&v, 0, sizeof(v));
-                    SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_TYPE_DATE, &v, 0, &ind);
-                    valid = (ind != SQL_NULL_DATA);
-                    if (valid) outv = days_from_civil(v.year, v.month, v.day);
-                } else {  /* kind 5: timestamp -> microseconds since epoch */
-                    SQL_TIMESTAMP_STRUCT v; memset(&v, 0, sizeof(v));
-                    SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_TYPE_TIMESTAMP, &v, 0, &ind);
-                    valid = (ind != SQL_NULL_DATA);
-                    if (valid) {
-                        int64_t days = days_from_civil(v.year, v.month, v.day);
-                        outv = days * 86400LL * 1000000LL
-                             + ((int64_t)v.hour * 3600 + v.minute * 60 + v.second) * 1000000LL
-                             + (int64_t)v.fraction / 1000;
-                    }
-                }
-                col->i64[nrows] = valid ? outv : 0;
-                col->valid[nrows] = (uint8_t)valid;
-                if (!valid) col->null_count++;
-            } else {
-                char vb[4096]; vb[0] = '\0';
-                SQLGetData(stmt, (SQLUSMALLINT)(c + 1), SQL_C_CHAR, vb, sizeof(vb), &ind);
-                int valid = (ind != SQL_NULL_DATA);
-                size_t vlen = valid ? strlen(vb) : 0;
-                if (nrows == 0) col->offsets[0] = 0;
-                if (col->chars_len + vlen + 1 > col->chars_cap) {
-                    col->chars_cap = (col->chars_cap ? col->chars_cap : 4096);
-                    while (col->chars_len + vlen + 1 > col->chars_cap) col->chars_cap *= 2;
-                    col->chars = realloc(col->chars, col->chars_cap);
-                }
-                if (vlen) memcpy(col->chars + col->chars_len, vb, vlen);
-                col->chars_len += vlen;
-                col->offsets[nrows + 1] = (int32_t)col->chars_len;
-                col->valid[nrows] = (uint8_t)valid;
-                if (!valid) col->null_count++;
-            }
-        }
-        nrows++;
-    }
-    s->nrows = nrows;
-    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    /* Keep the statement open; rows are pulled one Arrow batch at a time in
+     * stream_get_next (bounded memory). */
+    s->stmt = stmt;
+    s->batch_size = ADBC_BATCH_ROWS;
     if (rows_affected) *rows_affected = -1;   /* unknown for SELECT */
 
     memset(out, 0, sizeof(*out));

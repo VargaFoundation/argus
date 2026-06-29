@@ -68,6 +68,7 @@ Covers `SELECT` to a materialized record batch with int64/double/utf8 columns,
 plus the driver-manager `AdbcDriverInit` vtable (ADBC 1.0.0), so the driver loads
 via any ADBC driver manager by name, and typed Arrow output for
 int64/double/bool/date32/timestamp/utf8 (DECIMAL stays utf8 to preserve
-arbitrary precision). Planned next: batched streaming (emit one Arrow batch per fetch
-block rather than materializing), bind parameters, and the ADBC metadata calls
-(`GetObjects`, `GetTableSchema`).
+arbitrary precision), and **batched streaming** — the result statement stays open
+and each `get_next` pulls one Arrow batch (up to 4096 rows) lazily, so memory is
+bounded regardless of result size. Planned next: bind parameters and the ADBC
+metadata calls (`GetObjects`, `GetTableSchema`).
