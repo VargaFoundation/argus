@@ -319,6 +319,20 @@ if(BUILD_TESTING)
     )
 endif()
 
+# Optional ADBC driver (Arrow-native surface over the ODBC stack)
+if(BUILD_ADBC)
+    add_library(argus_adbc SHARED adbc/argus_adbc.c)
+    target_include_directories(argus_adbc
+        PUBLIC  $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+        PRIVATE ${ODBC_INCLUDE_DIRS})
+    target_link_libraries(argus_adbc PRIVATE argus_odbc)
+    set_target_properties(argus_adbc PROPERTIES
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${PROJECT_VERSION_MAJOR}
+        OUTPUT_NAME argus_adbc)
+    install(TARGETS argus_adbc LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
+endif()
+
 # Install rules
 install(TARGETS argus_odbc
     LIBRARY DESTINATION lib

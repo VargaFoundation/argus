@@ -15,6 +15,7 @@ endif()
 option(BUILD_TESTING "Build unit tests" ON)
 option(BUILD_INTEGRATION_TESTS "Build integration tests" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+option(BUILD_ADBC "Build the Arrow ADBC driver (over the ODBC stack)" ON)
 
 # Append our cmake module path
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
