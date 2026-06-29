@@ -220,6 +220,19 @@ static int64_t days_from_civil(int y, unsigned m, unsigned d)
     return era * 146097 + (int64_t)doe - 719468;
 }
 
+/* ODBC SQL type -> column kind. */
+static int sqltype_to_kind(SQLSMALLINT t)
+{
+    switch (t) {
+    case SQL_TINYINT: case SQL_SMALLINT: case SQL_INTEGER: case SQL_BIGINT: return 0;
+    case SQL_REAL: case SQL_FLOAT: case SQL_DOUBLE: return 1;
+    case SQL_BIT: return 3;
+    case SQL_TYPE_DATE: case SQL_DATE: return 4;
+    case SQL_TYPE_TIMESTAMP: case SQL_TIMESTAMP: return 5;
+    default: return 2;
+    }
+}
+
 /* Column kind -> Arrow C Data Interface format string. */
 static const char* kind_format(int kind)
 {
@@ -532,20 +545,7 @@ AdbcStatusCode AdbcStatementExecuteQuery(struct AdbcStatement* statement,
         SQLCHAR cname[256]; SQLSMALLINT cnl = 0, ctype = 0, cdd = 0, cnull = 0; SQLULEN csz = 0;
         SQLDescribeCol(stmt, (SQLUSMALLINT)(c + 1), cname, sizeof(cname), &cnl, &ctype, &csz, &cdd, &cnull);
         s->cols[c].name = strdup((char*)cname);
-        switch (ctype) {
-        case SQL_TINYINT: case SQL_SMALLINT: case SQL_INTEGER: case SQL_BIGINT:
-            s->cols[c].kind = 0; break;        /* int64    */
-        case SQL_REAL: case SQL_FLOAT: case SQL_DOUBLE:
-            s->cols[c].kind = 1; break;        /* double   */
-        case SQL_BIT:
-            s->cols[c].kind = 3; break;        /* boolean  */
-        case SQL_TYPE_DATE: case SQL_DATE:
-            s->cols[c].kind = 4; break;        /* date32   */
-        case SQL_TYPE_TIMESTAMP: case SQL_TIMESTAMP:
-            s->cols[c].kind = 5; break;        /* timestamp(us) */
-        default:
-            s->cols[c].kind = 2; s->cols[c].offsets = NULL; break;   /* utf8 */
-        }
+        s->cols[c].kind = sqltype_to_kind(ctype);
     }
 
     /* Keep the statement open; rows are pulled one Arrow batch at a time in
@@ -644,17 +644,137 @@ AdbcStatusCode AdbcConnectionGetTableSchema(struct AdbcConnection* connection,
                                             const char* table_name, struct ArrowSchema* schema,
                                             struct AdbcError* error)
 {
-    (void)connection; (void)catalog; (void)db_schema; (void)table_name; (void)schema;
-    set_error(error, "GetTableSchema not implemented");
-    return ADBC_STATUS_NOT_IMPLEMENTED;
+    if (!connection || !connection->private_data || !table_name || !schema) {
+        set_error(error, "invalid GetTableSchema args"); return ADBC_STATUS_INVALID_ARGUMENT;
+    }
+    adbc_conn_t* c = connection->private_data;
+    SQLHSTMT stmt;
+    if (SQLAllocHandle(SQL_HANDLE_STMT, c->dbc, &stmt) != SQL_SUCCESS) {
+        set_error(error, "alloc stmt failed"); return ADBC_STATUS_IO;
+    }
+    SQLRETURN r = SQLColumns(stmt,
+        (SQLCHAR*)catalog,   catalog   ? SQL_NTS : 0,
+        (SQLCHAR*)db_schema, db_schema ? SQL_NTS : 0,
+        (SQLCHAR*)table_name, SQL_NTS,
+        NULL, 0);
+    if (!SQL_SUCCEEDED(r)) { set_error(error, "SQLColumns failed"); SQLFreeHandle(SQL_HANDLE_STMT, stmt); return ADBC_STATUS_IO; }
+
+    int cap = 16, n = 0;
+    char** names = malloc((size_t)cap * sizeof(char*));
+    int*   kinds = malloc((size_t)cap * sizeof(int));
+    char nm[256]; SQLLEN ind;
+    while (SQLFetch(stmt) == SQL_SUCCESS) {
+        SQLSMALLINT datatype = 0;
+        SQLGetData(stmt, 4, SQL_C_CHAR, nm, sizeof(nm), &ind);   /* COLUMN_NAME */
+        SQLGetData(stmt, 5, SQL_C_SSHORT, &datatype, 0, &ind);   /* DATA_TYPE   */
+        if (n == cap) { cap *= 2; names = realloc(names, (size_t)cap * sizeof(char*)); kinds = realloc(kinds, (size_t)cap * sizeof(int)); }
+        names[n] = strdup(nm); kinds[n] = sqltype_to_kind(datatype); n++;
+    }
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+
+    memset(schema, 0, sizeof(*schema));
+    schema->format = "+s";
+    schema->n_children = n;
+    schema->children = calloc((size_t)(n > 0 ? n : 1), sizeof(struct ArrowSchema*));
+    for (int i = 0; i < n; i++) {
+        struct ArrowSchema* ch = calloc(1, sizeof(struct ArrowSchema));
+        ch->format = kind_format(kinds[i]);
+        ch->name = names[i];                 /* ownership transferred */
+        ch->flags = ARROW_FLAG_NULLABLE;
+        ch->release = child_schema_release;
+        schema->children[i] = ch;
+    }
+    schema->release = root_schema_release;
+    free(names);
+    free(kinds);
+    return ADBC_STATUS_OK;
+}
+
+/* ── One-shot stream: emit a single pre-built batch, then end ── */
+
+typedef struct { struct ArrowSchema schema; struct ArrowArray array; int array_done; } oneshot_t;
+
+static int oneshot_get_schema(struct ArrowArrayStream* self, struct ArrowSchema* out)
+{
+    oneshot_t* o = self->private_data;
+    *out = o->schema; memset(&o->schema, 0, sizeof(o->schema));   /* move out */
+    return 0;
+}
+static int oneshot_get_next(struct ArrowArrayStream* self, struct ArrowArray* out)
+{
+    oneshot_t* o = self->private_data;
+    memset(out, 0, sizeof(*out));
+    if (o->array_done) return 0;
+    *out = o->array; memset(&o->array, 0, sizeof(o->array)); o->array_done = 1;
+    return 0;
+}
+static const char* oneshot_get_last_error(struct ArrowArrayStream* self) { (void)self; return NULL; }
+static void oneshot_release(struct ArrowArrayStream* self)
+{
+    oneshot_t* o = self->private_data;
+    if (o) {
+        if (o->schema.release) o->schema.release(&o->schema);
+        if (o->array.release) o->array.release(&o->array);
+        free(o);
+    }
+    self->private_data = NULL; self->release = NULL;
+}
+
+/* Build a stream of one utf8 column from C strings. */
+static void make_utf8_stream(struct ArrowArrayStream* out, const char* col,
+                             const char** vals, int n)
+{
+    oneshot_t* o = calloc(1, sizeof(*o));
+    o->schema.format = "+s";
+    o->schema.n_children = 1;
+    o->schema.children = calloc(1, sizeof(struct ArrowSchema*));
+    struct ArrowSchema* sch = calloc(1, sizeof(struct ArrowSchema));
+    sch->format = "u"; sch->name = strdup(col); sch->flags = ARROW_FLAG_NULLABLE;
+    sch->release = child_schema_release;
+    o->schema.children[0] = sch;
+    o->schema.release = root_schema_release;
+
+    adbc_col_t tc; memset(&tc, 0, sizeof(tc)); tc.kind = 2;
+    for (int i = 0; i < n; i++) {
+        col_reserve(&tc, i + 1);
+        if (i == 0) tc.offsets[0] = 0;
+        size_t l = strlen(vals[i]);
+        if (tc.chars_len + l + 1 > tc.chars_cap) {
+            tc.chars_cap = tc.chars_cap ? tc.chars_cap : 64;
+            while (tc.chars_len + l + 1 > tc.chars_cap) tc.chars_cap *= 2;
+            tc.chars = realloc(tc.chars, tc.chars_cap);
+        }
+        memcpy(tc.chars + tc.chars_len, vals[i], l);
+        tc.chars_len += l;
+        tc.offsets[i + 1] = (int32_t)tc.chars_len;
+        tc.valid[i] = 1;
+    }
+    o->array.length = n;
+    o->array.n_children = 1;
+    o->array.children = calloc(1, sizeof(struct ArrowArray*));
+    const void** rb = calloc(1, sizeof(void*));
+    o->array.n_buffers = 1; o->array.buffers = rb;
+    struct ArrowArray* ach = calloc(1, sizeof(struct ArrowArray));
+    build_child(&tc, n, ach);
+    o->array.children[0] = ach;
+    o->array.release = root_array_release;
+    free_col_buffers(&tc);
+
+    memset(out, 0, sizeof(*out));
+    out->get_schema = oneshot_get_schema;
+    out->get_next = oneshot_get_next;
+    out->get_last_error = oneshot_get_last_error;
+    out->release = oneshot_release;
+    out->private_data = o;
 }
 
 AdbcStatusCode AdbcConnectionGetTableTypes(struct AdbcConnection* connection,
                                            struct ArrowArrayStream* out, struct AdbcError* error)
 {
-    (void)connection; (void)out;
-    set_error(error, "GetTableTypes not implemented");
-    return ADBC_STATUS_NOT_IMPLEMENTED;
+    if (!connection || !out) { set_error(error, "invalid args"); return ADBC_STATUS_INVALID_ARGUMENT; }
+    const char* types[] = { "TABLE", "VIEW" };
+    make_utf8_stream(out, "table_type", types, 2);
+    return ADBC_STATUS_OK;
 }
 
 AdbcStatusCode AdbcConnectionGetObjects(struct AdbcConnection* connection, int depth,
