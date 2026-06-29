@@ -400,7 +400,20 @@ static int druid_get_columns(argus_backend_conn_t conn, const char *catalog,
     char q[2048];
     int off = snprintf(q, sizeof(q),
         "SELECT TABLE_CATALOG AS TABLE_CAT, TABLE_SCHEMA AS TABLE_SCHEM, "
-        "TABLE_NAME, COLUMN_NAME, DATA_TYPE AS TYPE_NAME, "
+        "TABLE_NAME, COLUMN_NAME, "
+        "CASE "
+        "WHEN DATA_TYPE = 'BIGINT' THEN -5 "
+        "WHEN DATA_TYPE = 'INTEGER' THEN 4 "
+        "WHEN DATA_TYPE = 'SMALLINT' THEN 5 "
+        "WHEN DATA_TYPE = 'TINYINT' THEN -6 "
+        "WHEN DATA_TYPE = 'DOUBLE' THEN 8 "
+        "WHEN DATA_TYPE IN ('FLOAT','REAL') THEN 7 "
+        "WHEN DATA_TYPE = 'DECIMAL' THEN 3 "
+        "WHEN DATA_TYPE = 'BOOLEAN' THEN -7 "
+        "WHEN DATA_TYPE = 'DATE' THEN 91 "
+        "WHEN DATA_TYPE = 'TIMESTAMP' THEN 93 "
+        "ELSE 12 END AS DATA_TYPE, "
+        "DATA_TYPE AS TYPE_NAME, "
         "ORDINAL_POSITION, IS_NULLABLE "
         "FROM INFORMATION_SCHEMA.COLUMNS WHERE 1=1");
     if (catalog && *catalog)
