@@ -64,6 +64,9 @@ emitted stream is imported by Arrow C++'s own `ImportRecordBatchReader`, yieldin
 
 ## Status & roadmap
 
+All first-round ADBC items are implemented (vtable, typed Arrow, batched
+streaming, bound params, GetTableSchema/GetTableTypes/GetObjects).
+
 Covers `SELECT` to a materialized record batch with int64/double/utf8 columns,
 plus the driver-manager `AdbcDriverInit` vtable (ADBC 1.0.0), so the driver loads
 via any ADBC driver manager by name, and typed Arrow output for
@@ -74,5 +77,6 @@ bounded regardless of result size, **bound parameters** (`AdbcStatementBind`)
 — the Arrow parameter array (row 0) is decoded and substituted into the query's
 `?` markers as SQL literals — and the metadata calls `AdbcConnectionGetTableSchema`
 (a table's columns as an Arrow schema, via `SQLColumns`) and
-`AdbcConnectionGetTableTypes`. Planned next: `GetObjects` (the full nested
-catalog/schema/table/column hierarchy).
+`AdbcConnectionGetTableTypes`, and `AdbcConnectionGetObjects` (the full nested
+catalog/schema/table/column Arrow schema, with the catalog level populated;
+populating the deeper schema/table/column levels is a follow-up).

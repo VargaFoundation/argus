@@ -272,7 +272,10 @@ static int build_child(const adbc_col_t* col, int64_t nrows, struct ArrowArray* 
         int32_t* offs = malloc(sizeof(int32_t) * (size_t)(nrows + 1));
         char* data = malloc(col->chars_len ? col->chars_len : 1);
         if (!offs || !data) { free(validity); free(bufs); free(offs); free(data); return -1; }
-        memcpy(offs, col->offsets, sizeof(int32_t) * (size_t)(nrows + 1));
+        if (col->offsets && nrows > 0)
+            memcpy(offs, col->offsets, sizeof(int32_t) * (size_t)(nrows + 1));
+        else
+            offs[0] = 0;   /* empty column: single zero offset */
         if (col->chars_len) memcpy(data, col->chars, col->chars_len);
         bufs[0] = validity; bufs[1] = offs; bufs[2] = data;
         out->n_buffers = 3; out->buffers = bufs;
@@ -777,16 +780,171 @@ AdbcStatusCode AdbcConnectionGetTableTypes(struct AdbcConnection* connection,
     return ADBC_STATUS_OK;
 }
 
+/* ── GetObjects: build the nested catalog hierarchy schema ────── */
+
+static struct ArrowSchema* sch_leaf(const char* name, const char* fmt)
+{
+    struct ArrowSchema* s = calloc(1, sizeof(*s));
+    s->format = fmt; s->name = strdup(name); s->flags = ARROW_FLAG_NULLABLE;
+    s->release = child_schema_release;
+    return s;
+}
+
+static struct ArrowSchema* sch_struct(const char* name, struct ArrowSchema** kids, int n)
+{
+    struct ArrowSchema* s = calloc(1, sizeof(*s));
+    s->format = "+s"; s->name = strdup(name); s->flags = ARROW_FLAG_NULLABLE;
+    s->n_children = n; s->children = calloc((size_t)n, sizeof(struct ArrowSchema*));
+    for (int i = 0; i < n; i++) s->children[i] = kids[i];
+    s->release = root_schema_release;
+    return s;
+}
+
+static struct ArrowSchema* sch_list(const char* name, struct ArrowSchema* item)
+{
+    struct ArrowSchema* s = calloc(1, sizeof(*s));
+    s->format = "+l"; s->name = strdup(name); s->flags = ARROW_FLAG_NULLABLE;
+    if (!item->name) item->name = strdup("item");
+    s->n_children = 1; s->children = calloc(1, sizeof(struct ArrowSchema*));
+    s->children[0] = item;
+    s->release = root_schema_release;
+    return s;
+}
+
+/* The ADBC GetObjects schema (column detail kept to the common fields). */
+static void build_objects_schema(struct ArrowSchema* out)
+{
+    struct ArrowSchema* col_kids[2] = {
+        sch_leaf("column_name", "u"), sch_leaf("ordinal_position", "i") };
+    struct ArrowSchema* col = sch_struct("item", col_kids, 2);
+    struct ArrowSchema* tbl_kids[3] = {
+        sch_leaf("table_name", "u"), sch_leaf("table_type", "u"),
+        sch_list("table_columns", col) };
+    struct ArrowSchema* tbl = sch_struct("item", tbl_kids, 3);
+    struct ArrowSchema* sch_kids[2] = {
+        sch_leaf("db_schema_name", "u"), sch_list("db_schema_tables", tbl) };
+    struct ArrowSchema* sch = sch_struct("item", sch_kids, 2);
+    struct ArrowSchema* root_kids[2] = {
+        sch_leaf("catalog_name", "u"), sch_list("catalog_db_schemas", sch) };
+
+    memset(out, 0, sizeof(*out));
+    out->format = "+s"; out->n_children = 2;
+    out->children = calloc(2, sizeof(struct ArrowSchema*));
+    out->children[0] = root_kids[0];
+    out->children[1] = root_kids[1];
+    out->release = root_schema_release;
+}
+
+/* Build a length-0 array matching a schema (recursively). */
+static struct ArrowArray* empty_array(const struct ArrowSchema* s)
+{
+    struct ArrowArray* a = calloc(1, sizeof(*a));
+    a->release = child_array_release;
+    if (s->format[0] == '+' && s->format[1] == 's') {        /* struct */
+        const void** b = calloc(1, sizeof(void*)); a->n_buffers = 1; a->buffers = b;
+        a->n_children = s->n_children;
+        a->children = calloc((size_t)s->n_children, sizeof(struct ArrowArray*));
+        for (int i = 0; i < s->n_children; i++) a->children[i] = empty_array(s->children[i]);
+        a->release = root_array_release;
+    } else if (s->format[0] == '+' && s->format[1] == 'l') { /* list */
+        const void** b = calloc(2, sizeof(void*));
+        b[1] = calloc(1, sizeof(int32_t));                   /* offsets {0} */
+        a->n_buffers = 2; a->buffers = b;
+        a->n_children = 1;
+        a->children = calloc(1, sizeof(struct ArrowArray*));
+        a->children[0] = empty_array(s->children[0]);
+        a->release = root_array_release;
+    } else if (s->format[0] == 'u') {                        /* utf8 */
+        const void** b = calloc(3, sizeof(void*));
+        b[1] = calloc(1, sizeof(int32_t));                   /* offsets {0} */
+        a->n_buffers = 3; a->buffers = b;
+    } else {                                                 /* int32 etc. */
+        const void** b = calloc(2, sizeof(void*));
+        a->n_buffers = 2; a->buffers = b;
+    }
+    return a;
+}
+
 AdbcStatusCode AdbcConnectionGetObjects(struct AdbcConnection* connection, int depth,
                                         const char* catalog, const char* db_schema,
                                         const char* table_name, const char** table_types,
                                         const char* column_name, struct ArrowArrayStream* out,
                                         struct AdbcError* error)
 {
-    (void)connection; (void)depth; (void)catalog; (void)db_schema; (void)table_name;
-    (void)table_types; (void)column_name; (void)out;
-    set_error(error, "GetObjects not implemented");
-    return ADBC_STATUS_NOT_IMPLEMENTED;
+    (void)depth; (void)catalog; (void)db_schema; (void)table_name;
+    (void)table_types; (void)column_name;
+    if (!connection || !connection->private_data || !out) { set_error(error, "invalid args"); return ADBC_STATUS_INVALID_ARGUMENT; }
+    adbc_conn_t* c = connection->private_data;
+
+    /* Collect distinct catalog names from SQLTables. */
+    int cap = 16, n = 0; char** cats = malloc((size_t)cap * sizeof(char*));
+    SQLHSTMT stmt;
+    if (SQLAllocHandle(SQL_HANDLE_STMT, c->dbc, &stmt) == SQL_SUCCESS &&
+        SQL_SUCCEEDED(SQLTables(stmt, NULL, 0, NULL, 0, NULL, 0, NULL, 0))) {
+        char cat[256]; SQLLEN ind;
+        while (SQLFetch(stmt) == SQL_SUCCESS) {
+            SQLGetData(stmt, 1, SQL_C_CHAR, cat, sizeof(cat), &ind);
+            if (ind == SQL_NULL_DATA || !cat[0]) continue;
+            int seen = 0;
+            for (int i = 0; i < n; i++) if (strcmp(cats[i], cat) == 0) { seen = 1; break; }
+            if (seen) continue;
+            if (n == cap) { cap *= 2; cats = realloc(cats, (size_t)cap * sizeof(char*)); }
+            cats[n++] = strdup(cat);
+        }
+    }
+    if (stmt) SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+
+    oneshot_t* o = calloc(1, sizeof(*o));
+    build_objects_schema(&o->schema);
+
+    /* Root struct array: catalog_name (populated) + catalog_db_schemas (empty
+     * list per catalog -- deeper levels are a documented follow-up). */
+    o->array.length = n;
+    o->array.n_children = 2;
+    o->array.children = calloc(2, sizeof(struct ArrowArray*));
+    const void** rb = calloc(1, sizeof(void*)); o->array.n_buffers = 1; o->array.buffers = rb;
+
+    /* child 0: catalog_name utf8 */
+    adbc_col_t tc; memset(&tc, 0, sizeof(tc)); tc.kind = 2;
+    for (int i = 0; i < n; i++) {
+        col_reserve(&tc, i + 1);
+        if (i == 0) tc.offsets[0] = 0;
+        size_t l = strlen(cats[i]);
+        if (tc.chars_len + l + 1 > tc.chars_cap) {
+            tc.chars_cap = tc.chars_cap ? tc.chars_cap : 64;
+            while (tc.chars_len + l + 1 > tc.chars_cap) tc.chars_cap *= 2;
+            tc.chars = realloc(tc.chars, tc.chars_cap);
+        }
+        memcpy(tc.chars + tc.chars_len, cats[i], l); tc.chars_len += l;
+        tc.offsets[i + 1] = (int32_t)tc.chars_len; tc.valid[i] = 1;
+    }
+    struct ArrowArray* cat_arr = calloc(1, sizeof(struct ArrowArray));
+    build_child(&tc, n, cat_arr);
+    free_col_buffers(&tc);
+    o->array.children[0] = cat_arr;
+
+    /* child 1: catalog_db_schemas list<struct> -- empty for each catalog */
+    struct ArrowArray* lst = calloc(1, sizeof(struct ArrowArray));
+    lst->length = n;
+    const void** lb = calloc(2, sizeof(void*));
+    int32_t* offs = calloc((size_t)(n + 1), sizeof(int32_t));   /* all 0 */
+    lb[1] = offs; lst->n_buffers = 2; lst->buffers = lb;
+    lst->n_children = 1; lst->children = calloc(1, sizeof(struct ArrowArray*));
+    lst->children[0] = empty_array(o->schema.children[1]->children[0]);  /* element schema */
+    lst->release = root_array_release;
+    o->array.children[1] = lst;
+    o->array.release = root_array_release;
+
+    for (int i = 0; i < n; i++) free(cats[i]);
+    free(cats);
+
+    memset(out, 0, sizeof(*out));
+    out->get_schema = oneshot_get_schema;
+    out->get_next = oneshot_get_next;
+    out->get_last_error = oneshot_get_last_error;
+    out->release = oneshot_release;
+    out->private_data = o;
+    return ADBC_STATUS_OK;
 }
 
 /* ── Driver-manager entry point ──────────────────────────────── */
