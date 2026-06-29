@@ -279,6 +279,11 @@ SQLRETURN SQL_API SQLDriverConnect(
     if (!v) v = argus_conn_params_get(&params, "SCOPE");
     if (v) { free(dbc->oauth_scope); dbc->oauth_scope = strdup(v); }
 
+    v = argus_conn_params_get(&params, "OAUTH2DEVICEENDPOINT");
+    if (!v) v = argus_conn_params_get(&params, "DEVICEAUTHURI");
+    if (!v) v = argus_conn_params_get(&params, "DEVICEAUTHURL");
+    if (v) { free(dbc->oauth_device_url); dbc->oauth_device_url = strdup(v); }
+
     v = argus_conn_params_get(&params, "TRINOPROTOCOL");
     if (!v) v = argus_conn_params_get(&params, "TRINO_PROTOCOL");
     if (v) {

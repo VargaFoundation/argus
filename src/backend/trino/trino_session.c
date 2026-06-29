@@ -6,9 +6,11 @@
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
+#include <unistd.h>
 
 /* Forward declarations for the OAuth2 token-refresh path. */
 static int trino_refresh_oauth_token(trino_conn_t *conn);
+static int trino_fetch_device_token(trino_conn_t *conn, char **out_token);
 
 /* ── Helper: Apply SSL and timeout settings to curl ─────────────── */
 
@@ -282,6 +284,139 @@ static int trino_fetch_oauth_token(trino_conn_t *conn, char **out_token)
     return ret;
 }
 
+/* POST an x-www-form-urlencoded body to an IdP endpoint, return parsed JSON. */
+static JsonParser *trino_oauth_form_post(trino_conn_t *conn, const char *url,
+                                         const char *body, long *http_code)
+{
+    CURL *c = curl_easy_init();
+    if (!c) return NULL;
+    struct curl_slist *hdrs = curl_slist_append(
+        NULL, "Content-Type: application/x-www-form-urlencoded");
+    trino_response_t resp = {0};
+    curl_easy_setopt(c, CURLOPT_URL, url);
+    curl_easy_setopt(c, CURLOPT_POST, 1L);
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, body);
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &resp);
+    if (conn->ssl_enabled) {
+        curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
+        curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);
+        if (conn->ssl_ca_file) curl_easy_setopt(c, CURLOPT_CAINFO, conn->ssl_ca_file);
+    }
+    if (conn->connect_timeout_sec > 0)
+        curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, (long)conn->connect_timeout_sec);
+    CURLcode res = curl_easy_perform(c);
+    long code = 0;
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
+    if (http_code) *http_code = code;
+    JsonParser *p = NULL;
+    if (res == CURLE_OK && resp.data) {
+        p = json_parser_new();
+        if (!json_parser_load_from_data(p, resp.data, (gssize)resp.size, NULL)) {
+            g_object_unref(p); p = NULL;
+        }
+    }
+    free(resp.data);
+    curl_slist_free_all(hdrs);
+    curl_easy_cleanup(c);
+    return p;
+}
+
+/* ── OAuth2 device authorization grant (RFC 8628) ────────────────
+ * For headless/no-browser logins: request a device + user code, surface the
+ * verification URL to the operator, then poll the token endpoint until the
+ * user authorizes. Needs a device endpoint, token endpoint and client id. */
+static int trino_fetch_device_token(trino_conn_t *conn, char **out_token)
+{
+    *out_token = NULL;
+    if (!conn->oauth_device_url || !conn->oauth_token_url || !conn->oauth_client_id)
+        return -1;
+
+    CURL *e = curl_easy_init();
+    if (!e) return -1;
+    char *eid = curl_easy_escape(e, conn->oauth_client_id, 0);
+    char *escope = conn->oauth_scope ? curl_easy_escape(e, conn->oauth_scope, 0) : NULL;
+
+    char body[2048];
+    if (escope)
+        snprintf(body, sizeof(body), "client_id=%s&scope=%s", eid ? eid : "", escope);
+    else
+        snprintf(body, sizeof(body), "client_id=%s", eid ? eid : "");
+
+    long code = 0;
+    JsonParser *p = trino_oauth_form_post(conn, conn->oauth_device_url, body, &code);
+    if (!p || code < 200 || code >= 300) {
+        ARGUS_LOG_ERROR("Trino device authorization request failed (http=%ld)", code);
+        if (p) g_object_unref(p);
+        curl_free(eid); if (escope) curl_free(escope); curl_easy_cleanup(e);
+        return -1;
+    }
+    JsonObject *o = json_node_get_object(json_parser_get_root(p));
+    const char *device_code = json_object_has_member(o, "device_code")
+        ? json_object_get_string_member(o, "device_code") : NULL;
+    const char *user_code = json_object_has_member(o, "user_code")
+        ? json_object_get_string_member(o, "user_code") : NULL;
+    const char *vuri = json_object_has_member(o, "verification_uri")
+        ? json_object_get_string_member(o, "verification_uri")
+        : (json_object_has_member(o, "verification_url")
+           ? json_object_get_string_member(o, "verification_url") : NULL);
+    const char *vuri_full = json_object_has_member(o, "verification_uri_complete")
+        ? json_object_get_string_member(o, "verification_uri_complete") : NULL;
+    int interval = json_object_has_member(o, "interval")
+        ? (int)json_object_get_int_member(o, "interval") : 5;
+    int expires = json_object_has_member(o, "expires_in")
+        ? (int)json_object_get_int_member(o, "expires_in") : 300;
+    char *dc = device_code ? strdup(device_code) : NULL;
+
+    /* Surface the verification prompt (ODBC has no UI — use stderr + the log). */
+    fprintf(stderr,
+            "\n[Argus][Trino] To sign in, open %s and enter code: %s\n\n",
+            vuri_full ? vuri_full : (vuri ? vuri : "(your IdP device page)"),
+            user_code ? user_code : "(see IdP)");
+    ARGUS_LOG_WARN("Trino device-code auth: open %s and enter %s",
+                   vuri ? vuri : "(idp)", user_code ? user_code : "");
+    g_object_unref(p);
+
+    if (!dc) { curl_free(eid); if (escope) curl_free(escope); curl_easy_cleanup(e); return -1; }
+
+    char *edc = curl_easy_escape(e, dc, 0);
+    char pbody[2048];
+    snprintf(pbody, sizeof(pbody),
+             "grant_type=urn:ietf:params:oauth:grant-type:device_code"
+             "&device_code=%s&client_id=%s", edc ? edc : "", eid ? eid : "");
+
+    int waited = 0, ret = -1;
+    if (interval < 1) interval = 1;
+    while (waited < expires) {
+        sleep((unsigned)interval);
+        waited += interval;
+        long c2 = 0;
+        JsonParser *tp = trino_oauth_form_post(conn, conn->oauth_token_url, pbody, &c2);
+        if (!tp) continue;
+        JsonObject *to = json_node_get_object(json_parser_get_root(tp));
+        if (json_object_has_member(to, "access_token")) {
+            const char *tok = json_object_get_string_member(to, "access_token");
+            if (tok && *tok) { *out_token = strdup(tok); ret = 0; g_object_unref(tp); break; }
+        }
+        const char *err = json_object_has_member(to, "error")
+            ? json_object_get_string_member(to, "error") : NULL;
+        if (err && strcmp(err, "authorization_pending") == 0) {
+            /* keep polling */
+        } else if (err && strcmp(err, "slow_down") == 0) {
+            interval += 5;
+        } else if (err) {
+            ARGUS_LOG_ERROR("Trino device token error: %s", err);
+            g_object_unref(tp); break;
+        }
+        g_object_unref(tp);
+    }
+
+    free(dc); curl_free(edc); curl_free(eid); if (escope) curl_free(escope);
+    curl_easy_cleanup(e);
+    return ret;
+}
+
 /* ── (Re)build the default request headers from connection state ── */
 
 static void trino_build_default_headers(trino_conn_t *conn)
@@ -392,7 +527,9 @@ int trino_connect(argus_dbc_t *dbc,
          strcasecmp(auth_mechanism, "BEARER") == 0 ||
          strcasecmp(auth_mechanism, "OAUTH2") == 0 ||
          strcasecmp(auth_mechanism, "OAUTH") == 0 ||
-         strcasecmp(auth_mechanism, "CLIENT_CREDENTIALS") == 0)) {
+         strcasecmp(auth_mechanism, "CLIENT_CREDENTIALS") == 0 ||
+         strcasecmp(auth_mechanism, "DEVICE_CODE") == 0 ||
+         strcasecmp(auth_mechanism, "DEVICE") == 0)) {
         conn->auth_mode = TRINO_AUTH_BEARER;   /* static token in PWD, or fetched below */
     } else if (conn->password &&
         (!auth_mechanism ||
@@ -455,6 +592,31 @@ int trino_connect(argus_dbc_t *dbc,
         free(conn->password);
         conn->password = tok;   /* fetched access token, used as Bearer below */
         ARGUS_LOG_INFO("Trino: obtained OAuth2 access token via client-credentials");
+    }
+    /* OAuth2 device authorization grant (RFC 8628): headless interactive login.
+     * Triggered when a device endpoint + token endpoint + client id are set. */
+    else if (conn->auth_mode == TRINO_AUTH_BEARER &&
+             dbc->oauth_device_url && dbc->oauth_token_url && dbc->oauth_client_id) {
+        conn->oauth_device_url = strdup(dbc->oauth_device_url);
+        conn->oauth_token_url = strdup(dbc->oauth_token_url);
+        conn->oauth_client_id = strdup(dbc->oauth_client_id);
+        if (dbc->oauth_scope) conn->oauth_scope = strdup(dbc->oauth_scope);
+
+        char *tok = NULL;
+        if (trino_fetch_device_token(conn, &tok) != 0 || !tok) {
+            argus_set_error(&dbc->diag, "08001",
+                "[Argus][Trino] OAuth2 device-code authorization failed", 0);
+            curl_easy_cleanup(conn->curl);
+            free(conn->base_url); free(conn->user); free(conn->password);
+            free(conn->catalog); free(conn->schema);
+            free(conn->oauth_device_url); free(conn->oauth_token_url);
+            free(conn->oauth_client_id); free(conn->oauth_scope);
+            free(conn);
+            return -1;
+        }
+        free(conn->password);
+        conn->password = tok;
+        ARGUS_LOG_INFO("Trino: obtained OAuth2 access token via device-code grant");
     }
 
     /* Retain the application name so headers can be rebuilt on token refresh. */
@@ -555,6 +717,7 @@ void trino_disconnect(argus_backend_conn_t raw_conn)
     free(conn->oauth_client_id);
     free(conn->oauth_client_secret);
     free(conn->oauth_scope);
+    free(conn->oauth_device_url);
 
     /* Free SSL/TLS fields */
     free(conn->ssl_cert_file);

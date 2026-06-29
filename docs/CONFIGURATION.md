@@ -116,6 +116,12 @@ DRIVER=Argus;BACKEND=trino;HOST=trino.example.com;PORT=8080;UID=analyst;DATABASE
     The access token is **re-fetched automatically** if the server returns `401`
     (token expiry), and the request is retried transparently.
   - `GSSAPI` / `KERBEROS`: SPNEGO/Negotiate via libcurl using a `kinit` ticket.
+  - `DEVICE_CODE` / `DEVICE`: OAuth2 **device authorization grant** (RFC 8628) for
+    headless/no-browser logins. Argus requests a device + user code, prints the
+    verification URL and code to stderr/log, then polls the token endpoint until
+    the user authorizes, and uses the resulting access token as the bearer.
+    Params: `OAuth2DeviceEndpoint` (`DeviceAuthURI`), `OAuth2TokenEndpoint`,
+    `ClientId`, optional `Scope`.
 
   ```
   DRIVER=Argus;BACKEND=trino;HOST=trino;PORT=8443;SSL=1;UID=analyst;PWD={secret};AuthMech=LDAP

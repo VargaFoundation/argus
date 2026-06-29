@@ -165,6 +165,7 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     free(dbc->oauth_client_id);
     free(dbc->oauth_client_secret);
     free(dbc->oauth_scope);
+    free(dbc->oauth_device_url);
 
     /* Free browse buffer */
     free(dbc->browse_buf);
