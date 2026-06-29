@@ -109,15 +109,12 @@ int trino_parse_data(JsonNode *data_node,
                 cell->data = strdup(s ? s : "");
                 cell->data_len = strlen(cell->data);
             } else if (vtype == G_TYPE_INT64) {
-                gint64 v = json_node_get_int(val_node);
-                cell->data = malloc(24);
-                if (cell->data)
-                    cell->data_len = (size_t)snprintf(cell->data, 24, "%lld", (long long)v);
+                /* Native typed value: no text round-trip on SQLGetData. */
+                cell->native_kind = ARGUS_NATIVE_I64;
+                cell->native.i64 = json_node_get_int(val_node);
             } else if (vtype == G_TYPE_DOUBLE) {
-                gdouble v = json_node_get_double(val_node);
-                cell->data = malloc(32);
-                if (cell->data)
-                    cell->data_len = (size_t)snprintf(cell->data, 32, "%.15g", v);
+                cell->native_kind = ARGUS_NATIVE_F64;
+                cell->native.f64 = json_node_get_double(val_node);
             } else if (vtype == G_TYPE_BOOLEAN) {
                 gboolean v = json_node_get_boolean(val_node);
                 cell->data = strdup(v ? "true" : "false");

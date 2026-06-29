@@ -226,8 +226,19 @@ static void parse_result_table(pinot_op_t *op, JsonObject *rt)
             argus_cell_t *cell = &op->cache.rows[r].cells[c];
             JsonNode *v = json_array_get_element(row, (guint)c);
             if (!v || json_node_is_null(v)) { cell->is_null = true; continue; }
-            cell->data = json_value_to_str(v, &cell->data_len);
-            cell->is_null = (cell->data == NULL);
+            /* Keep JSON numbers as native typed values (no text round-trip);
+             * strings and everything else stay as text cells. */
+            GType vt = json_node_get_value_type(v);
+            if (vt == G_TYPE_INT64) {
+                cell->native_kind = ARGUS_NATIVE_I64;
+                cell->native.i64 = json_node_get_int(v);
+            } else if (vt == G_TYPE_DOUBLE) {
+                cell->native_kind = ARGUS_NATIVE_F64;
+                cell->native.f64 = json_node_get_double(v);
+            } else {
+                cell->data = json_value_to_str(v, &cell->data_len);
+                cell->is_null = (cell->data == NULL);
+            }
         }
         r++;
     }
