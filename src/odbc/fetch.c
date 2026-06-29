@@ -1790,19 +1790,36 @@ SQLRETURN SQL_API SQLSetPos(
                            "[Argus] SQLSetPos operation not supported", 0);
 }
 
-/* ── SQLBulkOperations (stub) ────────────────────────────────── */
-
+/* ── SQLBulkOperations ───────────────────────────────────────────
+ * Bulk/positioned writes (SQL_ADD, *_BY_BOOKMARK) require a positioned-update
+ * context (target table + row bookmarks) that a query-oriented driver over
+ * read-mostly analytic engines does not maintain. Writes are issued as direct
+ * INSERT/UPDATE/DELETE statements instead. We validate the operation code and
+ * return the conformant "optional feature not implemented" (HYC00). */
 SQLRETURN SQL_API SQLBulkOperations(
     SQLHSTMT    StatementHandle,
     SQLSMALLINT Operation)
 {
-    (void)Operation;
-
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
+    argus_diag_clear(&stmt->diag);
 
-    return argus_set_error(&stmt->diag, "HYC00",
-                           "[Argus] SQLBulkOperations not supported", 0);
+    const char *what;
+    switch (Operation) {
+    case SQL_ADD:                what = "SQL_ADD"; break;
+    case SQL_UPDATE_BY_BOOKMARK: what = "SQL_UPDATE_BY_BOOKMARK"; break;
+    case SQL_DELETE_BY_BOOKMARK: what = "SQL_DELETE_BY_BOOKMARK"; break;
+    case SQL_FETCH_BY_BOOKMARK:  what = "SQL_FETCH_BY_BOOKMARK"; break;
+    default:
+        return argus_set_error(&stmt->diag, "HY092",
+                               "[Argus] Invalid SQLBulkOperations operation", 0);
+    }
+
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "[Argus] SQLBulkOperations(%s) not supported; issue a direct "
+             "INSERT/UPDATE/DELETE statement instead", what);
+    return argus_set_error(&stmt->diag, "HYC00", msg, 0);
 }
 
 /* ── ODBC 2.x: SQLSetScrollOptions (stub) ────────────────────── */
