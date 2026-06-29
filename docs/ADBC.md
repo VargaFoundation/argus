@@ -61,9 +61,9 @@ emitted stream is imported by Arrow C++'s own `ImportRecordBatchReader`, yieldin
 
 ## Status & roadmap
 
-First increment — covers `SELECT` to a materialized record batch with
-int64/double/utf8 columns. Planned next: the driver-manager `AdbcDriverInit`
-vtable (so it loads via the ADBC driver manager by name), richer Arrow types
+Covers `SELECT` to a materialized record batch with int64/double/utf8 columns,
+plus the driver-manager `AdbcDriverInit` vtable (ADBC 1.0.0), so the driver loads
+via any ADBC driver manager by name. Planned next: richer Arrow types
 (decimal, timestamp, date), batched streaming (emit one Arrow batch per fetch
 block rather than materializing), bind parameters, and the ADBC metadata calls
 (`GetObjects`, `GetTableSchema`).

@@ -36,7 +36,14 @@ static void set_error(struct AdbcError* error, const char* msg)
 
 typedef struct { char* conn_str; } adbc_db_t;
 typedef struct { SQLHENV env; SQLHDBC dbc; } adbc_conn_t;
-typedef struct { SQLHDBC dbc; char* query; } adbc_stmt_t;
+typedef struct {
+    SQLHDBC dbc;
+    char*   query;
+    /* Bound parameters captured from an Arrow array (one record = one row of
+     * params), materialized to text and applied per-row on execute. */
+    char**  params;
+    int     nparams;
+} adbc_stmt_t;
 
 /* One result column collected into final Arrow buffers. */
 typedef struct {
@@ -443,8 +450,86 @@ AdbcStatusCode AdbcStatementRelease(struct AdbcStatement* statement, struct Adbc
     if (statement && statement->private_data) {
         adbc_stmt_t* st = statement->private_data;
         free(st->query);
+        free(st->params);
         free(st);
         statement->private_data = NULL;
     }
+    return ADBC_STATUS_OK;
+}
+
+/* Prepare is a no-op: queries execute directly via SQLExecDirect. */
+AdbcStatusCode AdbcStatementPrepare(struct AdbcStatement* statement, struct AdbcError* error)
+{
+    if (!statement || !statement->private_data) { set_error(error, "invalid statement"); return ADBC_STATUS_INVALID_STATE; }
+    return ADBC_STATUS_OK;
+}
+
+/* ── Metadata + bind (implemented incrementally) ─────────────── */
+
+AdbcStatusCode AdbcStatementBind(struct AdbcStatement* statement, struct ArrowArray* values,
+                                 struct ArrowSchema* schema, struct AdbcError* error)
+{
+    (void)statement; (void)values; (void)schema;
+    set_error(error, "StatementBind not implemented");
+    return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+AdbcStatusCode AdbcConnectionGetTableSchema(struct AdbcConnection* connection,
+                                            const char* catalog, const char* db_schema,
+                                            const char* table_name, struct ArrowSchema* schema,
+                                            struct AdbcError* error)
+{
+    (void)connection; (void)catalog; (void)db_schema; (void)table_name; (void)schema;
+    set_error(error, "GetTableSchema not implemented");
+    return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+AdbcStatusCode AdbcConnectionGetTableTypes(struct AdbcConnection* connection,
+                                           struct ArrowArrayStream* out, struct AdbcError* error)
+{
+    (void)connection; (void)out;
+    set_error(error, "GetTableTypes not implemented");
+    return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+AdbcStatusCode AdbcConnectionGetObjects(struct AdbcConnection* connection, int depth,
+                                        const char* catalog, const char* db_schema,
+                                        const char* table_name, const char** table_types,
+                                        const char* column_name, struct ArrowArrayStream* out,
+                                        struct AdbcError* error)
+{
+    (void)connection; (void)depth; (void)catalog; (void)db_schema; (void)table_name;
+    (void)table_types; (void)column_name; (void)out;
+    set_error(error, "GetObjects not implemented");
+    return ADBC_STATUS_NOT_IMPLEMENTED;
+}
+
+/* ── Driver-manager entry point ──────────────────────────────── */
+
+AdbcStatusCode AdbcDriverInit(int version, void* raw_driver, struct AdbcError* error)
+{
+    if (version != ADBC_VERSION_1_0_0) { set_error(error, "unsupported ADBC version"); return ADBC_STATUS_NOT_IMPLEMENTED; }
+    if (!raw_driver) { set_error(error, "null driver"); return ADBC_STATUS_INVALID_ARGUMENT; }
+    struct AdbcDriver* d = raw_driver;
+    memset(d, 0, sizeof(*d));
+
+    d->DatabaseNew              = AdbcDatabaseNew;
+    d->DatabaseSetOption        = AdbcDatabaseSetOption;
+    d->DatabaseInit             = AdbcDatabaseInit;
+    d->DatabaseRelease          = AdbcDatabaseRelease;
+
+    d->ConnectionNew            = AdbcConnectionNew;
+    d->ConnectionInit           = AdbcConnectionInit;
+    d->ConnectionRelease        = AdbcConnectionRelease;
+    d->ConnectionGetTableSchema = AdbcConnectionGetTableSchema;
+    d->ConnectionGetTableTypes  = AdbcConnectionGetTableTypes;
+    d->ConnectionGetObjects     = AdbcConnectionGetObjects;
+
+    d->StatementNew             = AdbcStatementNew;
+    d->StatementSetSqlQuery     = AdbcStatementSetSqlQuery;
+    d->StatementPrepare         = AdbcStatementPrepare;
+    d->StatementBind            = AdbcStatementBind;
+    d->StatementExecuteQuery    = AdbcStatementExecuteQuery;
+    d->StatementRelease         = AdbcStatementRelease;
     return ADBC_STATUS_OK;
 }
