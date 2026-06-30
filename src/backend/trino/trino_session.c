@@ -7,9 +7,18 @@
 #include <strings.h>
 #include <stdio.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+typedef SOCKET argus_sock_t;
+#define ARGUS_CLOSESOCK closesocket
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <sys/select.h>
+typedef int argus_sock_t;
+#define ARGUS_CLOSESOCK close
+#endif
 
 /* Forward declarations for the OAuth2 token-refresh path. */
 static int trino_refresh_oauth_token(trino_conn_t *conn);
@@ -516,38 +525,43 @@ static int trino_pkce(char *verifier, size_t vsz, char *challenge, size_t csz)
 }
 
 /* Open a loopback listener on 127.0.0.1:<ephemeral>; returns fd, sets *port. */
-static int trino_loopback_open(int *port)
+static argus_sock_t trino_loopback_open(int *port)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+#ifdef _WIN32
+    WSADATA wsa;
+    static int wsa_started = 0;
+    if (!wsa_started && WSAStartup(MAKEWORD(2, 2), &wsa) == 0) wsa_started = 1;
+#endif
+    argus_sock_t fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == (argus_sock_t)-1) return (argus_sock_t)-1;
     int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
     struct sockaddr_in a;
     memset(&a, 0, sizeof(a));
     a.sin_family = AF_INET;
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     a.sin_port = 0;
-    if (bind(fd, (struct sockaddr *)&a, sizeof(a)) < 0) { close(fd); return -1; }
+    if (bind(fd, (struct sockaddr *)&a, sizeof(a)) < 0) { ARGUS_CLOSESOCK(fd); return (argus_sock_t)-1; }
     socklen_t l = sizeof(a);
     getsockname(fd, (struct sockaddr *)&a, &l);
     *port = ntohs(a.sin_port);
-    if (listen(fd, 1) < 0) { close(fd); return -1; }
+    if (listen(fd, 1) < 0) { ARGUS_CLOSESOCK(fd); return (argus_sock_t)-1; }
     return fd;
 }
 
 /* Wait (up to timeout_sec) for the browser redirect; extract the ?code=. */
-static int trino_loopback_get_code(int fd, char *code, size_t clen, int timeout_sec)
+static int trino_loopback_get_code(argus_sock_t fd, char *code, size_t clen, int timeout_sec)
 {
     fd_set rs;
     FD_ZERO(&rs);
     FD_SET(fd, &rs);
     struct timeval tv = { timeout_sec, 0 };
-    if (select(fd + 1, &rs, NULL, NULL, &tv) <= 0) return -1;
-    int c = accept(fd, NULL, NULL);
-    if (c < 0) return -1;
+    if (select((int)fd + 1, &rs, NULL, NULL, &tv) <= 0) return -1;
+    argus_sock_t c = accept(fd, NULL, NULL);
+    if (c == (argus_sock_t)-1) return -1;
 
     char buf[8192];
-    ssize_t n = recv(c, buf, sizeof(buf) - 1, 0);
+    int n = (int)recv(c, buf, sizeof(buf) - 1, 0);
     int ret = -1;
     if (n > 0) {
         buf[n] = '\0';
@@ -564,9 +578,9 @@ static int trino_loopback_get_code(int fd, char *code, size_t clen, int timeout_
             "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n"
             "<html><body style='font-family:sans-serif'>"
             "<h2>Argus — sign-in complete</h2>You may close this window.</body></html>";
-        (void)!send(c, resp, strlen(resp), 0);
+        (void)!send(c, resp, (int)strlen(resp), 0);
     }
-    close(c);
+    ARGUS_CLOSESOCK(c);
     return ret;
 }
 
@@ -574,11 +588,14 @@ static void trino_open_browser(const char *url)
 {
     const char *b = getenv("BROWSER");
     char cmd[4200];
-    if (b && *b)
-        snprintf(cmd, sizeof(cmd), "%s '%s' >/dev/null 2>&1 &", b, url);
-    else
-        snprintf(cmd, sizeof(cmd),
-                 "xdg-open '%s' >/dev/null 2>&1 || open '%s' >/dev/null 2>&1 &", url, url);
+#ifdef _WIN32
+    if (b && *b) snprintf(cmd, sizeof(cmd), "%s \"%s\"", b, url);
+    else         snprintf(cmd, sizeof(cmd), "start \"\" \"%s\"", url);
+#else
+    if (b && *b) snprintf(cmd, sizeof(cmd), "%s '%s' >/dev/null 2>&1 &", b, url);
+    else         snprintf(cmd, sizeof(cmd),
+                          "xdg-open '%s' >/dev/null 2>&1 || open '%s' >/dev/null 2>&1 &", url, url);
+#endif
     int rc = system(cmd);
     (void)rc;
 }
@@ -593,8 +610,9 @@ static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token)
     if (trino_pkce(verifier, sizeof(verifier), challenge, sizeof(challenge)) != 0)
         return -1;
 
-    int port = 0, srv = trino_loopback_open(&port);
-    if (srv < 0) return -1;
+    int port = 0;
+    argus_sock_t srv = trino_loopback_open(&port);
+    if (srv == (argus_sock_t)-1) return -1;
 
     unsigned char sr[12];
     char state[64] = {0};
@@ -623,7 +641,7 @@ static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token)
 
     char code[2048] = {0};
     int gc = trino_loopback_get_code(srv, code, sizeof(code), 300);
-    close(srv);
+    ARGUS_CLOSESOCK(srv);
     if (gc != 0 || !code[0]) { curl_easy_cleanup(e); return -1; }
 
     char *ecode = curl_easy_escape(e, code, 0);

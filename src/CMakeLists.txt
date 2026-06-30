@@ -289,6 +289,11 @@ target_link_directories(argus_odbc
 
 target_compile_definitions(argus_odbc PRIVATE ${ARGUS_COMPILE_DEFS})
 
+if(WIN32)
+    # Trino's OAuth2 browser-SSO loopback uses winsock.
+    target_link_libraries(argus_odbc PRIVATE ws2_32)
+endif()
+
 set_target_properties(argus_odbc PROPERTIES
     VERSION ${PROJECT_VERSION}
     SOVERSION ${PROJECT_VERSION_MAJOR}
