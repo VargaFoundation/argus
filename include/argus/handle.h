@@ -84,6 +84,8 @@ struct argus_dbc {
     char        *oauth_client_secret;
     char        *oauth_scope;         /* optional */
     char        *oauth_device_url;    /* device authorization endpoint (DEVICE_CODE) */
+    char        *oauth_auth_url;      /* authorization endpoint (AUTH_CODE browser SSO) */
+    char        *oauth_issuer;        /* OIDC issuer for .well-known discovery */
 
     /* SQLBrowseConnect accumulated keywords */
     char        *browse_buf;

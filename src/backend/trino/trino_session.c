@@ -7,10 +7,15 @@
 #include <strings.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <sys/select.h>
 
 /* Forward declarations for the OAuth2 token-refresh path. */
 static int trino_refresh_oauth_token(trino_conn_t *conn);
 static int trino_fetch_device_token(trino_conn_t *conn, char **out_token);
+static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token);
+static void trino_oidc_discover(trino_conn_t *conn, const char *issuer);
 
 /* ── Helper: Apply SSL and timeout settings to curl ─────────────── */
 
@@ -417,6 +422,241 @@ static int trino_fetch_device_token(trino_conn_t *conn, char **out_token)
     return ret;
 }
 
+/* ── OIDC discovery (.well-known/openid-configuration) ──────────── */
+
+static void trino_oidc_discover(trino_conn_t *conn, const char *issuer)
+{
+    if (!issuer || !*issuer) return;
+    char url[1024];
+    snprintf(url, sizeof(url), "%s%s.well-known/openid-configuration",
+             issuer, issuer[strlen(issuer) - 1] == '/' ? "" : "/");
+
+    CURL *c = curl_easy_init();
+    if (!c) return;
+    trino_response_t resp = {0};
+    curl_easy_setopt(c, CURLOPT_URL, url);
+    curl_easy_setopt(c, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &resp);
+    if (conn->ssl_enabled) {
+        curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
+        curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);
+        if (conn->ssl_ca_file) curl_easy_setopt(c, CURLOPT_CAINFO, conn->ssl_ca_file);
+    }
+    if (conn->connect_timeout_sec > 0)
+        curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, (long)conn->connect_timeout_sec);
+    CURLcode res = curl_easy_perform(c);
+    long code = 0;
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &code);
+    curl_easy_cleanup(c);
+
+    if (res == CURLE_OK && code >= 200 && code < 300 && resp.data) {
+        JsonParser *p = json_parser_new();
+        if (json_parser_load_from_data(p, resp.data, (gssize)resp.size, NULL)) {
+            JsonObject *o = json_node_get_object(json_parser_get_root(p));
+            /* Only fill endpoints the user did not set explicitly. */
+            if (!conn->oauth_auth_url && o && json_object_has_member(o, "authorization_endpoint"))
+                conn->oauth_auth_url = strdup(json_object_get_string_member(o, "authorization_endpoint"));
+            if (!conn->oauth_token_url && o && json_object_has_member(o, "token_endpoint"))
+                conn->oauth_token_url = strdup(json_object_get_string_member(o, "token_endpoint"));
+            if (!conn->oauth_device_url && o && json_object_has_member(o, "device_authorization_endpoint"))
+                conn->oauth_device_url = strdup(json_object_get_string_member(o, "device_authorization_endpoint"));
+            ARGUS_LOG_INFO("Trino: OIDC discovery from %s", url);
+        }
+        g_object_unref(p);
+    } else {
+        ARGUS_LOG_WARN("Trino: OIDC discovery failed (%s, http=%ld)", url, code);
+    }
+    free(resp.data);
+}
+
+/* ── OAuth2 authorization-code grant with PKCE + loopback (browser SSO) ── */
+
+/* base64url(no padding) of raw bytes. */
+static void trino_b64url(const unsigned char *data, size_t len, char *out, size_t outsz)
+{
+    gchar *b64 = g_base64_encode(data, len);
+    size_t j = 0;
+    for (size_t i = 0; b64[i] && j < outsz - 1; i++) {
+        char ch = b64[i];
+        if (ch == '+') ch = '-';
+        else if (ch == '/') ch = '_';
+        else if (ch == '=') continue;
+        out[j++] = ch;
+    }
+    out[j] = '\0';
+    g_free(b64);
+}
+
+static int trino_rand_bytes(unsigned char *buf, size_t n)
+{
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (!f) return -1;
+    size_t got = fread(buf, 1, n, f);
+    fclose(f);
+    return got == n ? 0 : -1;
+}
+
+/* PKCE: verifier = base64url(32 random bytes); challenge = base64url(SHA256(verifier)). */
+static int trino_pkce(char *verifier, size_t vsz, char *challenge, size_t csz)
+{
+    unsigned char rnd[32];
+    if (trino_rand_bytes(rnd, sizeof(rnd)) != 0) return -1;
+    trino_b64url(rnd, sizeof(rnd), verifier, vsz);
+
+    GChecksum *ck = g_checksum_new(G_CHECKSUM_SHA256);
+    g_checksum_update(ck, (const guchar *)verifier, (gssize)strlen(verifier));
+    unsigned char digest[32];
+    gsize dlen = sizeof(digest);
+    g_checksum_get_digest(ck, digest, &dlen);
+    g_checksum_free(ck);
+    trino_b64url(digest, dlen, challenge, csz);
+    return 0;
+}
+
+/* Open a loopback listener on 127.0.0.1:<ephemeral>; returns fd, sets *port. */
+static int trino_loopback_open(int *port)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in a;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    a.sin_port = 0;
+    if (bind(fd, (struct sockaddr *)&a, sizeof(a)) < 0) { close(fd); return -1; }
+    socklen_t l = sizeof(a);
+    getsockname(fd, (struct sockaddr *)&a, &l);
+    *port = ntohs(a.sin_port);
+    if (listen(fd, 1) < 0) { close(fd); return -1; }
+    return fd;
+}
+
+/* Wait (up to timeout_sec) for the browser redirect; extract the ?code=. */
+static int trino_loopback_get_code(int fd, char *code, size_t clen, int timeout_sec)
+{
+    fd_set rs;
+    FD_ZERO(&rs);
+    FD_SET(fd, &rs);
+    struct timeval tv = { timeout_sec, 0 };
+    if (select(fd + 1, &rs, NULL, NULL, &tv) <= 0) return -1;
+    int c = accept(fd, NULL, NULL);
+    if (c < 0) return -1;
+
+    char buf[8192];
+    ssize_t n = recv(c, buf, sizeof(buf) - 1, 0);
+    int ret = -1;
+    if (n > 0) {
+        buf[n] = '\0';
+        char *q = strstr(buf, "code=");
+        if (q) {
+            q += 5;
+            size_t i = 0;
+            while (q[i] && q[i] != '&' && q[i] != ' ' && q[i] != '\r' && i < clen - 1)
+                code[i] = q[i], i++;
+            code[i] = '\0';
+            ret = 0;
+        }
+        const char *resp =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n"
+            "<html><body style='font-family:sans-serif'>"
+            "<h2>Argus — sign-in complete</h2>You may close this window.</body></html>";
+        (void)!send(c, resp, strlen(resp), 0);
+    }
+    close(c);
+    return ret;
+}
+
+static void trino_open_browser(const char *url)
+{
+    const char *b = getenv("BROWSER");
+    char cmd[4200];
+    if (b && *b)
+        snprintf(cmd, sizeof(cmd), "%s '%s' >/dev/null 2>&1 &", b, url);
+    else
+        snprintf(cmd, sizeof(cmd),
+                 "xdg-open '%s' >/dev/null 2>&1 || open '%s' >/dev/null 2>&1 &", url, url);
+    int rc = system(cmd);
+    (void)rc;
+}
+
+static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token)
+{
+    *out_token = NULL;
+    if (!conn->oauth_auth_url || !conn->oauth_token_url || !conn->oauth_client_id)
+        return -1;
+
+    char verifier[128] = {0}, challenge[128] = {0};
+    if (trino_pkce(verifier, sizeof(verifier), challenge, sizeof(challenge)) != 0)
+        return -1;
+
+    int port = 0, srv = trino_loopback_open(&port);
+    if (srv < 0) return -1;
+
+    unsigned char sr[12];
+    char state[64] = {0};
+    if (trino_rand_bytes(sr, sizeof(sr)) == 0) trino_b64url(sr, sizeof(sr), state, sizeof(state));
+
+    CURL *e = curl_easy_init();
+    char redirect[64];
+    snprintf(redirect, sizeof(redirect), "http://127.0.0.1:%d/", port);
+    char *ecid = curl_easy_escape(e, conn->oauth_client_id, 0);
+    char *eredir = curl_easy_escape(e, redirect, 0);
+    char *escope = curl_easy_escape(e, conn->oauth_scope ? conn->oauth_scope : "openid", 0);
+    char *estate = curl_easy_escape(e, state, 0);
+    char url[2048];
+    snprintf(url, sizeof(url),
+             "%s%sresponse_type=code&client_id=%s&redirect_uri=%s&scope=%s"
+             "&state=%s&code_challenge=%s&code_challenge_method=S256",
+             conn->oauth_auth_url, strchr(conn->oauth_auth_url, '?') ? "&" : "?",
+             ecid ? ecid : "", eredir ? eredir : "", escope ? escope : "",
+             estate ? estate : "", challenge);
+    curl_free(ecid); curl_free(eredir); curl_free(escope); curl_free(estate);
+
+    fprintf(stderr, "\n[Argus][Trino] Opening your browser to sign in. If it does not "
+                    "open, visit:\n  %s\n\n", url);
+    ARGUS_LOG_WARN("Trino auth-code: open %s", url);
+    trino_open_browser(url);
+
+    char code[2048] = {0};
+    int gc = trino_loopback_get_code(srv, code, sizeof(code), 300);
+    close(srv);
+    if (gc != 0 || !code[0]) { curl_easy_cleanup(e); return -1; }
+
+    char *ecode = curl_easy_escape(e, code, 0);
+    char *eredir2 = curl_easy_escape(e, redirect, 0);
+    char *ecid2 = curl_easy_escape(e, conn->oauth_client_id, 0);
+    char body[4096];
+    int off = snprintf(body, sizeof(body),
+                       "grant_type=authorization_code&code=%s&redirect_uri=%s"
+                       "&client_id=%s&code_verifier=%s",
+                       ecode ? ecode : "", eredir2 ? eredir2 : "",
+                       ecid2 ? ecid2 : "", verifier);
+    if (conn->oauth_client_secret) {
+        char *esec = curl_easy_escape(e, conn->oauth_client_secret, 0);
+        snprintf(body + off, sizeof(body) - (size_t)off, "&client_secret=%s", esec ? esec : "");
+        curl_free(esec);
+    }
+    curl_free(ecode); curl_free(eredir2); curl_free(ecid2);
+    curl_easy_cleanup(e);
+
+    long hc = 0;
+    JsonParser *tp = trino_oauth_form_post(conn, conn->oauth_token_url, body, &hc);
+    int ret = -1;
+    if (tp && hc >= 200 && hc < 300) {
+        JsonObject *o = json_node_get_object(json_parser_get_root(tp));
+        if (o && json_object_has_member(o, "access_token")) {
+            const char *t = json_object_get_string_member(o, "access_token");
+            if (t && *t) { *out_token = strdup(t); ret = 0; }
+        }
+    }
+    if (tp) g_object_unref(tp);
+    return ret;
+}
+
 /* ── (Re)build the default request headers from connection state ── */
 
 static void trino_build_default_headers(trino_conn_t *conn)
@@ -529,7 +769,11 @@ int trino_connect(argus_dbc_t *dbc,
          strcasecmp(auth_mechanism, "OAUTH") == 0 ||
          strcasecmp(auth_mechanism, "CLIENT_CREDENTIALS") == 0 ||
          strcasecmp(auth_mechanism, "DEVICE_CODE") == 0 ||
-         strcasecmp(auth_mechanism, "DEVICE") == 0)) {
+         strcasecmp(auth_mechanism, "DEVICE") == 0 ||
+         strcasecmp(auth_mechanism, "AUTH_CODE") == 0 ||
+         strcasecmp(auth_mechanism, "AUTHCODE") == 0 ||
+         strcasecmp(auth_mechanism, "BROWSER") == 0 ||
+         strcasecmp(auth_mechanism, "SSO") == 0)) {
         conn->auth_mode = TRINO_AUTH_BEARER;   /* static token in PWD, or fetched below */
     } else if (conn->password &&
         (!auth_mechanism ||
@@ -564,59 +808,62 @@ int trino_connect(argus_dbc_t *dbc,
         return -1;
     }
 
-    /* OAuth2 client-credentials (M2M): obtain an access token from the IdP and
-     * use it as the Bearer token. Triggered when an OAuth2-family AuthMech is
-     * set together with the token endpoint + client credentials. */
-    if (conn->auth_mode == TRINO_AUTH_BEARER &&
-        dbc->oauth_token_url && dbc->oauth_client_id && dbc->oauth_client_secret) {
-        /* Retain the params so the access token can be refreshed on a 401. */
-        conn->oauth_m2m = true;
-        conn->oauth_token_url = strdup(dbc->oauth_token_url);
+    /* OAuth2 family: copy endpoints/credentials, optionally discover them from an
+     * OIDC issuer, then run the grant selected by AuthMech — authorization-code
+     * with PKCE + browser/loopback (AUTH_CODE/BROWSER/SSO), device-code
+     * (DEVICE_CODE), or client-credentials M2M (default when a client secret is
+     * present). */
+    if (conn->auth_mode == TRINO_AUTH_BEARER && dbc->oauth_client_id &&
+        (dbc->oauth_token_url || dbc->oauth_issuer)) {
         conn->oauth_client_id = strdup(dbc->oauth_client_id);
-        conn->oauth_client_secret = strdup(dbc->oauth_client_secret);
-        if (dbc->oauth_scope) conn->oauth_scope = strdup(dbc->oauth_scope);
+        if (dbc->oauth_client_secret) conn->oauth_client_secret = strdup(dbc->oauth_client_secret);
+        if (dbc->oauth_scope)         conn->oauth_scope = strdup(dbc->oauth_scope);
+        if (dbc->oauth_token_url)     conn->oauth_token_url = strdup(dbc->oauth_token_url);
+        if (dbc->oauth_auth_url)      conn->oauth_auth_url = strdup(dbc->oauth_auth_url);
+        if (dbc->oauth_device_url)    conn->oauth_device_url = strdup(dbc->oauth_device_url);
+        if (dbc->oauth_issuer)        trino_oidc_discover(conn, dbc->oauth_issuer);
+
+        bool is_authcode = auth_mechanism &&
+            (strcasecmp(auth_mechanism, "AUTH_CODE") == 0 ||
+             strcasecmp(auth_mechanism, "AUTHCODE") == 0 ||
+             strcasecmp(auth_mechanism, "BROWSER") == 0 ||
+             strcasecmp(auth_mechanism, "SSO") == 0);
+        bool is_device = auth_mechanism &&
+            (strcasecmp(auth_mechanism, "DEVICE_CODE") == 0 ||
+             strcasecmp(auth_mechanism, "DEVICE") == 0);
 
         char *tok = NULL;
-        if (trino_fetch_oauth_token(conn, &tok) != 0 || !tok) {
-            argus_set_error(&dbc->diag, "08001",
-                "[Argus][Trino] OAuth2 client-credentials token request failed", 0);
-            curl_easy_cleanup(conn->curl);
-            free(conn->base_url);
-            free(conn->user);
-            free(conn->password);
-            free(conn->catalog);
-            free(conn->schema);
-            free(conn);
-            return -1;
+        const char *how = NULL;
+        if (is_authcode && conn->oauth_auth_url && conn->oauth_token_url) {
+            how = "authorization-code (browser SSO)";
+            trino_fetch_authcode_token(conn, &tok);
+        } else if (is_device && conn->oauth_device_url && conn->oauth_token_url) {
+            how = "device-code";
+            trino_fetch_device_token(conn, &tok);
+        } else if (conn->oauth_token_url && conn->oauth_client_secret) {
+            how = "client-credentials";
+            conn->oauth_m2m = true;   /* enables transparent re-fetch on 401 */
+            trino_fetch_oauth_token(conn, &tok);
         }
-        free(conn->password);
-        conn->password = tok;   /* fetched access token, used as Bearer below */
-        ARGUS_LOG_INFO("Trino: obtained OAuth2 access token via client-credentials");
-    }
-    /* OAuth2 device authorization grant (RFC 8628): headless interactive login.
-     * Triggered when a device endpoint + token endpoint + client id are set. */
-    else if (conn->auth_mode == TRINO_AUTH_BEARER &&
-             dbc->oauth_device_url && dbc->oauth_token_url && dbc->oauth_client_id) {
-        conn->oauth_device_url = strdup(dbc->oauth_device_url);
-        conn->oauth_token_url = strdup(dbc->oauth_token_url);
-        conn->oauth_client_id = strdup(dbc->oauth_client_id);
-        if (dbc->oauth_scope) conn->oauth_scope = strdup(dbc->oauth_scope);
 
-        char *tok = NULL;
-        if (trino_fetch_device_token(conn, &tok) != 0 || !tok) {
-            argus_set_error(&dbc->diag, "08001",
-                "[Argus][Trino] OAuth2 device-code authorization failed", 0);
+        if (tok) {
+            free(conn->password);
+            conn->password = tok;
+            ARGUS_LOG_INFO("Trino: obtained OAuth2 access token via %s", how);
+        } else if (how) {
+            char msg[160];
+            snprintf(msg, sizeof(msg),
+                     "[Argus][Trino] OAuth2 %s authorization failed", how);
+            argus_set_error(&dbc->diag, "08001", msg, 0);
             curl_easy_cleanup(conn->curl);
             free(conn->base_url); free(conn->user); free(conn->password);
             free(conn->catalog); free(conn->schema);
-            free(conn->oauth_device_url); free(conn->oauth_token_url);
-            free(conn->oauth_client_id); free(conn->oauth_scope);
+            free(conn->oauth_token_url); free(conn->oauth_auth_url);
+            free(conn->oauth_device_url); free(conn->oauth_client_id);
+            free(conn->oauth_client_secret); free(conn->oauth_scope);
             free(conn);
             return -1;
         }
-        free(conn->password);
-        conn->password = tok;
-        ARGUS_LOG_INFO("Trino: obtained OAuth2 access token via device-code grant");
     }
 
     /* Retain the application name so headers can be rebuilt on token refresh. */
@@ -718,6 +965,7 @@ void trino_disconnect(argus_backend_conn_t raw_conn)
     free(conn->oauth_client_secret);
     free(conn->oauth_scope);
     free(conn->oauth_device_url);
+    free(conn->oauth_auth_url);
 
     /* Free SSL/TLS fields */
     free(conn->ssl_cert_file);

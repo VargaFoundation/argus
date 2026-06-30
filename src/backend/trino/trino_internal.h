@@ -35,6 +35,7 @@ typedef struct trino_conn {
     char               *oauth_client_secret;
     char               *oauth_scope;
     char               *oauth_device_url;   /* device authorization endpoint */
+    char               *oauth_auth_url;     /* authorization endpoint (auth-code) */
 
     /* SSL/TLS settings (from DBC) */
     bool                ssl_enabled;
