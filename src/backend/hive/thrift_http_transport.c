@@ -28,6 +28,7 @@ enum {
     PROP_REQUEST_TIMEOUT,
     PROP_USERNAME,
     PROP_PASSWORD,
+    PROP_BEARER_TOKEN,
 };
 
 /* ── curl write callback ─────────────────────────────────────── */
@@ -100,6 +101,12 @@ thrift_http_transport_open_impl(ThriftTransport *transport, GError **error)
         snprintf(userpwd, sizeof(userpwd), "%s:%s",
                  self->username, self->password ? self->password : "");
         curl_easy_setopt(self->curl, CURLOPT_USERPWD, userpwd);
+    }
+    if (self->bearer_token && self->bearer_token[0]) {
+        char hdr[8192];
+        snprintf(hdr, sizeof(hdr), "Authorization: Bearer %s", self->bearer_token);
+        self->headers = curl_slist_append(self->headers, hdr);
+        curl_easy_setopt(self->curl, CURLOPT_HTTPHEADER, self->headers);
     }
 
     /* Cookie jar for session persistence */
@@ -284,6 +291,7 @@ thrift_http_transport_finalize(GObject *object)
     g_free(self->ssl_key_file);
     g_free(self->username);
     g_free(self->password);
+    g_free(self->bearer_token);
 
     G_OBJECT_CLASS(thrift_http_transport_parent_class)->finalize(object);
 }
@@ -330,6 +338,10 @@ thrift_http_transport_set_property(GObject *object, guint prop_id,
         g_free(self->password);
         self->password = g_value_dup_string(value);
         break;
+    case PROP_BEARER_TOKEN:
+        g_free(self->bearer_token);
+        self->bearer_token = g_value_dup_string(value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
     }
@@ -370,6 +382,9 @@ thrift_http_transport_get_property(GObject *object, guint prop_id,
         break;
     case PROP_PASSWORD:
         g_value_set_string(value, self->password);
+        break;
+    case PROP_BEARER_TOKEN:
+        g_value_set_string(value, self->bearer_token);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -437,4 +452,6 @@ thrift_http_transport_class_init(ThriftHttpTransportClass *klass)
         g_param_spec_string("username", NULL, NULL, NULL, G_PARAM_READWRITE));
     g_object_class_install_property(gobject_class, PROP_PASSWORD,
         g_param_spec_string("password", NULL, NULL, NULL, G_PARAM_READWRITE));
+    g_object_class_install_property(gobject_class, PROP_BEARER_TOKEN,
+        g_param_spec_string("bearer-token", NULL, NULL, NULL, G_PARAM_READWRITE));
 }

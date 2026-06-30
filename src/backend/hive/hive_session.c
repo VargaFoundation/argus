@@ -33,6 +33,16 @@ static bool use_gssapi(const char *auth_mechanism)
            strcasecmp(auth_mechanism, "GSSAPI") == 0;
 }
 
+/* Bearer token over HTTP (the password carries a JWT / Databricks PAT). */
+static bool use_bearer(const char *auth_mechanism)
+{
+    if (!auth_mechanism) return false;
+    return strcasecmp(auth_mechanism, "JWT") == 0 ||
+           strcasecmp(auth_mechanism, "BEARER") == 0 ||
+           strcasecmp(auth_mechanism, "TOKEN") == 0 ||
+           strcasecmp(auth_mechanism, "DATABRICKS") == 0;
+}
+
 int hive_connect(argus_dbc_t *dbc,
                  const char *host, int port,
                  const char *username, const char *password,
@@ -42,6 +52,7 @@ int hive_connect(argus_dbc_t *dbc,
     GError *error = NULL;
     bool sasl = use_sasl(auth_mechanism);
     bool gssapi = use_gssapi(auth_mechanism);
+    bool bearer = use_bearer(auth_mechanism);
 
     hive_conn_t *conn = calloc(1, sizeof(hive_conn_t));
     if (!conn) {
@@ -71,8 +82,9 @@ int hive_connect(argus_dbc_t *dbc,
             "ssl-key-file",    dbc->ssl_key_file,
             "connect-timeout", dbc->connect_timeout_sec > 0 ? dbc->connect_timeout_sec : 30,
             "request-timeout", dbc->socket_timeout_sec > 0 ? dbc->socket_timeout_sec : 300,
-            "username",        username ? username : "",
-            "password",        password ? password : "",
+            "username",        bearer ? "" : (username ? username : ""),
+            "password",        bearer ? "" : (password ? password : ""),
+            "bearer-token",    bearer ? (password ? password : "") : NULL,
             NULL);
 
         if (!thrift_transport_open(conn->transport, &error)) {

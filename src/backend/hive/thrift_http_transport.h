@@ -36,6 +36,7 @@ struct _ThriftHttpTransport
     int         request_timeout;  /* seconds */
     char       *username;         /* for basic auth */
     char       *password;         /* for basic auth */
+    char       *bearer_token;     /* Authorization: Bearer <token> (JWT/PAT) */
 
     /* Runtime state */
     CURL       *curl;

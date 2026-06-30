@@ -242,6 +242,22 @@ DRIVER=Argus;BACKEND=druid;HOST=broker;PORT=8082;UID=user;PWD={secret}
 > (`-DARGUS_BUILD_KUDU`, auto-detected), but is in maintenance mode and receives
 > no new feature work (e.g. server-error propagation is not wired up).
 
+## Connecting to Databricks (via the Hive backend)
+
+Databricks SQL warehouses speak the **HiveServer2 Thrift protocol over HTTP**
+with a **bearer token** (a personal access token, or an OAuth token). Reach them
+with `BACKEND=hive`, `TransportMode=HTTP`, `SSL=1`, and `AuthMech=DATABRICKS`
+(aliases `BEARER`/`JWT`/`TOKEN`) with the token in `PWD`:
+
+```
+DRIVER=Argus;BACKEND=hive;HOST=<workspace>.cloud.databricks.com;PORT=443;SSL=1;\
+  TransportMode=HTTP;HTTPPath=/sql/1.0/warehouses/<id>;AuthMech=DATABRICKS;PWD={dapi...}
+```
+
+The same bearer-over-HTTP path also covers any token-gated HiveServer2/Spark
+Thrift Server endpoint (e.g. behind Apache Knox with a JWT). The token is sent
+as `Authorization: Bearer <token>`.
+
 ## Connecting to Spark and Flink (via the Hive backend)
 
 Apache Spark (Thrift Server) and Apache Flink (SQL Gateway `hiveserver2` endpoint)
