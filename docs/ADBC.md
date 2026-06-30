@@ -58,9 +58,10 @@ AdbcStatementExecuteQuery(&stmt, &stream, &rows_affected, &err);
 /* consume `stream` with any Arrow C Data Interface importer */
 ```
 
-Build with `-DBUILD_ADBC=ON` (default). Validated end-to-end against Trino: the
-emitted stream is imported by Arrow C++'s own `ImportRecordBatchReader`, yielding
-`int64`/`double`/`utf8` columns with exact values.
+Build with `-DBUILD_ADBC=ON` (default). Covered by `tests/integration/test_adbc.cpp`
+(built when `BUILD_ADBC` + the Flight SQL backend are on), which runs the whole
+surface against a live Trino and imports every result with Arrow C++'s own
+`ImportRecordBatchReader`/`ImportSchema` — the reference C Data Interface validator.
 
 ## Status & roadmap
 

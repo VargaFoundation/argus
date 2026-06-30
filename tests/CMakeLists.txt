@@ -144,6 +144,20 @@ if(BUILD_INTEGRATION_TESTS)
         argus_add_integration_test(test_flightsql_query integration/test_flightsql_query.c)
     endif()
 
+    # ADBC driver integration test (C++; needs Arrow + C++20, guaranteed when the
+    # Flight SQL backend is enabled). Runs against a live Trino.
+    if(BUILD_ADBC AND ARGUS_BUILD_FLIGHTSQL)
+        add_executable(test_adbc integration/test_adbc.cpp)
+        target_include_directories(test_adbc PRIVATE
+            ${CMAKE_SOURCE_DIR}/include ${ODBC_INCLUDE_DIRS}
+            ${ARROW_FLIGHT_SQL_INCLUDE_DIRS})
+        target_link_libraries(test_adbc PRIVATE argus_adbc ${ARROW_FLIGHT_SQL_LIBRARIES})
+        target_link_directories(test_adbc PRIVATE ${ARROW_FLIGHT_SQL_LIBRARY_DIRS})
+        set_target_properties(test_adbc PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+        add_test(NAME test_adbc COMMAND test_adbc)
+        set_tests_properties(test_adbc PROPERTIES LABELS "integration")
+    endif()
+
     # Fetch-path micro-benchmark tool (manual; needs a live backend)
     add_executable(argus_bench bench/bench.c)
     target_include_directories(argus_bench PRIVATE
