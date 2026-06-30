@@ -144,6 +144,12 @@ if(BUILD_INTEGRATION_TESTS)
         argus_add_integration_test(test_flightsql_query integration/test_flightsql_query.c)
     endif()
 
+    # Pinot backend (Pinot QuickStart service: sample table baseballStats)
+    if(ARGUS_BUILD_PINOT)
+        argus_add_integration_test(test_pinot_connect integration/test_pinot_connect.c)
+        argus_add_integration_test(test_pinot_query integration/test_pinot_query.c)
+    endif()
+
     # ADBC driver integration test (C++; needs Arrow + C++20, guaranteed when the
     # Flight SQL backend is enabled). Runs against a live Trino.
     if(BUILD_ADBC AND ARGUS_BUILD_FLIGHTSQL)
