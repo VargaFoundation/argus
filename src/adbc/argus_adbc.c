@@ -188,6 +188,8 @@ static void root_array_release(struct ArrowArray* a)
         free(a->children[i]);
     }
     free(a->children);
+    for (int64_t i = 0; i < a->n_buffers; i++)
+        free((void*)a->buffers[i]);   /* e.g. a list array's own offsets buffer */
     free((void*)a->buffers);
     a->release = NULL;
 }
@@ -205,6 +207,7 @@ static void root_schema_release(struct ArrowSchema* s)
         free(s->children[i]);
     }
     free(s->children);
+    free((void*)s->name);   /* struct/list schemas carry a strdup'd name */
     s->release = NULL;
 }
 
@@ -572,6 +575,7 @@ AdbcStatusCode AdbcStatementRelease(struct AdbcStatement* statement, struct Adbc
     if (statement && statement->private_data) {
         adbc_stmt_t* st = statement->private_data;
         free(st->query);
+        for (int i = 0; i < st->nparams; i++) free(st->params[i]);
         free(st->params);
         free(st);
         statement->private_data = NULL;
@@ -697,10 +701,32 @@ AdbcStatusCode AdbcConnectionGetTableSchema(struct AdbcConnection* connection,
 
 typedef struct { struct ArrowSchema schema; struct ArrowArray array; int array_done; } oneshot_t;
 
+/* Deep-copy a schema tree so the consumer owns its copy and the stream keeps
+ * (and later frees) the original. Format strings are static literals, shared. */
+static void schema_deep_copy(const struct ArrowSchema* src, struct ArrowSchema* dst)
+{
+    memset(dst, 0, sizeof(*dst));
+    dst->format = src->format;
+    dst->name = src->name ? strdup(src->name) : NULL;
+    dst->flags = src->flags;
+    dst->n_children = src->n_children;
+    if (src->n_children > 0) {
+        dst->children = calloc((size_t)src->n_children, sizeof(struct ArrowSchema*));
+        for (int64_t i = 0; i < src->n_children; i++) {
+            dst->children[i] = calloc(1, sizeof(struct ArrowSchema));
+            schema_deep_copy(src->children[i], dst->children[i]);
+        }
+    }
+    dst->release = root_schema_release;   /* handles the 0-children (leaf) case too */
+}
+
 static int oneshot_get_schema(struct ArrowArrayStream* self, struct ArrowSchema* out)
 {
+    /* Hand the consumer its own copy; the stream retains o->schema and frees it
+     * in oneshot_release (a plain move-out is not reliably released by every
+     * consumer for nested schemas). */
     oneshot_t* o = self->private_data;
-    *out = o->schema; memset(&o->schema, 0, sizeof(o->schema));   /* move out */
+    schema_deep_copy(&o->schema, out);
     return 0;
 }
 static int oneshot_get_next(struct ArrowArrayStream* self, struct ArrowArray* out)

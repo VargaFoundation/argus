@@ -16,6 +16,14 @@ option(BUILD_TESTING "Build unit tests" ON)
 option(BUILD_INTEGRATION_TESTS "Build integration tests" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(BUILD_ADBC "Build the Arrow ADBC driver (over the ODBC stack)" ON)
+option(ENABLE_ASAN "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+
+if(ENABLE_ASAN)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer
+                        -fno-sanitize-recover=undefined -g)
+    add_link_options(-fsanitize=address,undefined)
+    message(STATUS "Sanitizers: ENABLED (ASan + UBSan)")
+endif()
 
 # Append our cmake module path
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
