@@ -211,6 +211,26 @@ DRIVER=Argus;BACKEND=druid;HOST=broker;PORT=8082;UID=user;PWD={secret}
   Pinot/Trino HTTP-JSON pattern; runtime validation against a Druid cluster
   is pending (Druid's stack is multi-service)
 
+### Apache Kudu (BACKEND=kudu) — deprecated
+
+> **Deprecated — use the Impala backend instead.** Kudu is normally queried
+> through Impala (Impala plans and executes SQL against Kudu tables natively), so
+> a direct Kudu SQL backend duplicates that with a hand-rolled SQL parser. The
+> deciding factor: the native C++ client (`libkudu_client`) is **not packaged for
+> any Ubuntu newer than 16.04** (Cloudera's apt repo stops at `xenial`; it is not
+> in Ubuntu universe, conda-forge, or vcpkg), so the backend can't even be built
+> on a current OS without compiling Kudu from source.
+>
+> Reach Kudu tables through Impala instead:
+>
+> ```
+> DRIVER=Argus;BACKEND=impala;HOST=impalad;PORT=21050;DATABASE=default
+> ```
+>
+> The `kudu` backend still builds and runs where `libkudu_client` is available
+> (`-DARGUS_BUILD_KUDU`, auto-detected), but is in maintenance mode and receives
+> no new feature work (e.g. server-error propagation is not wired up).
+
 ## Connecting to Spark and Flink (via the Hive backend)
 
 Apache Spark (Thrift Server) and Apache Flink (SQL Gateway `hiveserver2` endpoint)

@@ -191,7 +191,14 @@ Spark/Flink en conditions réelles.
    Dremio/Doris + auth runtime. Voir `docs/FLIGHTSQL_DESIGN.md`)*
    Doris, StarRocks ; fondations d'une future surface **ADBC** (anticipe la bascule
    Power BI 2026-2027).
-4. Décision sur **Kudu** : déprécier le parser SQL maison ou l'assumer comme niche.
+4. **Kudu : déprécié** (décidé). Kudu se requête normalement via Impala, et le
+   client C++ natif (`libkudu_client`) n'est **packagé pour aucune Ubuntu plus
+   récente que 16.04** (le dépôt apt Cloudera s'arrête à `xenial` ; absent de
+   universe / conda-forge / vcpkg), donc le backend n'est même plus buildable sur
+   un OS courant sans compiler Kudu depuis les sources. ⇒ rediriger les
+   utilisateurs vers `BACKEND=impala` (voir `docs/CONFIGURATION.md`). Le backend
+   `kudu` reste compilable là où `libkudu_client` existe mais passe en mode
+   maintenance (pas de nouveau travail, ex. propagation d'erreur serveur non câblée).
 
 ---
 
