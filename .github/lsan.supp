@@ -1,0 +1,7 @@
+# Third-party one-time allocations reported as "still reachable"/leaks by LSan.
+leak:libglib-2.0
+leak:libgobject-2.0
+leak:libgio-2.0
+leak:libjson-glib
+leak:libcurl
+leak:libarrow
