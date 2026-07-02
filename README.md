@@ -1,14 +1,33 @@
 # Argus ODBC Driver
 
-Production-ready ODBC driver for Hive, Impala, and Trino with comprehensive logging, SSL/TLS support, and enterprise features.
+[![CI](https://github.com/VargaFoundation/argus/actions/workflows/ci.yml/badge.svg)](https://github.com/VargaFoundation/argus/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/VargaFoundation/argus/actions/workflows/codeql.yml/badge.svg)](https://github.com/VargaFoundation/argus/actions/workflows/codeql.yml)
+
+Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix, Pinot, Druid, Kudu, MySQL-wire (StarRocks/Doris/ClickHouse) and Arrow Flight SQL (Dremio/InfluxDB 3) — with comprehensive logging, SSL/TLS, OAuth2 and an Arrow ADBC surface built over the same stack.
 
 ## Features
 
 ### Core ODBC Support
-- **52 ODBC Functions** implemented (ODBC 3.x API Level 1)
-- **Multiple Backends**: Apache Hive, Apache Impala, Trino  
-- **Cross-Platform**: Linux and Windows support
-- **Connection Pooling Ready**: Designed for production environments
+- **99 ODBC entry points** (68 ANSI + 31 Unicode `W` variants) — ODBC 3.x API Level 1, plus ODBC 2.x compatibility (`SQLAllocConnect`, `SQLError`, `SQLExtendedFetch`, ...)
+- **9 backends**, enabled by dependency auto-detection at configure time
+- **Cross-platform**: Linux, macOS and Windows x64
+- **Arrow ADBC driver** (`libargus_adbc`) exposing the same backends through the Arrow C Data Interface
+
+### Backends
+
+| `BACKEND=` | Engine | Protocol | Build dependency | In Windows installer |
+|------------|--------|----------|------------------|----------------------|
+| `hive` | Apache Hive — also Spark Thrift Server and Flink SQL Gateway (HiveServer2 protocol) | Thrift binary or HTTP | `thrift_c_glib` | no |
+| `impala` | Apache Impala | Thrift | `thrift_c_glib` | no |
+| `trino` | Trino | HTTP/JSON | libcurl + json-glib | yes |
+| `phoenix` | Apache Phoenix (Avatica) | HTTP/JSON | libcurl + json-glib | yes |
+| `pinot` | Apache Pinot | HTTP/JSON | libcurl + json-glib | yes |
+| `druid` | Apache Druid | HTTP/JSON | libcurl + json-glib | yes |
+| `mysql` | StarRocks / Doris / ClickHouse / MySQL / MariaDB | MySQL wire | libmariadb | no |
+| `flightsql` | Dremio / InfluxDB 3 / any Arrow Flight SQL server | gRPC / Arrow | arrow-flight-sql (C++) | no |
+| `kudu` | Apache Kudu (deprecated — prefer `BACKEND=impala`) | kudu_client | libkudu_client | no |
+
+The Windows installer ships the HTTP/JSON backends (Trino, Phoenix, Pinot, Druid); the Thrift, MySQL, Flight SQL and Kudu backends need dependencies that MSYS2 does not provide.
 
 ### Production Features
 
@@ -20,13 +39,10 @@ Production-ready ODBC driver for Hive, Impala, and Trino with comprehensive logg
   - Connection string: `LogLevel=5;LogFile=/tmp/argus.log`
   - Environment variables: `ARGUS_LOG_LEVEL`, `ARGUS_LOG_FILE`
 
-#### SSL/TLS Support
-- **Trino**: Full HTTPS support with certificate verification
-  - SSL certificate, key, and CA configuration
-  - Hostname verification toggle
-- **Hive/Impala**: Thrift SSL sockets (requires OpenSSL)
-  - CA certificate configuration
-  - Transparent SSL negotiation
+#### SSL/TLS and Authentication
+- **Trino**: full HTTPS with certificate verification, plus OAuth2 — client credentials, device code (RFC 8628) and authorization code with PKCE + browser SSO, with OIDC discovery
+- **Hive/Impala**: Thrift SSL sockets, HTTP transport with SPNEGO/Kerberos or Bearer/JWT tokens (Databricks personal access tokens)
+- Certificate, key and CA configuration; hostname verification toggle
 
 #### Connection Resilience
 - **Automatic Retry**: Configurable retry count and delay
@@ -43,101 +59,108 @@ Production-ready ODBC driver for Hive, Impala, and Trino with comprehensive logg
 
 #### Query Management
 - **SQLCancel**: Cancel running queries across all backends
-  - Trino: DELETE /v1/query/{id}
-  - Hive/Impala: TCancelOperationReq via Thrift
-- **Application Name**: Identify queries with custom app name
-  - Trino: X-Trino-Source header
-  - Hive: hive.query.source configuration
+- **Application Name**: Identify queries with a custom app name (`X-Trino-Source`, `hive.query.source`)
 
 #### Fetch Optimization
 - **Configurable Buffer Size**: `FetchBufferSize=5000`
-- **Default Batch Size**: 1000 rows per fetch
-- **Row Array Fetching**: Support for SQLSetStmtAttr row arrays
+- **Block fetch**: `SQL_ATTR_ROW_ARRAY_SIZE` rowsets and `SQL_ATTR_PARAMSET_SIZE` parameter arrays
+- **Static scrollable cursors** (`SQLFetchScroll` NEXT/PRIOR/FIRST/LAST/ABSOLUTE/RELATIVE)
 
 ## Building
 
-### Requirements
+See [docs/BUILDING.md](docs/BUILDING.md) for the full matrix.
 
 **Linux:**
-\`\`\`bash
-# Base dependencies
-sudo apt-get install cmake build-essential
-sudo apt-get install libodbc1 unixodbc-dev
-sudo apt-get install libglib2.0-dev libgio2.0-dev
+```bash
+sudo apt-get install cmake build-essential unixodbc-dev libglib2.0-dev
+# Hive/Impala (optional)
+sudo apt-get install libthrift-c-glib-dev thrift-compiler
+# Trino/Phoenix/Pinot/Druid (optional)
+sudo apt-get install libcurl4-openssl-dev libjson-glib-dev
+# MySQL-wire (optional)
+sudo apt-get install libmariadb-dev
 
-# Hive/Impala backend (optional)
-sudo apt-get install libthrift-c-glib-dev
+cmake -B build && cmake --build build
+cd build && ctest --output-on-failure -L unit
+```
 
-# Trino backend (optional)
-sudo apt-get install libcurl4-openssl-dev libjson-glib-1.0-dev
-
-# SSL support for Hive/Impala (optional)
-sudo apt-get install libssl-dev
-\`\`\`
-
-**Windows:**
-- Visual Studio 2019+ or MinGW-w64
-- vcpkg for dependencies: \`glib\`, \`gio\`
-- Optional: \`libcurl\`, \`json-glib-1.0\` for Trino
-
-### Build Instructions
-
-\`\`\`bash
-cmake -B build
+**Windows (MSYS2 UCRT64, what the CI builds):**
+```bash
+pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake \
+          mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf \
+          mingw-w64-ucrt-x86_64-glib2 mingw-w64-ucrt-x86_64-curl \
+          mingw-w64-ucrt-x86_64-json-glib mingw-w64-ucrt-x86_64-cmocka
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
+```
 
-# Run tests
-cd build
-ctest --output-on-failure -L unit
-\`\`\`
+**macOS:** Homebrew `unixodbc glib json-glib curl` then the same CMake invocation.
 
 ## Connection String Parameters
 
 ### Basic Connection
-\`\`\`
+```
 HOST=localhost;PORT=10000;UID=myuser;PWD=mypass;DATABASE=default;BACKEND=hive
-\`\`\`
+```
 
-### All Parameters
+### Common Parameters
 
 | Parameter | Description | Example | Default |
 |-----------|-------------|---------|---------|
-| **HOST** / SERVER | Server hostname | \`localhost\` | \`localhost\` |
-| **PORT** | Server port | \`10000\` | Backend-specific |
-| **UID** / USERNAME | Username | \`admin\` | \`\` |
-| **PWD** / PASSWORD | Password | \`secret\` | \`\` |
-| **DATABASE** / SCHEMA | Database name | \`mydb\` | \`default\` |
-| **BACKEND** | Backend type | \`hive\`, \`impala\`, \`trino\` | \`hive\` |
-| **SSL** / UseSSL | Enable SSL | \`1\`, \`true\` | \`false\` |
-| **SSLCertFile** | Client certificate | \`/path/cert.pem\` | - |
-| **SSLKeyFile** | Client key | \`/path/key.pem\` | - |
-| **SSLCAFile** | CA certificate | \`/path/ca.pem\` | - |
-| **SSLVerify** | Verify server cert | \`1\`, \`true\` | \`true\` |
-| **LogLevel** | Log level (0-6) | \`5\` (DEBUG) | \`0\` |
-| **LogFile** | Log file path | \`/tmp/argus.log\` | stderr |
-| **ConnectTimeout** | Connection timeout (sec) | \`30\` | \`0\` |
-| **QueryTimeout** | Query timeout (sec) | \`300\` | \`0\` |
-| **SocketTimeout** | Socket timeout (sec) | \`60\` | \`0\` |
-| **RetryCount** | Retry attempts | \`3\` | \`0\` |
-| **RetryDelay** | Delay between retries (sec) | \`2\` | \`2\` |
-| **ApplicationName** | App identifier | \`MyApp\` | - |
-| **FetchBufferSize** | Rows per fetch | \`5000\` | \`1000\` |
+| **HOST** / SERVER | Server hostname | `localhost` | `localhost` |
+| **PORT** | Server port | `10000` | Backend-specific |
+| **UID** / USERNAME | Username | `admin` | `` |
+| **PWD** / PASSWORD | Password | `secret` | `` |
+| **DATABASE** / SCHEMA | Database name | `mydb` | `default` |
+| **BACKEND** | `hive`, `impala`, `trino`, `phoenix`, `pinot`, `druid`, `mysql`, `flightsql`, `kudu` | `trino` | `hive` |
+| **SSL** / UseSSL | Enable SSL | `1`, `true` | `false` |
+| **SSLCertFile** | Client certificate | `/path/cert.pem` | - |
+| **SSLKeyFile** | Client key | `/path/key.pem` | - |
+| **SSLCAFile** | CA certificate | `/path/ca.pem` | - |
+| **SSLVerify** | Verify server cert | `1`, `true` | `true` |
+| **AUTHMECH** | Auth mechanism (backend-specific) | `LDAP`, `JWT`, `OAUTH2` | - |
+| **LogLevel** | Log level (0-6) | `5` (DEBUG) | `0` |
+| **LogFile** | Log file path | `/tmp/argus.log` | stderr |
+| **ConnectTimeout** | Connection timeout (sec) | `30` | `0` |
+| **QueryTimeout** | Query timeout (sec) | `300` | `0` |
+| **SocketTimeout** | Socket timeout (sec) | `60` | `0` |
+| **RetryCount** | Retry attempts | `3` | `0` |
+| **RetryDelay** | Delay between retries (sec) | `2` | `2` |
+| **ApplicationName** | App identifier | `MyApp` | - |
+| **FetchBufferSize** | Rows per fetch | `5000` | `1000` |
+
+The complete list (OAuth2 endpoints, HTTP transport, spooling, ...) is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md); ready-made strings per engine are in [CONNECTION_EXAMPLES.md](CONNECTION_EXAMPLES.md).
+
+## Windows
+
+The [NSIS installer](installer/) registers the driver and bundles its DLLs. The driver reads DSNs from the registry (user DSNs first, then system). The setup has no configuration dialog, so create DSNs from PowerShell:
+
+```powershell
+Add-OdbcDsn -Name MyTrino -DriverName "Argus ODBC Driver" -Platform 64-bit `
+    -SetPropertyValue @("BACKEND=trino", "HOST=trino.example.com", "PORT=8443", "SSL=1")
+```
+
+or use DSN-less connection strings:
+
+```
+DRIVER={Argus ODBC Driver};BACKEND=trino;HOST=trino.example.com;PORT=8443;SSL=1
+```
 
 ## Usage Examples
 
 ### Secure Connection with SSL (Trino)
-\`\`\`c
+```c
 const char *conn_str =
     "HOST=trino.example.com;PORT=8443;UID=admin;"
     "SSL=1;SSLCAFile=/etc/ssl/certs/ca.pem;SSLVerify=1;"
     "BACKEND=trino;LogLevel=5;LogFile=/var/log/argus.log";
 
-SQLDriverConnect(dbc, NULL, (SQLCHAR*)conn_str, SQL_NTS, 
+SQLDriverConnect(dbc, NULL, (SQLCHAR*)conn_str, SQL_NTS,
                  NULL, 0, NULL, SQL_DRIVER_NOPROMPT);
-\`\`\`
+```
 
 ### Connection with Retry and Timeout
-\`\`\`c
+```c
 const char *conn_str =
     "HOST=impala-server;PORT=21050;UID=user;"
     "BACKEND=impala;RetryCount=3;RetryDelay=2;"
@@ -146,61 +169,50 @@ const char *conn_str =
 
 SQLDriverConnect(dbc, NULL, (SQLCHAR*)conn_str, SQL_NTS,
                  NULL, 0, NULL, SQL_DRIVER_NOPROMPT);
-\`\`\`
+```
 
 ### Query Execution with Cancel
-\`\`\`c
+```c
 SQLHSTMT stmt;
 SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
 
-// Execute in background thread
+/* Execute in background thread */
 SQLExecDirect(stmt, (SQLCHAR*)"SELECT * FROM huge_table", SQL_NTS);
 
-// Cancel from another thread
+/* Cancel from another thread */
 SQLCancel(stmt);
 
 SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-\`\`\`
+```
 
 ## Logging
 
 Enable debug logging:
 
-\`\`\`bash
+```bash
 export ARGUS_LOG_LEVEL=6
 export ARGUS_LOG_FILE=/tmp/argus-debug.log
-\`\`\`
+```
 
 Log levels: 0=OFF, 1=FATAL, 2=ERROR, 3=WARN, 4=INFO, 5=DEBUG, 6=TRACE
 
 ## Troubleshooting
 
 ### Connection Fails
-1. Enable logging: \`LogLevel=6;LogFile=/tmp/argus.log\`
+1. Enable logging: `LogLevel=6;LogFile=/tmp/argus.log`
 2. Check firewall rules
 3. Verify credentials
-4. Try retry: \`RetryCount=3;RetryDelay=2\`
+4. Try retry: `RetryCount=3;RetryDelay=2`
 
 ### SSL Errors
 1. Verify certificate paths
 2. Check certificate validity
-3. Try \`SSLVerify=0\` (testing only!)
+3. Try `SSLVerify=0` (testing only!)
 
 ### Query Hangs
-1. Set timeout: \`QueryTimeout=300\`
+1. Set timeout: `QueryTimeout=300`
 2. Use SQLCancel from another thread
 
 ## Version History
 
-### v0.2.0 (Current)
-- ✅ Production logging system
-- ✅ SSL/TLS support
-- ✅ Connection retry logic
-- ✅ Query timeout enforcement
-- ✅ SQLCancel implementation
-- ✅ Extended data type conversions
-- ✅ Application name support
-
-### v0.1.0
-- Initial release with 52 ODBC functions
-- Hive, Impala, Trino backends
+See [CHANGELOG.md](CHANGELOG.md).

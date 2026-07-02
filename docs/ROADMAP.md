@@ -8,10 +8,13 @@ Druid, Pinot, TDengine, Arrow Flight SQL).
 
 ## Résumé exécutif
 
-Argus est un driver ODBC open-source en C11 (~19 500 LOC + ~6 000 LOC de tests)
+Argus est un driver ODBC open-source en C11 (~26 000 LOC + ~8 800 LOC de tests)
 connectant les outils BI à des moteurs SQL big-data via une architecture à deux couches
-(API ODBC `src/odbc/` + backends pluggables `src/backend/`). Cinq backends existent :
-Hive, Impala (Thrift CLI), Trino, Phoenix (HTTP/JSON), Kudu (client C++ natif).
+(API ODBC `src/odbc/` + backends pluggables `src/backend/`). Neuf backends existent :
+Hive, Impala (Thrift CLI), Trino, Phoenix, Pinot, Druid (HTTP/JSON), MySQL-wire
+(StarRocks/Doris/ClickHouse), Arrow Flight SQL (Dremio/InfluxDB 3) et Kudu (client C++
+natif, déprécié — préférer `BACKEND=impala`). Une surface Arrow ADBC est bâtie sur la
+même pile.
 
 L'ingénierie est solide (multi-plateforme, packaging signé, CI, pooling, Unicode complet,
 logging structuré) et le **positionnement est unique** : aucun driver ODBC open-source
@@ -43,19 +46,20 @@ sécurisés et sur la BI cloud. C'est la priorité absolue de la roadmap.
   concluent « ~95% production-ready, aucun manque HAUTE priorité ». C'est inexact pour le
   marché cible : la quasi-totalité des clusters CDP/CDH Hive/Impala imposent
   Kerberos/GSSAPI ; côté cloud (Trino/Databricks), OAuth2/OIDC + SSO navigateur est le
-  standard de fait. Aucun des 5 backends ne fait Kerberos, LDAP, OAuth2 ou JWT
-  (`auth_mechanism` se limite à NOSASL/PLAIN ; Trino/Phoenix/Kudu ignorent même le mot
-  de passe).
+  standard de fait. Depuis, Trino a l'OAuth2 complet (client credentials, device code
+  RFC 8628, authorization code + PKCE/SSO navigateur, découverte OIDC) et Hive a
+  SPNEGO/Kerberos et Bearer/JWT sur le transport HTTP ; le manque restant est
+  Kerberos/SASL sur le Thrift binaire (thrift_c_glib n'offre pas de transport SASL).
 - **Fetch row-oriented.** `fetch_results()` parse ligne par ligne. Les concurrents
-  (Databricks Cloud Fetch) font du fetch colonnaire Arrow (~12× le débit). De plus
-  l'**array fetch ODBC** (`SQL_ATTR_ROW_ARRAY_SIZE` lu mais non honoré) n'est pas
-  implémenté — pénalisant pour les gros extracts BI.
+  (Databricks Cloud Fetch) font du fetch colonnaire Arrow (~12× le débit). (L'array fetch
+  ODBC `SQL_ATTR_ROW_ARRAY_SIZE` est désormais honoré côté application ; le parsing
+  backend, lui, reste ligne à ligne.)
 - **Conformité ODBC incomplète** : `SQLSetPos`, `SQLBulkOperations`, bookmarks → HYC00 ;
   async partiel ; `SQLDescribeParam` stub ; curseurs forward-only (+ cache scroll).
   `get_primary_keys`/`get_statistics` absents pour Hive et Impala.
-- **HTTP/Knox non exposé.** La couche `src/backend/common/thrift_http.c` existe mais le
-  paramètre `TransportMode` (binary/HTTP) n'est pas exposé — or beaucoup de déploiements
-  Hive sont derrière Apache Knox en mode HTTP.
+- **HTTP/Knox : exposé depuis.** `TransportMode=HTTP` + `HttpPath` sont supportés pour
+  Hive (avec SPNEGO/Kerberos et Bearer/JWT), couvrant Knox et Databricks ; reste à
+  faire pour Impala.
 - **Backend Kudu discutable.** Kudu se requête normalement via Impala. Le parser SQL
   maison (`kudu_sql_parser.c`, 461 lignes) est une dette de maintenance fragile et
   introduit du C++ dans une base C. À reconsidérer.

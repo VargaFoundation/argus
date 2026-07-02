@@ -5,12 +5,16 @@
  * stack: a connection is an ODBC connection (SQLDriverConnect with the Argus
  * connection string), and AdbcStatementExecuteQuery runs the SQL through
  * SQLExecDirect/SQLFetch and emits the result as an Arrow C Data Interface
- * stream of typed columns (int64 / double / utf8). This reuses every backend,
- * the streaming fetch and the native typed cells unchanged.
+ * stream of typed columns. This reuses every backend, the streaming fetch and
+ * the native typed cells unchanged.
  *
- * Scope today: forward-only SELECT to a single materialized record batch with
- * int64/double/utf8 columns (other SQL types are surfaced as utf8). The driver-
- * manager AdbcDriverInit vtable and richer type/stream coverage are follow-ups.
+ * Scope today: forward-only SELECT streamed as Arrow record batches (up to
+ * 4096 rows each) with int64 / double / bool / date32 / timestamp[us] / utf8
+ * columns (other SQL types are surfaced as utf8), bound parameters via
+ * AdbcStatementBind, catalog metadata (GetObjects at catalog depth,
+ * GetTableSchema, GetTableTypes) and the AdbcDriverInit driver-manager vtable
+ * (ADBC 1.0.0). Deeper GetObjects levels, GetInfo and transactions are
+ * follow-ups.
  */
 #include "argus/adbc.h"
 

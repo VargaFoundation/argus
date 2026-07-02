@@ -47,13 +47,16 @@ pacman -S \
     mingw-w64-ucrt-x86_64-gcc \
     mingw-w64-ucrt-x86_64-cmake \
     mingw-w64-ucrt-x86_64-ninja \
-    mingw-w64-ucrt-x86_64-pkg-config \
+    mingw-w64-ucrt-x86_64-pkgconf \
     mingw-w64-ucrt-x86_64-glib2 \
-    mingw-w64-ucrt-x86_64-thrift \
     mingw-w64-ucrt-x86_64-curl \
     mingw-w64-ucrt-x86_64-json-glib \
     mingw-w64-ucrt-x86_64-cmocka
 ```
+
+MSYS2 has no `thrift_c_glib`, so the Hive/Impala backends are not available on
+Windows; the build auto-detects this and ships Trino/Phoenix/Pinot/Druid. Add
+`mingw-w64-ucrt-x86_64-nsis` to build the installer.
 
 ## Building
 
@@ -61,7 +64,7 @@ pacman -S \
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/argus.git
+git clone https://github.com/VargaFoundation/argus.git
 cd argus
 
 # Create build directory
