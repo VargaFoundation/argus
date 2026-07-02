@@ -8,8 +8,12 @@
 #include <sqlext.h>
 #include <sqltypes.h>
 
-/* Export macro for shared library symbols */
-#if defined(_WIN32) || defined(__CYGWIN__)
+/* Export macro for shared library symbols.
+ * ARGUS_STATIC: consumer links argus_odbc_static; no dll attributes,
+ * otherwise references become __imp_* and fail against the archive. */
+#if defined(ARGUS_STATIC)
+    #define ARGUS_EXPORT
+#elif defined(_WIN32) || defined(__CYGWIN__)
     #ifdef ARGUS_BUILD_DLL
         #define ARGUS_EXPORT __declspec(dllexport)
     #else
