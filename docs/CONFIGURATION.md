@@ -34,6 +34,25 @@ AUTHMECH = NOSASL
 BACKEND = hive
 ```
 
+## Registering on Windows
+
+The [NSIS installer](../installer/) copies the driver with its bundled DLLs and
+registers `Argus ODBC Driver` under `HKLM\SOFTWARE\ODBC\ODBCINST.INI`. The
+driver reads DSNs from the registry: `HKCU\SOFTWARE\ODBC\ODBC.INI\<dsn>`
+first (user DSNs), then `HKLM` (system DSNs).
+
+The driver setup has no configuration dialog, so create DSNs from PowerShell:
+
+```powershell
+Add-OdbcDsn -Name MyTrino -DriverName "Argus ODBC Driver" -DsnType User -Platform 64-bit `
+    -SetPropertyValue @("BACKEND=trino", "HOST=trino.example.com", "PORT=8443", "SSL=1")
+
+Remove-OdbcDsn -Name MyTrino -DsnType User -Platform 64-bit
+```
+
+DSN-less connection strings (`DRIVER={Argus ODBC Driver};...`) need no DSN at
+all.
+
 ## Connection String Parameters
 
 Use with `SQLDriverConnect`:
