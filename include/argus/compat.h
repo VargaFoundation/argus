@@ -22,7 +22,9 @@
 /* strtok_r -> strtok_s on Windows */
 #define strtok_r strtok_s
 
-/* strndup is not available on Windows */
+/* strndup: MSVC's CRT lacks it; modern mingw-w64 declares it in
+ * <string.h>, so defining it there would clash with the CRT. */
+#if !defined(__MINGW32__) && !defined(__MINGW64__)
 static inline char *strndup(const char *s, size_t n)
 {
     size_t len = strlen(s);
@@ -34,6 +36,7 @@ static inline char *strndup(const char *s, size_t n)
     }
     return copy;
 }
+#endif
 
 /* Secure memory zeroing before free (for credentials) */
 static inline void argus_secure_free(char *p)
