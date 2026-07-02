@@ -57,7 +57,7 @@ static void test_ssl_connect(void **state)
     char conn_str[1024];
     snprintf(conn_str, sizeof(conn_str),
              "HOST=%s;PORT=%d;UID=test;Backend=trino;"
-             "Database=memory;SSL=1;SSL_CA=%s;SSL_VERIFY=1",
+             "Database=memory;SSL=1;SSLCAFile=%s;SSLVerify=1",
              get_host(), get_port(), get_ca_file());
 
     SQLCHAR out_conn[1024];
@@ -108,7 +108,7 @@ static void test_ssl_no_verify(void **state)
     char conn_str[1024];
     snprintf(conn_str, sizeof(conn_str),
              "HOST=%s;PORT=%d;UID=test;Backend=trino;"
-             "Database=memory;SSL=1;SSL_VERIFY=0",
+             "Database=memory;SSL=1;SSLVerify=0",
              get_host(), get_port());
 
     SQLRETURN ret = SQLDriverConnect(dbc, NULL,
@@ -138,7 +138,7 @@ static void test_ssl_bad_ca_fails(void **state)
     char conn_str[1024];
     snprintf(conn_str, sizeof(conn_str),
              "HOST=%s;PORT=%d;UID=test;Backend=trino;"
-             "Database=memory;SSL=1;SSL_CA=/nonexistent/ca.pem;SSL_VERIFY=1",
+             "Database=memory;SSL=1;SSLCAFile=/nonexistent/ca.pem;SSLVerify=1",
              get_host(), get_port());
 
     SQLRETURN ret = SQLDriverConnect(dbc, NULL,
