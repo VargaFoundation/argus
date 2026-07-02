@@ -162,7 +162,11 @@ endif()
 
 # MinGW ODBC headers (sqltypes.h) require Windows type definitions from
 # windows.h to be available. Force-include it before any source file.
+# WIN32_LEAN_AND_MEAN keeps winsock.h out of windows.h so that the
+# winsock2 users (Trino OAuth2 loopback) do not hit the classic
+# winsock/winsock2 redefinition clash.
 if(WIN32)
+    add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX)
     if(MSVC)
         add_compile_options(/FIwindows.h)
     else()

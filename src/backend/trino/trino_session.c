@@ -4,20 +4,22 @@
 #include "argus/log.h"
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <stdio.h>
-#include <unistd.h>
+#include "argus/compat.h"
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 typedef SOCKET argus_sock_t;
 #define ARGUS_CLOSESOCK closesocket
+#define sleep_seconds(n) Sleep((DWORD)(n) * 1000)
 #else
+#include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <sys/select.h>
 typedef int argus_sock_t;
 #define ARGUS_CLOSESOCK close
+#define sleep_seconds(n) sleep((unsigned)(n))
 #endif
 
 /* Forward declarations for the OAuth2 token-refresh path. */
@@ -403,7 +405,7 @@ static int trino_fetch_device_token(trino_conn_t *conn, char **out_token)
     int waited = 0, ret = -1;
     if (interval < 1) interval = 1;
     while (waited < expires) {
-        sleep((unsigned)interval);
+        sleep_seconds(interval);
         waited += interval;
         long c2 = 0;
         JsonParser *tp = trino_oauth_form_post(conn, conn->oauth_token_url, pbody, &c2);
