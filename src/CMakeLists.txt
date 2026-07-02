@@ -42,6 +42,12 @@ set(ARGUS_LINK_DIRS
 
 set(ARGUS_COMPILE_DEFS ARGUS_BUILD_DLL SQL_NOUNICODEMAP)
 
+# Winsock is used by the Trino OAuth2 loopback; the static library (unit
+# tests) needs it too, not just the shared driver target.
+if(WIN32)
+    list(APPEND ARGUS_LINK_LIBS ws2_32)
+endif()
+
 # Conditionally add Hive/Impala backends (require Thrift C GLib)
 if(ARGUS_BUILD_THRIFT_BACKENDS)
     list(APPEND ARGUS_SOURCES
