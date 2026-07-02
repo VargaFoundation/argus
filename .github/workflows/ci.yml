@@ -275,9 +275,20 @@ jobs:
       - name: Start services
         # Bring up the services with working healthchecks and block until ready
         # (Pinot's healthcheck also waits for its sample-data ingestion).
-        run: >-
-          docker compose -f tests/integration/docker-compose.yml up -d --wait
-          mariadb influxdb3 influxdb3-seed trino trino-ssl pinot
+        # trino-ssl starts in a second wave: booting two Trino JVMs plus the
+        # Pinot quickstart at once overcommits the runner.
+        run: |
+          docker compose -f tests/integration/docker-compose.yml up -d --wait \
+            mariadb influxdb3 influxdb3-seed trino pinot
+          docker compose -f tests/integration/docker-compose.yml up -d --wait \
+            trino-ssl
+
+      - name: Service diagnostics
+        if: failure()
+        run: |
+          docker ps -a
+          docker compose -f tests/integration/docker-compose.yml logs --tail 80 \
+            trino-ssl trino pinot mariadb
 
       - name: Configure
         run: cmake -B build -DBUILD_INTEGRATION_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
