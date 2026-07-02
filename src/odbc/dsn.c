@@ -1,9 +1,10 @@
 /*
- * DSN / odbc.ini resolver for SQLConnect.
+ * DSN resolver for SQLConnect.
  *
  * When SQLConnect receives a ServerName, we first check if it matches
- * a DSN in odbc.ini (via SQLGetPrivateProfileString from ODBC DM, or
- * by reading ~/.odbc.ini / /etc/odbc.ini directly with GKeyFile).
+ * a configured DSN. On Windows, DSNs live in the registry under
+ * HKCU/HKLM\SOFTWARE\ODBC\ODBC.INI\<dsn>; on POSIX they live in
+ * ~/.odbc.ini, $ODBCINI or /etc/odbc.ini (read with GKeyFile).
  *
  * If a DSN is found, its key-value pairs are applied to the DBC handle.
  * If no DSN is found, ServerName is treated as a literal hostname.
@@ -117,11 +118,59 @@ static bool load_dsn_from_file(argus_dbc_t *dbc, const char *dsn_name,
     return true;
 }
 
+/* ── Internal: try loading DSN from the Windows registry ─────── */
+
+#ifdef _WIN32
+static bool load_dsn_from_registry(argus_dbc_t *dbc, const char *dsn_name,
+                                   HKEY root)
+{
+    char path[300];
+    snprintf(path, sizeof(path), "SOFTWARE\\ODBC\\ODBC.INI\\%s", dsn_name);
+
+    HKEY key;
+    if (RegOpenKeyExA(root, path, 0, KEY_READ, &key) != ERROR_SUCCESS)
+        return false;
+
+    ARGUS_LOG_DEBUG("DSN '%s' found in %s registry hive", dsn_name,
+                    root == HKEY_CURRENT_USER ? "HKCU" : "HKLM");
+
+    for (DWORD i = 0; ; i++) {
+        char name[256];
+        BYTE data[1024];
+        DWORD name_len = sizeof(name);
+        DWORD data_len = sizeof(data) - 1;
+        DWORD type = 0;
+        LONG rc = RegEnumValueA(key, i, name, &name_len, NULL, &type,
+                                data, &data_len);
+        if (rc == ERROR_NO_MORE_ITEMS)
+            break;
+        if (rc != ERROR_SUCCESS)
+            continue;
+        if (type != REG_SZ && type != REG_EXPAND_SZ)
+            continue;
+        /* Registry strings are not guaranteed to be null-terminated */
+        data[data_len] = '\0';
+        apply_dsn_param(dbc, name, (const char *)data);
+    }
+
+    RegCloseKey(key);
+    return true;
+}
+#endif /* _WIN32 */
+
 /* ── Public: resolve DSN name to connection parameters ──────── */
 
 bool argus_resolve_dsn(argus_dbc_t *dbc, const char *dsn_name)
 {
     if (!dsn_name || !*dsn_name) return false;
+
+#ifdef _WIN32
+    /* Windows DSNs live in the registry (user DSNs take precedence) */
+    if (load_dsn_from_registry(dbc, dsn_name, HKEY_CURRENT_USER))
+        return true;
+    if (load_dsn_from_registry(dbc, dsn_name, HKEY_LOCAL_MACHINE))
+        return true;
+#endif
 
     /* Try user-level odbc.ini first, then system-level */
     const char *home = g_get_home_dir();
