@@ -2,6 +2,7 @@
 #include "argus/handle.h"
 #include "argus/error.h"
 #include "argus/log.h"
+#include "argus/compat.h"
 #include "../thrift_sasl.h"
 #include <stdlib.h>
 #include <string.h>

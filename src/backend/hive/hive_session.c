@@ -2,6 +2,7 @@
 #include "argus/handle.h"
 #include "argus/error.h"
 #include "argus/log.h"
+#include "argus/compat.h"
 #include "../thrift_sasl.h"
 #ifdef ARGUS_HAS_CURL
 #include "thrift_http_transport.h"

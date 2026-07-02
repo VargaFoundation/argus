@@ -2,7 +2,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <glib.h>
+#ifdef _WIN32
+#include <winsock2.h>   /* htonl / ntohl */
+#else
 #include <arpa/inet.h>  /* htonl / ntohl */
+#endif
 
 #ifdef ARGUS_HAS_GSSAPI
 #include <gssapi/gssapi.h>
