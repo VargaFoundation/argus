@@ -32,6 +32,11 @@ services:
       retries: 12
       start_period: 30s
 
+  # HTTPS on 8443 for the TLS tests. Internal/discovery stays on HTTP
+  # inside the container (8080, not published): fully disabling HTTP
+  # requires internal-TLS configuration and Trino refuses to start
+  # ("internalUri is null"). Run tests/integration/certs/generate.sh
+  # before bringing this service up.
   trino-ssl:
     image: trinodb/trino:latest
     container_name: argus-trino-ssl
@@ -39,16 +44,7 @@ services:
       - "8443:8443"
     volumes:
       - ./certs/server.p12:/etc/trino/server.p12:ro
-      - ./certs/truststore.jks:/etc/trino/truststore.jks:ro
-      - ./trino-ssl-config:/etc/trino-ssl-config:ro
-    environment:
-      # Override Trino config to enable HTTPS on port 8443
-      JAVA_TOOL_OPTIONS: >-
-        -Dhttp-server.https.enabled=true
-        -Dhttp-server.https.port=8443
-        -Dhttp-server.https.keystore.path=/etc/trino/server.p12
-        -Dhttp-server.https.keystore.key=changeit
-        -Dhttp-server.http.enabled=false
+      - ./trino-ssl-config/config.properties:/etc/trino/config.properties:ro
     healthcheck:
       test: ["CMD", "curl", "-kf", "https://localhost:8443/v1/info"]
       interval: 10s

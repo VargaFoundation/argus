@@ -269,12 +269,15 @@ jobs:
             libjson-glib-dev \
             libmariadb-dev
 
+      - name: Generate TLS certificates
+        run: bash tests/integration/certs/generate.sh
+
       - name: Start services
         # Bring up the services with working healthchecks and block until ready
         # (Pinot's healthcheck also waits for its sample-data ingestion).
         run: >-
           docker compose -f tests/integration/docker-compose.yml up -d --wait
-          mariadb influxdb3 influxdb3-seed trino pinot
+          mariadb influxdb3 influxdb3-seed trino trino-ssl pinot
 
       - name: Configure
         run: cmake -B build -DBUILD_INTEGRATION_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
@@ -286,6 +289,9 @@ jobs:
         env:
           TRINO_HOST: localhost
           TRINO_PORT: "8080"
+          TRINO_SSL_HOST: localhost
+          TRINO_SSL_PORT: "8443"
+          TRINO_SSL_CA_FILE: ${{ github.workspace }}/tests/integration/certs/ca-cert.pem
           MYSQL_HOST: "127.0.0.1"
           MYSQL_PORT: "3306"
           PINOT_HOST: "127.0.0.1"

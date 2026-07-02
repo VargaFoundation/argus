@@ -13,6 +13,13 @@ cmake-build-*/
 # Generated thrift code
 thrift/gen-*/
 
+# Generated TLS test material (tests/integration/certs/generate.sh)
+tests/integration/certs/*.pem
+tests/integration/certs/*.csr
+tests/integration/certs/*.p12
+tests/integration/certs/*.jks
+tests/integration/certs/*.srl
+
 # OS
 .DS_Store
 Thumbs.db
