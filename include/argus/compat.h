@@ -53,11 +53,15 @@ static inline void argus_secure_free(char *p)
 #include <strings.h>
 #include <string.h>
 
-/* Secure memory zeroing before free (for credentials) */
+/* Secure memory zeroing before free (for credentials).
+ * explicit_bzero is glibc/BSD-only (macOS lacks it); store through a
+ * volatile pointer instead, which the compiler may not elide. */
 static inline void argus_secure_free(char *p)
 {
     if (p) {
-        explicit_bzero(p, strlen(p));
+        volatile char *vp = p;
+        size_t n = strlen(p);
+        while (n--) *vp++ = '\0';
         free(p);
     }
 }
