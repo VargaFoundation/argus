@@ -42,10 +42,13 @@ set(ARGUS_LINK_DIRS
 
 set(ARGUS_COMPILE_DEFS ARGUS_BUILD_DLL SQL_NOUNICODEMAP)
 
-# Winsock is used by the Trino OAuth2 loopback; the static library (unit
-# tests) needs it too, not just the shared driver target.
+# Windows: the installer setup entry points (ConfigDSN), winsock for the
+# Trino OAuth2 loopback, odbccp32 for the installer API and advapi32 for
+# registry DSN lookup. Added to ARGUS_LINK_LIBS so the static library
+# (unit tests) gets them too, not just the shared driver target.
 if(WIN32)
-    list(APPEND ARGUS_LINK_LIBS ws2_32)
+    list(APPEND ARGUS_SOURCES odbc/setup.c)
+    list(APPEND ARGUS_LINK_LIBS ws2_32 odbccp32 advapi32)
 endif()
 
 # Conditionally add Hive/Impala backends (require Thrift C GLib)
