@@ -20,9 +20,14 @@ services:
       retries: 12
       start_period: 30s
 
+  # mem_limit keeps the JVM honest: the stock image uses
+  # MaxRAMPercentage=80, which sizes the heap on the whole machine when
+  # no cgroup limit is set — two Trino containers then overcommit small
+  # CI runners at boot.
   trino:
     image: trinodb/trino:latest
     container_name: argus-trino
+    mem_limit: 2g
     ports:
       - "8080:8080"
     healthcheck:
@@ -40,6 +45,7 @@ services:
   trino-ssl:
     image: trinodb/trino:latest
     container_name: argus-trino-ssl
+    mem_limit: 2g
     ports:
       - "8443:8443"
     volumes:
@@ -49,8 +55,8 @@ services:
       test: ["CMD", "curl", "-kf", "https://localhost:8443/v1/info"]
       interval: 10s
       timeout: 10s
-      retries: 12
-      start_period: 30s
+      retries: 30
+      start_period: 60s
 
   phoenix:
     image: apache/phoenix:5.2.0
