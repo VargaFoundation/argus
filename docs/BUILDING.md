@@ -64,7 +64,10 @@ PKG_CONFIG_PATH="$PWD/thrift-c-glib-prefix/lib/pkgconfig" \
 ```
 
 Hive/Impala then build on Windows (they use Argus's GIO socket transport,
-not thrift's POSIX sockets). Add `mingw-w64-ucrt-x86_64-nsis` to build the
+not thrift's POSIX sockets). For TLS over binary Thrift, install
+`mingw-w64-ucrt-x86_64-glib-networking`; the installer ships its
+libgioopenssl module in `gio-modules\` next to the driver, which the driver
+loads automatically. Add `mingw-w64-ucrt-x86_64-nsis` to build the
 installer.
 
 ## Building

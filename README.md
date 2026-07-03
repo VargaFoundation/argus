@@ -28,7 +28,7 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 | `flightsql` | Dremio / InfluxDB 3 / any Arrow Flight SQL server | gRPC / Arrow | arrow-flight-sql (C++) | no |
 | `kudu` | Apache Kudu (deprecated — prefer `BACKEND=impala`) | kudu_client | libkudu_client | no |
 
-The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid and BigQuery; MySQL, Flight SQL and Kudu need dependencies MSYS2 does not provide. Hive/Impala speak through a GIO socket transport (portable, with timeouts and TLS); on Windows, TLS over *binary* Thrift additionally needs the glib-networking GIO module — the HTTP transport does TLS through libcurl and works everywhere.
+The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid and BigQuery; MySQL, Flight SQL and Kudu need dependencies MSYS2 does not provide. Hive/Impala speak through a GIO socket transport (portable, with timeouts and TLS); the installer bundles the glib-networking TLS backend, which the driver loads automatically.
 
 ### Production Features
 
