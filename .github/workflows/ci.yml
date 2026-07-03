@@ -181,11 +181,28 @@ jobs:
             mingw-w64-ucrt-x86_64-glib2
             mingw-w64-ucrt-x86_64-curl
             mingw-w64-ucrt-x86_64-json-glib
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-thrift
             mingw-w64-ucrt-x86_64-cmocka
             mingw-w64-ucrt-x86_64-nsis
 
+      - name: Cache thrift_c_glib
+        id: cache-thrift
+        uses: actions/cache@v4
+        with:
+          path: thrift-c-glib-prefix
+          key: thrift-c-glib-0.23.0-ucrt64-v1
+
+      - name: Build thrift_c_glib (portable subset)
+        if: steps.cache-thrift.outputs.cache-hit != 'true'
+        # MSYS2 ships the thrift compiler but not the c_glib runtime; build
+        # the portable subset (Argus talks through its own GIO transport).
+        run: bash scripts/build-thrift-c-glib.sh "$PWD/thrift-c-glib-prefix" 0.23.0
+
       - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: >-
+          PKG_CONFIG_PATH="$PWD/thrift-c-glib-prefix/lib/pkgconfig"
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build
