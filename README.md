@@ -9,7 +9,7 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 
 ### Core ODBC Support
 - **99 ODBC entry points** (68 ANSI + 31 Unicode `W` variants) — ODBC 3.x API Level 1, plus ODBC 2.x compatibility (`SQLAllocConnect`, `SQLError`, `SQLExtendedFetch`, ...)
-- **9 backends**, enabled by dependency auto-detection at configure time
+- **10 backends**, enabled by dependency auto-detection at configure time
 - **Cross-platform**: Linux, macOS and Windows x64
 - **Arrow ADBC driver** (`libargus_adbc`) exposing the same backends through the Arrow C Data Interface
 
@@ -23,11 +23,12 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 | `phoenix` | Apache Phoenix (Avatica) | HTTP/JSON | libcurl + json-glib | yes |
 | `pinot` | Apache Pinot | HTTP/JSON | libcurl + json-glib | yes |
 | `druid` | Apache Druid | HTTP/JSON | libcurl + json-glib | yes |
+| `bigquery` | Google BigQuery — incl. sovereign clouds (S3NS): every Google endpoint is configurable | REST/JSON | libcurl + json-glib (+ OpenSSL for key files) | yes |
 | `mysql` | StarRocks / Doris / ClickHouse / MySQL / MariaDB | MySQL wire | libmariadb | no |
 | `flightsql` | Dremio / InfluxDB 3 / any Arrow Flight SQL server | gRPC / Arrow | arrow-flight-sql (C++) | no |
 | `kudu` | Apache Kudu (deprecated — prefer `BACKEND=impala`) | kudu_client | libkudu_client | no |
 
-The Windows installer ships the HTTP/JSON backends (Trino, Phoenix, Pinot, Druid); the Thrift, MySQL, Flight SQL and Kudu backends need dependencies that MSYS2 does not provide.
+The Windows installer ships the HTTP/JSON backends (Trino, Phoenix, Pinot, Druid, BigQuery); the Thrift, MySQL, Flight SQL and Kudu backends need dependencies that MSYS2 does not provide.
 
 ### Production Features
 
@@ -112,7 +113,7 @@ HOST=localhost;PORT=10000;UID=myuser;PWD=mypass;DATABASE=default;BACKEND=hive
 | **UID** / USERNAME | Username | `admin` | `` |
 | **PWD** / PASSWORD | Password | `secret` | `` |
 | **DATABASE** / SCHEMA | Database name | `mydb` | `default` |
-| **BACKEND** | `hive`, `impala`, `trino`, `phoenix`, `pinot`, `druid`, `mysql`, `flightsql`, `kudu` | `trino` | `hive` |
+| **BACKEND** | `hive`, `impala`, `trino`, `phoenix`, `pinot`, `druid`, `bigquery`, `mysql`, `flightsql`, `kudu` | `trino` | `hive` |
 | **SSL** / UseSSL | Enable SSL | `1`, `true` | `false` |
 | **SSLCertFile** | Client certificate | `/path/cert.pem` | - |
 | **SSLKeyFile** | Client key | `/path/key.pem` | - |

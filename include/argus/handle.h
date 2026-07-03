@@ -87,6 +87,17 @@ struct argus_dbc {
     char        *oauth_auth_url;      /* authorization endpoint (AUTH_CODE browser SSO) */
     char        *oauth_issuer;        /* OIDC issuer for .well-known discovery */
 
+    /* BigQuery (BACKEND=bigquery). Every Google URL is overridable so the
+     * driver works on sovereign clouds (S3NS) and against the emulator. */
+    char        *bq_project;          /* GCP project id (required) */
+    char        *bq_location;         /* job location, e.g. EU (optional) */
+    char        *bq_endpoint;         /* API base URL override */
+    char        *bq_token_url;        /* OAuth2 token endpoint override */
+    char        *bq_audience;         /* JWT aud claim override */
+    char        *bq_scope;            /* OAuth2 scope override */
+    char        *bq_key_file;         /* service-account JSON key path */
+    char        *bq_access_token;     /* pre-fetched bearer token */
+
     /* SQLBrowseConnect accumulated keywords */
     char        *browse_buf;
 
