@@ -294,6 +294,40 @@ SQLRETURN SQL_API SQLDriverConnect(
     if (!v) v = argus_conn_params_get(&params, "ISSUER");
     if (v) { free(dbc->oauth_issuer); dbc->oauth_issuer = strdup(v); }
 
+    /* BigQuery parameters — every Google URL is overridable so the driver
+     * works against sovereign clouds (S3NS) and the emulator. */
+    v = argus_conn_params_get(&params, "PROJECT");
+    if (!v) v = argus_conn_params_get(&params, "BQPROJECT");
+    if (!v) v = argus_conn_params_get(&params, "PROJECTID");
+    if (v) { free(dbc->bq_project); dbc->bq_project = strdup(v); }
+
+    v = argus_conn_params_get(&params, "BQLOCATION");
+    if (!v) v = argus_conn_params_get(&params, "LOCATION");
+    if (v) { free(dbc->bq_location); dbc->bq_location = strdup(v); }
+
+    v = argus_conn_params_get(&params, "BQENDPOINT");
+    if (v) { free(dbc->bq_endpoint); dbc->bq_endpoint = strdup(v); }
+
+    v = argus_conn_params_get(&params, "BQTOKENENDPOINT");
+    if (v) { free(dbc->bq_token_url); dbc->bq_token_url = strdup(v); }
+
+    v = argus_conn_params_get(&params, "BQAUDIENCE");
+    if (v) { free(dbc->bq_audience); dbc->bq_audience = strdup(v); }
+
+    v = argus_conn_params_get(&params, "BQSCOPE");
+    if (v) { free(dbc->bq_scope); dbc->bq_scope = strdup(v); }
+
+    v = argus_conn_params_get(&params, "BQKEYFILE");
+    if (!v) v = argus_conn_params_get(&params, "KEYFILEPATH");
+    if (v) { free(dbc->bq_key_file); dbc->bq_key_file = strdup(v); }
+
+    v = argus_conn_params_get(&params, "ACCESSTOKEN");
+    if (!v) v = argus_conn_params_get(&params, "BQACCESSTOKEN");
+    if (v) {
+        argus_secure_free(dbc->bq_access_token);
+        dbc->bq_access_token = strdup(v);
+    }
+
     v = argus_conn_params_get(&params, "TRINOPROTOCOL");
     if (!v) v = argus_conn_params_get(&params, "TRINO_PROTOCOL");
     if (v) {

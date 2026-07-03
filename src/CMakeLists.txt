@@ -197,6 +197,29 @@ if(ARGUS_BUILD_DRUID)
     list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_DRUID)
 endif()
 
+# Conditionally add BigQuery backend (REST/JSON; libcurl + json-glib)
+if(ARGUS_BUILD_BIGQUERY)
+    list(APPEND ARGUS_SOURCES
+        backend/bigquery/bigquery_backend.c
+        backend/bigquery/bigquery_auth.c
+        backend/bigquery/bigquery_types.c
+    )
+    list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend/bigquery
+        ${LIBCURL_INCLUDE_DIRS}
+        ${JSON_GLIB_INCLUDE_DIRS}
+    )
+    list(APPEND ARGUS_LINK_LIBS ${LIBCURL_LIBRARIES} ${JSON_GLIB_LIBRARIES})
+    list(APPEND ARGUS_LINK_DIRS ${LIBCURL_LIBRARY_DIRS} ${JSON_GLIB_LIBRARY_DIRS})
+    list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_BIGQUERY)
+    if(OPENSSL_FOUND)
+        list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS ${OPENSSL_INCLUDE_DIRS})
+        list(APPEND ARGUS_LINK_LIBS ${OPENSSL_LIBRARIES})
+        list(APPEND ARGUS_LINK_DIRS ${OPENSSL_LIBRARY_DIRS})
+        list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_OPENSSL)
+    endif()
+endif()
+
 # Conditionally add Kudu backend (requires libkudu_client C++ library)
 if(ARGUS_BUILD_KUDU)
     enable_language(CXX)

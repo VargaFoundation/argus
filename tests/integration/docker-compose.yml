@@ -200,6 +200,19 @@ services:
         cpu,host=beta,region=us usage=0.7,cores=8i 1718000001000000000
         cpu,host=gamma,region=eu usage=0.9,cores=16i 1718000002000000000'
 
+  # ── BigQuery emulator (goccy) ──────────────────────────────────────────
+  # Exercises the BigQuery backend without GCP, and doubles as the test for
+  # the configurable-endpoint requirement (BQEndpoint=http://localhost:9050,
+  # the same mechanism sovereign-cloud deployments like S3NS rely on).
+  bigquery:
+    image: ghcr.io/goccy/bigquery-emulator:latest
+    container_name: argus-bigquery
+    command: ["--project=test", "--data-from-yaml=/seed.yaml", "--port=9050"]
+    ports:
+      - "9050:9050"
+    volumes:
+      - ./bigquery-seed.yaml:/seed.yaml:ro
+
   # Apache Pinot single-container QuickStart: brings up controller (9000) +
   # broker (8000) and batch-ingests the sample tables (baseballStats, ...).
   # The healthcheck waits until baseballStats is actually queryable.

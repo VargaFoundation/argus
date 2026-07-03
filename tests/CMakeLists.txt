@@ -55,6 +55,15 @@ if(ARGUS_BUILD_PHOENIX)
     argus_add_unit_test(test_phoenix_types unit/test_phoenix_types.c)
 endif()
 
+if(ARGUS_BUILD_BIGQUERY)
+    argus_add_unit_test(test_bigquery_types unit/test_bigquery_types.c)
+    target_include_directories(test_bigquery_types PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/backend/bigquery
+        ${LIBCURL_INCLUDE_DIRS}
+        ${JSON_GLIB_INCLUDE_DIRS}
+    )
+endif()
+
 if(ARGUS_BUILD_KUDU)
     argus_add_unit_test(test_kudu_types unit/test_kudu_types.c)
     argus_add_unit_test(test_kudu_sql_parser unit/test_kudu_sql_parser.c)
@@ -126,6 +135,11 @@ if(BUILD_INTEGRATION_TESTS)
     if(ARGUS_BUILD_PHOENIX)
         argus_add_integration_test(test_phoenix_connect integration/test_phoenix_connect.c)
         argus_add_integration_test(test_phoenix_query integration/test_phoenix_query.c)
+    endif()
+
+    if(ARGUS_BUILD_BIGQUERY)
+        argus_add_integration_test(test_bigquery_connect integration/test_bigquery_connect.c)
+        argus_add_integration_test(test_bigquery_query integration/test_bigquery_query.c)
     endif()
 
     if(ARGUS_BUILD_KUDU)

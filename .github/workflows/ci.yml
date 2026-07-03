@@ -279,7 +279,7 @@ jobs:
         # Pinot quickstart at once overcommits the runner.
         run: |
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
-            mariadb influxdb3 influxdb3-seed trino pinot
+            mariadb influxdb3 influxdb3-seed trino pinot bigquery
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
             trino-ssl
 
@@ -307,9 +307,12 @@ jobs:
           MYSQL_PORT: "3306"
           PINOT_HOST: "127.0.0.1"
           PINOT_PORT: "8000"
+          BQ_ENDPOINT: "http://127.0.0.1:9050"
+          BQ_PROJECT: "test"
         # Run the backends whose deps are installed here (Trino, MySQL-wire,
-        # Pinot). Flight SQL / ADBC require Arrow and run in their own setup.
-        run: cd build && ctest --output-on-failure -L integration -R "trino|mysql|pinot"
+        # Pinot, BigQuery). Flight SQL / ADBC require Arrow and run in their
+        # own setup.
+        run: cd build && ctest --output-on-failure -L integration -R "trino|mysql|pinot|bigquery"
 
       - name: Stop services
         if: always()

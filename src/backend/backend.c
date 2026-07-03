@@ -32,6 +32,9 @@ extern const argus_backend_t *argus_pinot_backend_get(void);
 #ifdef ARGUS_HAS_DRUID
 extern const argus_backend_t *argus_druid_backend_get(void);
 #endif
+#ifdef ARGUS_HAS_BIGQUERY
+extern const argus_backend_t *argus_bigquery_backend_get(void);
+#endif
 
 void argus_backend_register(const argus_backend_t *backend)
 {
@@ -79,5 +82,8 @@ void argus_backends_init(void)
 #endif
 #ifdef ARGUS_HAS_DRUID
     argus_backend_register(argus_druid_backend_get());
+#endif
+#ifdef ARGUS_HAS_BIGQUERY
+    argus_backend_register(argus_bigquery_backend_get());
 #endif
 }

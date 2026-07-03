@@ -241,6 +241,49 @@ DRIVER=Argus;BACKEND=druid;HOST=broker;PORT=8082;UID=user;PWD={secret}
   Pinot/Trino HTTP-JSON pattern; runtime validation against a Druid cluster
   is pending (Druid's stack is multi-service)
 
+### Google BigQuery (BACKEND=bigquery)
+
+REST API (`bigquery/v2`) over libcurl + json-glib. **Every Google URL is
+configurable**, so the driver works unchanged on sovereign-cloud
+deployments — e.g. S3NS, the trusted-cloud GCP offer operated by Thales,
+whose IAM and service endpoints differ from public Google — and against
+the BigQuery emulator.
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `Project` / `BQProject` | GCP project id (**required**) | - |
+| `Database` / `Schema` | Default dataset | - |
+| `BQLocation` | Job location (`EU`, `europe-west9`, ...) | - |
+| `BQEndpoint` | API base URL | `https://bigquery.googleapis.com` |
+| `BQTokenEndpoint` | OAuth2 token endpoint | `https://oauth2.googleapis.com/token` or the key file's `token_uri` |
+| `BQAudience` | JWT `aud` claim | the token endpoint |
+| `BQScope` | OAuth2 scope | `https://www.googleapis.com/auth/bigquery` |
+| `BQKeyFile` | Service-account JSON key path (RS256 JWT-bearer grant; needs OpenSSL) | - |
+| `AccessToken` | Pre-fetched bearer token (skips the token flow) | - |
+
+Public GCP with a service-account key:
+
+```
+Backend=bigquery;Project=my-project;Database=my_dataset;
+BQKeyFile=/etc/argus/sa-key.json;BQLocation=EU
+```
+
+Sovereign cloud (S3NS-style: custom API + IAM endpoints and audience):
+
+```
+Backend=bigquery;Project=my-project;
+BQEndpoint=https://bigquery.s3ns.example;
+BQTokenEndpoint=https://iam.s3ns.example/token;
+BQAudience=https://iam.s3ns.example/token;
+BQKeyFile=/etc/argus/sa-key.json
+```
+
+Emulator / tests (no auth):
+
+```
+Backend=bigquery;Project=test;BQEndpoint=http://localhost:9050
+```
+
 ### Apache Kudu (BACKEND=kudu) — deprecated
 
 > **Deprecated — use the Impala backend instead.** Kudu is normally queried

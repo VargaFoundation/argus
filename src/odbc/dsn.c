@@ -80,6 +80,35 @@ static void apply_dsn_param(argus_dbc_t *dbc, const char *key, const char *val)
     } else if (strcasecmp(key, "LOGFILE") == 0) {
         free(dbc->log_file);
         dbc->log_file = strdup(val);
+    } else if (strcasecmp(key, "PROJECT") == 0 ||
+               strcasecmp(key, "BQPROJECT") == 0 ||
+               strcasecmp(key, "PROJECTID") == 0) {
+        free(dbc->bq_project);
+        dbc->bq_project = strdup(val);
+    } else if (strcasecmp(key, "BQLOCATION") == 0 ||
+               strcasecmp(key, "LOCATION") == 0) {
+        free(dbc->bq_location);
+        dbc->bq_location = strdup(val);
+    } else if (strcasecmp(key, "BQENDPOINT") == 0) {
+        free(dbc->bq_endpoint);
+        dbc->bq_endpoint = strdup(val);
+    } else if (strcasecmp(key, "BQTOKENENDPOINT") == 0) {
+        free(dbc->bq_token_url);
+        dbc->bq_token_url = strdup(val);
+    } else if (strcasecmp(key, "BQAUDIENCE") == 0) {
+        free(dbc->bq_audience);
+        dbc->bq_audience = strdup(val);
+    } else if (strcasecmp(key, "BQSCOPE") == 0) {
+        free(dbc->bq_scope);
+        dbc->bq_scope = strdup(val);
+    } else if (strcasecmp(key, "BQKEYFILE") == 0 ||
+               strcasecmp(key, "KEYFILEPATH") == 0) {
+        free(dbc->bq_key_file);
+        dbc->bq_key_file = strdup(val);
+    } else if (strcasecmp(key, "ACCESSTOKEN") == 0 ||
+               strcasecmp(key, "BQACCESSTOKEN") == 0) {
+        argus_secure_free(dbc->bq_access_token);
+        dbc->bq_access_token = strdup(val);
     }
 }
 
