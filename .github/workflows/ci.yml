@@ -181,6 +181,7 @@ jobs:
             mingw-w64-ucrt-x86_64-glib2
             mingw-w64-ucrt-x86_64-curl
             mingw-w64-ucrt-x86_64-json-glib
+            mingw-w64-ucrt-x86_64-glib-networking
             mingw-w64-ucrt-x86_64-openssl
             mingw-w64-ucrt-x86_64-thrift
             mingw-w64-ucrt-x86_64-cmocka
@@ -212,11 +213,16 @@ jobs:
 
       - name: Prepare installer files
         run: |
-          mkdir -p installer/staging
+          mkdir -p installer/staging/gio-modules
           cp build/src/libargus_odbc.dll installer/staging/argus_odbc.dll
+          # GIO TLS backend for the Hive/Impala binary-Thrift transport;
+          # loaded at runtime from gio-modules\ next to the driver DLL.
+          cp "$MINGW_PREFIX/lib/gio/modules/libgioopenssl.dll" \
+              installer/staging/gio-modules/
           # Bundle the transitive DLL closure; fails if anything is missing
           bash scripts/bundle_windows_dlls.sh "$MINGW_PREFIX/bin" \
-              installer/staging installer/staging/argus_odbc.dll
+              installer/staging installer/staging/argus_odbc.dll \
+              installer/staging/gio-modules/libgioopenssl.dll
           ls -la installer/staging/
 
       - name: Sign driver DLL

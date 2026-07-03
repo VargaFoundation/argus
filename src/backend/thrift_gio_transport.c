@@ -39,6 +39,41 @@ static gboolean gio_accept_any_cert(GTlsConnection *conn,
     return TRUE;
 }
 
+#ifdef _WIN32
+/* GIO finds its TLS backend (glib-networking) through a compile-time
+ * module path that does not exist on end-user machines. The installer
+ * ships the module in a gio-modules\ directory next to the driver DLL;
+ * load it from there, once, before the first TLS connection. */
+static gsize gio_tls_modules_once = 0;
+
+static void gio_load_bundled_tls_modules(void)
+{
+    if (!g_once_init_enter(&gio_tls_modules_once))
+        return;
+
+    HMODULE self = NULL;
+    char path[MAX_PATH];
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)&gio_load_bundled_tls_modules, &self) &&
+        GetModuleFileNameA(self, path, sizeof(path)) > 0) {
+        char *slash = strrchr(path, '\\');
+        if (slash) {
+            *slash = '\0';
+            gchar *dir = g_build_filename(path, "gio-modules", NULL);
+            if (g_file_test(dir, G_FILE_TEST_IS_DIR)) {
+                g_io_modules_scan_all_in_directory(dir);
+                ARGUS_LOG_DEBUG("GIO transport: loaded TLS modules from %s",
+                                dir);
+            }
+            g_free(dir);
+        }
+    }
+
+    g_once_init_leave(&gio_tls_modules_once, 1);
+}
+#endif /* _WIN32 */
+
 static gboolean gio_open(ThriftTransport *transport, GError **error)
 {
     ArgusGioTransport *t = ARGUS_GIO_TRANSPORT(transport);
@@ -56,6 +91,9 @@ static gboolean gio_open(ThriftTransport *transport, GError **error)
     }
 
     if (t->use_tls) {
+#ifdef _WIN32
+        gio_load_bundled_tls_modules();
+#endif
         GSocketConnectable *identity =
             G_SOCKET_CONNECTABLE(g_network_address_new(t->hostname,
                                                        (guint16)t->port));

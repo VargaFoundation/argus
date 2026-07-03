@@ -47,6 +47,12 @@ Section "Argus ODBC Driver" SecDriver
     File "argus_odbc.dll"
     File /nonfatal "*.dll"
 
+    ; GIO TLS modules (glib-networking), loaded by the driver from
+    ; gio-modules\ for TLS over binary Thrift (Hive/Impala)
+    SetOutPath "$INSTDIR\gio-modules"
+    File /nonfatal "gio-modules\*.dll"
+    SetOutPath "$INSTDIR"
+
     ; Store install directory
     WriteRegStr HKLM "Software\Argus ODBC Driver" "InstallDir" "$INSTDIR"
 
@@ -110,6 +116,8 @@ Section "Uninstall"
     RMDir "$SMPROGRAMS\Argus ODBC Driver"
 
     ; Remove files
+    Delete "$INSTDIR\gio-modules\*.dll"
+    RMDir "$INSTDIR\gio-modules"
     Delete "$INSTDIR\*.dll"
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"
