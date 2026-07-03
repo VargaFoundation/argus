@@ -113,31 +113,13 @@ int hive_connect(argus_dbc_t *dbc,
 
     /* ── Binary Thrift transport (TCP socket) ────────────────── */
 
-    /* Create Thrift transport stack (with SSL support if available) */
-#ifdef ARGUS_HAS_THRIFT_SSL
-    if (dbc->ssl_enabled) {
-        ARGUS_LOG_DEBUG("Hive: Creating SSL socket to %s:%d", host, port);
-        conn->socket = (ThriftSocket *)g_object_new(
-            THRIFT_TYPE_SSL_SOCKET,
-            "hostname", host,
-            "port", port,
-            NULL);
-        if (dbc->ssl_ca_file) {
-            ARGUS_LOG_DEBUG("Hive: SSL CA cert specified: %s (configured via system)",
-                           dbc->ssl_ca_file);
-        }
-    } else
-#endif
-    {
-        if (dbc->ssl_enabled) {
-            ARGUS_LOG_WARN("Hive: SSL requested but not available (OpenSSL not installed)");
-        }
-        conn->socket = (ThriftSocket *)g_object_new(
-            THRIFT_TYPE_SOCKET,
-            "hostname", host,
-            "port", port,
-            NULL);
-    }
+    /* GIO transport: portable TCP/TLS with construction-time timeout */
+    if (dbc->ssl_enabled)
+        ARGUS_LOG_DEBUG("Hive: TLS socket to %s:%d (verify=%d)", host, port,
+                        dbc->ssl_verify ? 1 : 0);
+    conn->socket = argus_gio_transport_new(
+        host, port, dbc->ssl_enabled, dbc->ssl_verify, dbc->ssl_ca_file,
+        dbc->socket_timeout_sec > 0 ? (guint)dbc->socket_timeout_sec : 0);
 
     /*
      * For NOSASL: socket → buffered_transport → binary_protocol
@@ -156,15 +138,6 @@ int hive_connect(argus_dbc_t *dbc,
             goto fail;
         }
 
-        /* Set socket timeout before SASL */
-        if (dbc->socket_timeout_sec > 0) {
-            GSocket *gsocket = NULL;
-            g_object_get(conn->socket, "socket", &gsocket, NULL);
-            if (gsocket) {
-                g_socket_set_timeout(gsocket, (guint)dbc->socket_timeout_sec);
-                g_object_unref(gsocket);
-            }
-        }
 
         /* Perform SASL handshake (GSSAPI or PLAIN) */
         char sasl_err[512];
@@ -214,17 +187,6 @@ int hive_connect(argus_dbc_t *dbc,
             goto fail;
         }
 
-        /* Set socket timeout */
-        if (dbc->socket_timeout_sec > 0) {
-            GSocket *gsocket = NULL;
-            g_object_get(conn->socket, "socket", &gsocket, NULL);
-            if (gsocket) {
-                g_socket_set_timeout(gsocket, (guint)dbc->socket_timeout_sec);
-                ARGUS_LOG_DEBUG("Hive: Set socket timeout to %d seconds",
-                                dbc->socket_timeout_sec);
-                g_object_unref(gsocket);
-            }
-        }
     }
 
 setup_protocol:

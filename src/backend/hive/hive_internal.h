@@ -3,16 +3,11 @@
 
 #include <glib-object.h>
 #include <thrift/c_glib/thrift.h>
-#include <thrift/c_glib/transport/thrift_socket.h>
+#include "../thrift_gio_transport.h"
 #include <thrift/c_glib/transport/thrift_buffered_transport.h>
 #include <thrift/c_glib/transport/thrift_framed_transport.h>
 #include <thrift/c_glib/protocol/thrift_binary_protocol.h>
 
-/* SSL support (requires OpenSSL) */
-#if __has_include(<openssl/ssl.h>)
-#include <thrift/c_glib/transport/thrift_ssl_socket.h>
-#define ARGUS_HAS_THRIFT_SSL 1
-#endif
 
 #include "argus/types.h"
 #include "argus/backend.h"
@@ -23,7 +18,7 @@
 
 /* Hive connection state */
 typedef struct hive_conn {
-    ThriftSocket           *socket;         /* NULL in HTTP mode */
+    ThriftTransport        *socket;    /* ArgusGioTransport; NULL in HTTP mode */
     ThriftTransport        *transport;      /* buffered, framed, or HTTP */
     ThriftProtocol         *protocol;
     TCLIServiceIf          *client;

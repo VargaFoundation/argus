@@ -55,6 +55,7 @@ endif()
 if(ARGUS_BUILD_THRIFT_BACKENDS)
     list(APPEND ARGUS_SOURCES
         backend/thrift_sasl.c
+        backend/thrift_gio_transport.c
         backend/hive/hive_backend.c
         backend/hive/hive_session.c
         backend/hive/hive_query.c
