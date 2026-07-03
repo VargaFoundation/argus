@@ -17,8 +17,8 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 
 | `BACKEND=` | Engine | Protocol | Build dependency | In Windows installer |
 |------------|--------|----------|------------------|----------------------|
-| `hive` | Apache Hive — also Spark Thrift Server and Flink SQL Gateway (HiveServer2 protocol) | Thrift binary or HTTP | `thrift_c_glib` | no |
-| `impala` | Apache Impala | Thrift | `thrift_c_glib` | no |
+| `hive` | Apache Hive — also Spark Thrift Server and Flink SQL Gateway (HiveServer2 protocol) | Thrift binary or HTTP | `thrift_c_glib` | yes |
+| `impala` | Apache Impala | Thrift | `thrift_c_glib` | yes |
 | `trino` | Trino | HTTP/JSON | libcurl + json-glib | yes |
 | `phoenix` | Apache Phoenix (Avatica) | HTTP/JSON | libcurl + json-glib | yes |
 | `pinot` | Apache Pinot | HTTP/JSON | libcurl + json-glib | yes |
@@ -28,7 +28,7 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 | `flightsql` | Dremio / InfluxDB 3 / any Arrow Flight SQL server | gRPC / Arrow | arrow-flight-sql (C++) | no |
 | `kudu` | Apache Kudu (deprecated — prefer `BACKEND=impala`) | kudu_client | libkudu_client | no |
 
-The Windows installer ships the HTTP/JSON backends (Trino, Phoenix, Pinot, Druid, BigQuery); the Thrift, MySQL, Flight SQL and Kudu backends need dependencies that MSYS2 does not provide.
+The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid and BigQuery; MySQL, Flight SQL and Kudu need dependencies MSYS2 does not provide. Hive/Impala speak through a GIO socket transport (portable, with timeouts and TLS); on Windows, TLS over *binary* Thrift additionally needs the glib-networking GIO module — the HTTP transport does TLS through libcurl and works everywhere.
 
 ### Production Features
 
@@ -90,8 +90,12 @@ cd build && ctest --output-on-failure -L unit
 pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake \
           mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf \
           mingw-w64-ucrt-x86_64-glib2 mingw-w64-ucrt-x86_64-curl \
-          mingw-w64-ucrt-x86_64-json-glib mingw-w64-ucrt-x86_64-cmocka
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          mingw-w64-ucrt-x86_64-json-glib mingw-w64-ucrt-x86_64-openssl \
+          mingw-w64-ucrt-x86_64-thrift mingw-w64-ucrt-x86_64-cmocka
+# thrift c_glib runtime (MSYS2 only ships the compiler):
+bash scripts/build-thrift-c-glib.sh "$PWD/thrift-c-glib-prefix" 0.23.0
+PKG_CONFIG_PATH="$PWD/thrift-c-glib-prefix/lib/pkgconfig" \
+    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
