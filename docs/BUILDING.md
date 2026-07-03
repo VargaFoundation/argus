@@ -54,9 +54,18 @@ pacman -S \
     mingw-w64-ucrt-x86_64-cmocka
 ```
 
-MSYS2 has no `thrift_c_glib`, so the Hive/Impala backends are not available on
-Windows; the build auto-detects this and ships Trino/Phoenix/Pinot/Druid. Add
-`mingw-w64-ucrt-x86_64-nsis` to build the installer.
+MSYS2 ships the thrift compiler (`mingw-w64-ucrt-x86_64-thrift`) but not the
+c_glib runtime. Build the portable subset once, then point pkg-config at it:
+
+```bash
+bash scripts/build-thrift-c-glib.sh "$PWD/thrift-c-glib-prefix" 0.23.0
+PKG_CONFIG_PATH="$PWD/thrift-c-glib-prefix/lib/pkgconfig" \
+    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+```
+
+Hive/Impala then build on Windows (they use Argus's GIO socket transport,
+not thrift's POSIX sockets). Add `mingw-w64-ucrt-x86_64-nsis` to build the
+installer.
 
 ## Building
 

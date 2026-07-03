@@ -57,7 +57,7 @@ Section "Argus ODBC Driver" SecDriver
     WriteRegStr HKLM "SOFTWARE\ODBC\ODBCINST.INI\Argus ODBC Driver" \
         "Setup" "$INSTDIR\argus_odbc.dll"
     WriteRegStr HKLM "SOFTWARE\ODBC\ODBCINST.INI\Argus ODBC Driver" \
-        "Description" "Argus ODBC Driver for Trino, Phoenix, Pinot, Druid, and BigQuery"
+        "Description" "Argus ODBC Driver for Hive, Impala, Trino, Phoenix, Pinot, Druid, and BigQuery"
     WriteRegStr HKLM "SOFTWARE\ODBC\ODBCINST.INI\Argus ODBC Driver" \
         "CompanyName" "Varga Foundation"
     WriteRegDWORD HKLM "SOFTWARE\ODBC\ODBCINST.INI\Argus ODBC Driver" \
