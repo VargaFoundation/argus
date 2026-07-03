@@ -27,6 +27,11 @@ openssl pkcs12 -export -in "$DIR/server-cert.pem" -inkey "$DIR/server-key.pem" \
     -certfile "$DIR/ca-cert.pem" -out "$DIR/server.p12" \
     -name trino -passout pass:changeit
 
+# openssl writes the keystore 0600 for the generating user; the Trino
+# container reads it as its own uid (1000), which only matches by luck.
+# Test-only material — make it world-readable.
+chmod 644 "$DIR/server.p12"
+
 # Create Java truststore with CA cert
 keytool -importcert -noprompt -alias argus-ca \
     -file "$DIR/ca-cert.pem" -keystore "$DIR/truststore.jks" \

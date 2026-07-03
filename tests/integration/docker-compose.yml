@@ -31,7 +31,9 @@ services:
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      # /v1/info answers 200 while the server is still starting; wait for
+      # "starting":false or queries right after the healthcheck can fail.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/v1/info | grep -q '\"starting\":false'"]
       interval: 10s
       timeout: 10s
       retries: 12
@@ -52,7 +54,7 @@ services:
       - ./certs/server.p12:/etc/trino/server.p12:ro
       - ./trino-ssl-config/config.properties:/etc/trino/config.properties:ro
     healthcheck:
-      test: ["CMD", "curl", "-kf", "https://localhost:8443/v1/info"]
+      test: ["CMD-SHELL", "curl -kfsS https://localhost:8443/v1/info | grep -q '\"starting\":false'"]
       interval: 10s
       timeout: 10s
       retries: 30
