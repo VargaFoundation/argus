@@ -9,7 +9,9 @@ services:
       - "10002:10002"   # HiveServer2 Web UI
     environment:
       SERVICE_NAME: hiveserver2
-      IS_RESUME: "true"
+      # IS_RESUME must stay unset: fresh containers need the entrypoint to
+      # run schematool -initSchema, or HiveServer2 loops without ever
+      # opening the Thrift port.
       SERVICE_OPTS: >-
         -Dhive.server2.authentication=NOSASL
         -Dhive.server2.thrift.port=10000
