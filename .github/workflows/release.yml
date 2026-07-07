@@ -142,10 +142,10 @@ jobs:
     environment: main
 
     env:
-      # Gate signing on a repository VARIABLE (same as ci.yml): secrets stay
-      # configured, but signing only runs when explicitly enabled, so broken
-      # Azure credentials cannot block a release.
-      SIGN_ENABLED: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+      # Attempt signing whenever the Azure secret is configured. The signing
+      # steps are continue-on-error, so a broken certificate degrades to an
+      # unsigned release instead of blocking it.
+      SIGN_ENABLED: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
 
     defaults:
       run:
@@ -215,6 +215,7 @@ jobs:
 
       - name: Sign driver DLL
         if: env.SIGN_ENABLED != ''
+        continue-on-error: true
         uses: azure/trusted-signing-action@v0.5.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -236,6 +237,7 @@ jobs:
 
       - name: Sign installer
         if: env.SIGN_ENABLED != ''
+        continue-on-error: true
         uses: azure/trusted-signing-action@v0.5.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
