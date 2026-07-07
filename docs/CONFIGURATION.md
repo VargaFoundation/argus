@@ -102,6 +102,16 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=hive;DATABASE=def
 - Default port: 10000
 - Protocol version: V10
 - Database set via `use:database` config in OpenSession
+- **Authentication** (`AuthMech`):
+  - `NOSASL` (default): no SASL layer.
+  - `PLAIN` / `LDAP`: SASL PLAIN with `UID`/`PWD`.
+  - `KERBEROS` / `GSSAPI`: SASL GSSAPI over binary Thrift. On Linux/macOS
+    it uses the system GSSAPI (a `kinit` ticket or keytab); on **Windows**
+    it uses the native SSPI Kerberos of the logged-in domain user — no
+    MIT Kerberos install required. The service principal defaults to
+    `hive/<host>`.
+  - Over HTTP transport (`TransportMode=HTTP`), `KERBEROS` uses SPNEGO via
+    libcurl, and `JWT`/`BEARER`/`DATABRICKS` send a token from `PWD`.
 
 ### Impala (BACKEND=impala)
 
@@ -114,6 +124,9 @@ DRIVER=Argus;BACKEND=impala;HOST=impala.example.com;PORT=21050;UID=impala;DATABA
 - Protocol version: V6
 - Database set via `USE <db>` statement after connect
 - Same type system as Hive
+- **Authentication** (`AuthMech`): same as Hive — `NOSASL` (default),
+  `PLAIN`/`LDAP`, and `KERBEROS`/`GSSAPI` (system GSSAPI on Linux/macOS,
+  native SSPI on Windows). The service principal defaults to `impala/<host>`.
 
 ### Trino (BACKEND=trino)
 

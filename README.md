@@ -42,7 +42,7 @@ The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery
 
 #### SSL/TLS and Authentication
 - **Trino**: full HTTPS with certificate verification, plus OAuth2 — client credentials, device code (RFC 8628) and authorization code with PKCE + browser SSO, with OIDC discovery
-- **Hive/Impala**: Thrift SSL sockets, HTTP transport with SPNEGO/Kerberos or Bearer/JWT tokens (Databricks personal access tokens)
+- **Hive/Impala**: Thrift SSL sockets; Kerberos over binary Thrift (system GSSAPI on Linux/macOS, native SSPI on Windows — no MIT Kerberos needed); HTTP transport with SPNEGO/Kerberos or Bearer/JWT tokens (Databricks personal access tokens)
 - Certificate, key and CA configuration; hostname verification toggle
 
 #### Connection Resilience

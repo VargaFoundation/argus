@@ -13,6 +13,12 @@
 #include <gssapi/gssapi_krb5.h>
 #endif
 
+#ifdef ARGUS_HAS_SSPI
+#define SECURITY_WIN32
+#include <security.h>
+#include <sspi.h>
+#endif
+
 /*
  * Thrift SASL transport protocol:
  *
@@ -391,7 +397,245 @@ cleanup:
     return rc;
 }
 
-#else /* !ARGUS_HAS_GSSAPI */
+#elif defined(ARGUS_HAS_SSPI)  /* Windows-native Kerberos via SSPI */
+
+/*
+ * Windows has no GSSAPI; its Kerberos lives behind SSPI (secur32). The
+ * SASL wire protocol is identical to the GSSAPI path above — only the
+ * token generation (InitializeSecurityContext instead of
+ * gss_init_sec_context) and the security-layer wrap/unwrap
+ * (Encrypt/DecryptMessage instead of gss_wrap/gss_unwrap) differ. The
+ * default credentials come from the logged-in Windows domain user.
+ */
+
+static void sspi_errmsg(SECURITY_STATUS st, const char *what,
+                        char *errmsg, size_t errmsg_size)
+{
+    char *sys = NULL;
+    FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                   FORMAT_MESSAGE_FROM_SYSTEM |
+                   FORMAT_MESSAGE_IGNORE_INSERTS,
+                   NULL, (DWORD)st,
+                   MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                   (LPSTR)&sys, 0, NULL);
+    snprintf(errmsg, errmsg_size, "%s failed (0x%08lx): %s",
+             what, (unsigned long)st, sys ? sys : "unknown");
+    if (sys) {
+        /* strip trailing CRLF the formatter adds */
+        for (char *p = errmsg; *p; p++)
+            if (*p == '\r' || *p == '\n') { *p = '\0'; break; }
+        LocalFree(sys);
+    }
+}
+
+int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
+                                       const char *service_name,
+                                       const char *hostname,
+                                       char *errmsg, size_t errmsg_size)
+{
+    CredHandle cred;
+    CtxtHandle ctx;
+    bool have_cred = false, have_ctx = false;
+    SECURITY_STATUS st;
+    int rc = -1;
+
+    /* SSPI SPN uses "service/host" (GSSAPI uses "service@host"). */
+    char spn[512];
+    snprintf(spn, sizeof(spn), "%s/%s",
+             service_name ? service_name : "impala", hostname);
+
+    TimeStamp expiry;
+    st = AcquireCredentialsHandleA(NULL, (SEC_CHAR *)"Kerberos",
+                                   SECPKG_CRED_OUTBOUND, NULL, NULL,
+                                   NULL, NULL, &cred, &expiry);
+    if (st != SEC_E_OK) {
+        sspi_errmsg(st, "AcquireCredentialsHandle", errmsg, errmsg_size);
+        return -1;
+    }
+    have_cred = true;
+
+    if (sasl_write_msg(transport, TSASL_START,
+                       (const guint8 *)"GSSAPI", 6,
+                       errmsg, errmsg_size) != 0)
+        goto cleanup;
+
+    const ULONG req_flags = ISC_REQ_MUTUAL_AUTH | ISC_REQ_ALLOCATE_MEMORY |
+                            ISC_REQ_CONFIDENTIALITY | ISC_REQ_INTEGRITY;
+
+    SecBuffer in_buf = {0, SECBUFFER_TOKEN, NULL};
+    SecBufferDesc in_desc = {SECBUFFER_VERSION, 1, &in_buf};
+
+    for (;;) {
+        SecBuffer out_buf = {0, SECBUFFER_TOKEN, NULL};
+        SecBufferDesc out_desc = {SECBUFFER_VERSION, 1, &out_buf};
+        ULONG ret_flags = 0;
+
+        st = InitializeSecurityContextA(
+            &cred,
+            have_ctx ? &ctx : NULL,
+            (SEC_CHAR *)spn,
+            req_flags, 0, SECURITY_NATIVE_DREP,
+            have_ctx ? &in_desc : NULL,
+            0, &ctx, &out_desc, &ret_flags, &expiry);
+        have_ctx = true;
+
+        if (in_buf.pvBuffer) {
+            g_free(in_buf.pvBuffer);
+            in_buf.pvBuffer = NULL;
+            in_buf.cbBuffer = 0;
+        }
+
+        if (st != SEC_E_OK && st != SEC_I_CONTINUE_NEEDED) {
+            sspi_errmsg(st, "InitializeSecurityContext", errmsg, errmsg_size);
+            if (out_buf.pvBuffer) FreeContextBuffer(out_buf.pvBuffer);
+            goto cleanup;
+        }
+
+        /* Always forward our token to the server (may be empty). */
+        int wrc = sasl_write_msg(transport, TSASL_OK,
+                                 (const guint8 *)out_buf.pvBuffer,
+                                 (guint32)out_buf.cbBuffer,
+                                 errmsg, errmsg_size);
+        if (out_buf.pvBuffer) FreeContextBuffer(out_buf.pvBuffer);
+        if (wrc != 0) goto cleanup;
+
+        if (st == SEC_E_OK) {
+            /* Context established: SASL security-layer (QoP) negotiation. */
+            guint8 status;
+            guint8 *srv_buf = NULL;
+            guint32 srv_len = 0;
+            if (sasl_read_msg(transport, &status, &srv_buf, &srv_len,
+                              errmsg, errmsg_size) != 0)
+                goto cleanup;
+
+            if (status == TSASL_COMPLETE) {
+                g_free(srv_buf);
+                rc = 0;
+                goto cleanup;
+            }
+            if (status != TSASL_OK || srv_len == 0) {
+                snprintf(errmsg, errmsg_size,
+                         "Unexpected SASL status %d after context complete",
+                         (int)status);
+                g_free(srv_buf);
+                goto cleanup;
+            }
+
+            /* Unwrap the server's security-layer token. */
+            SecBuffer ubufs[2];
+            ubufs[0].BufferType = SECBUFFER_STREAM;
+            ubufs[0].cbBuffer = srv_len;
+            ubufs[0].pvBuffer = srv_buf;
+            ubufs[1].BufferType = SECBUFFER_DATA;
+            ubufs[1].cbBuffer = 0;
+            ubufs[1].pvBuffer = NULL;
+            SecBufferDesc udesc = {SECBUFFER_VERSION, 2, ubufs};
+            ULONG qop = 0;
+            st = DecryptMessage(&ctx, &udesc, 0, &qop);
+            if (st != SEC_E_OK) {
+                sspi_errmsg(st, "DecryptMessage (QoP)", errmsg, errmsg_size);
+                g_free(srv_buf);
+                goto cleanup;
+            }
+            g_free(srv_buf);
+
+            /* Reply auth-only (no security layer) with our max buffer. */
+            SecPkgContext_Sizes sizes;
+            st = QueryContextAttributesA(&ctx, SECPKG_ATTR_SIZES, &sizes);
+            if (st != SEC_E_OK) {
+                sspi_errmsg(st, "QueryContextAttributes", errmsg, errmsg_size);
+                goto cleanup;
+            }
+
+            guint8 qop_resp[4] = {0x01, 0x00, 0x40, 0x00}; /* auth-only, 16 KiB */
+            guint8 *token = g_malloc(sizes.cbSecurityTrailer);
+            guint8 *pad = g_malloc(sizes.cbBlockSize ? sizes.cbBlockSize : 1);
+            guint8 data[4];
+            memcpy(data, qop_resp, 4);
+
+            SecBuffer wbufs[3];
+            wbufs[0].BufferType = SECBUFFER_TOKEN;
+            wbufs[0].cbBuffer = sizes.cbSecurityTrailer;
+            wbufs[0].pvBuffer = token;
+            wbufs[1].BufferType = SECBUFFER_DATA;
+            wbufs[1].cbBuffer = 4;
+            wbufs[1].pvBuffer = data;
+            wbufs[2].BufferType = SECBUFFER_PADDING;
+            wbufs[2].cbBuffer = sizes.cbBlockSize;
+            wbufs[2].pvBuffer = pad;
+            SecBufferDesc wdesc = {SECBUFFER_VERSION, 3, wbufs};
+
+            st = EncryptMessage(&ctx, SECQOP_WRAP_NO_ENCRYPT, &wdesc, 0);
+            if (st != SEC_E_OK) {
+                sspi_errmsg(st, "EncryptMessage (QoP)", errmsg, errmsg_size);
+                g_free(token); g_free(pad);
+                goto cleanup;
+            }
+
+            /* SSPI leaves the wrapped message split across the buffers;
+             * concatenate token|data|padding into one SASL payload. */
+            guint32 wlen = wbufs[0].cbBuffer + wbufs[1].cbBuffer +
+                           wbufs[2].cbBuffer;
+            guint8 *wmsg = g_malloc(wlen);
+            guint32 off = 0;
+            memcpy(wmsg + off, wbufs[0].pvBuffer, wbufs[0].cbBuffer);
+            off += wbufs[0].cbBuffer;
+            memcpy(wmsg + off, wbufs[1].pvBuffer, wbufs[1].cbBuffer);
+            off += wbufs[1].cbBuffer;
+            memcpy(wmsg + off, wbufs[2].pvBuffer, wbufs[2].cbBuffer);
+            g_free(token); g_free(pad);
+
+            wrc = sasl_write_msg(transport, TSASL_OK, wmsg, wlen,
+                                 errmsg, errmsg_size);
+            g_free(wmsg);
+            if (wrc != 0) goto cleanup;
+
+            guint8 fstatus;
+            guint8 *fbuf = NULL;
+            guint32 flen = 0;
+            if (sasl_read_msg(transport, &fstatus, &fbuf, &flen,
+                              errmsg, errmsg_size) != 0)
+                goto cleanup;
+            g_free(fbuf);
+            if (fstatus == TSASL_COMPLETE) {
+                rc = 0;
+            } else {
+                snprintf(errmsg, errmsg_size,
+                         "SASL GSSAPI final status=%d (expected COMPLETE)",
+                         (int)fstatus);
+            }
+            goto cleanup;
+        }
+
+        /* SEC_I_CONTINUE_NEEDED: read the server's next token. */
+        guint8 status;
+        guint8 *srv_buf = NULL;
+        guint32 srv_len = 0;
+        if (sasl_read_msg(transport, &status, &srv_buf, &srv_len,
+                          errmsg, errmsg_size) != 0)
+            goto cleanup;
+        if (status == TSASL_ERROR || status == TSASL_BAD) {
+            if (srv_buf && srv_len > 0)
+                snprintf(errmsg, errmsg_size,
+                         "SASL GSSAPI server error: %.*s",
+                         (int)srv_len, (char *)srv_buf);
+            else
+                snprintf(errmsg, errmsg_size,
+                         "SASL GSSAPI server error (status=%d)", (int)status);
+            g_free(srv_buf);
+            goto cleanup;
+        }
+        in_buf.pvBuffer = srv_buf;   /* freed at loop top */
+        in_buf.cbBuffer = srv_len;
+    }
+
+cleanup:
+    if (have_ctx) DeleteSecurityContext(&ctx);
+    if (have_cred) FreeCredentialsHandle(&cred);
+    return rc;
+}
+
+#else /* no Kerberos backend */
 
 int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
                                        const char *service_name,
@@ -407,4 +651,4 @@ int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
     return -1;
 }
 
-#endif /* ARGUS_HAS_GSSAPI */
+#endif /* Kerberos backend selection */
