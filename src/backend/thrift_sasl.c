@@ -196,7 +196,6 @@ int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
     }
 
     /* GSSAPI token loop */
-    bool first = true;
     for (;;) {
         major = gss_init_sec_context(
             &minor,
@@ -251,7 +250,6 @@ int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
         }
         if (output_token.length > 0)
             gss_release_buffer(&minor, &output_token);
-        first = false;
 
         /* If context is complete, check server response */
         if (major == GSS_S_COMPLETE) {

@@ -28,7 +28,8 @@ jobs:
             libcmocka-dev \
             libcurl4-openssl-dev \
             libjson-glib-dev \
-            libmariadb-dev
+            libmariadb-dev \
+            libkrb5-dev
 
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="--coverage"
@@ -291,7 +292,8 @@ jobs:
             libcmocka-dev \
             libcurl4-openssl-dev \
             libjson-glib-dev \
-            libmariadb-dev
+            libmariadb-dev \
+            libkrb5-dev
 
       - name: Generate TLS certificates
         run: bash tests/integration/certs/generate.sh
@@ -365,7 +367,8 @@ jobs:
             libcmocka-dev \
             libcurl4-openssl-dev \
             libjson-glib-dev \
-            libmariadb-dev
+            libmariadb-dev \
+            libkrb5-dev
 
       - name: Configure (ASan + UBSan)
         run: cmake -B build-asan -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON

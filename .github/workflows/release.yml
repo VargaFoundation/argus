@@ -29,7 +29,8 @@ jobs:
             thrift-compiler \
             libcmocka-dev \
             libcurl4-openssl-dev \
-            libjson-glib-dev
+            libjson-glib-dev \
+            libkrb5-dev
 
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
