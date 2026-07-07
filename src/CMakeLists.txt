@@ -104,6 +104,11 @@ if(ARGUS_BUILD_THRIFT_BACKENDS)
             list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS ${GSSAPI_INCLUDE})
             list(APPEND ARGUS_LINK_LIBS ${GSSAPI_LIB})
         endif()
+    elseif(WIN32)
+        # Windows has no GSSAPI; use its native Kerberos via SSPI (secur32).
+        list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_SSPI)
+        list(APPEND ARGUS_LINK_LIBS secur32)
+        message(STATUS "  Kerberos auth: ENABLED (Windows SSPI)")
     endif()
 endif()
 
