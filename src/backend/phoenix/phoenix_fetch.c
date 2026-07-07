@@ -196,6 +196,22 @@ int phoenix_fetch_results(argus_backend_conn_t raw_conn,
         phoenix_get_result_metadata(raw_conn, raw_op, columns, num_cols);
     }
 
+    /* Deliver the inline first frame (from prepareAndExecute / a catalog
+     * RPC) before issuing any Avatica fetch. */
+    if (op->first_frame_ready) {
+        cache->rows = op->first_frame.rows;
+        cache->num_rows = op->first_frame.num_rows;
+        cache->capacity = op->first_frame.capacity;
+        cache->num_cols = op->first_frame.num_cols;
+        cache->current_row = 0;
+        cache->exhausted = op->finished;
+        op->first_frame.rows = NULL;
+        op->first_frame.num_rows = 0;
+        op->first_frame.capacity = 0;
+        op->first_frame_ready = false;
+        return 0;
+    }
+
     /* No more data to fetch */
     if (op->finished) {
         cache->num_rows = 0;

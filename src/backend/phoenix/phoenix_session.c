@@ -249,7 +249,10 @@ int phoenix_connect(argus_dbc_t *dbc,
     json_builder_add_string_value(params, conn_id);
     json_builder_set_member_name(params, "info");
     json_builder_begin_object(params);
-    if (conn->database[0]) {
+    /* Only pass a real schema. "default" is ODBC's generic placeholder,
+     * not a Phoenix schema — sending it triggers SchemaNotFoundException
+     * on unqualified tables. */
+    if (conn->database[0] && g_ascii_strcasecmp(conn->database, "default") != 0) {
         json_builder_set_member_name(params, "schema");
         json_builder_add_string_value(params, conn->database);
     }
@@ -279,6 +282,31 @@ int phoenix_connect(argus_dbc_t *dbc,
 
     conn->connection_id = strdup(conn_id);
     if (parser) g_object_unref(parser);
+
+    /* ODBC defaults to autocommit ON, but Avatica connections start with
+     * autoCommit=false — without this, every UPSERT/DELETE is silently
+     * rolled back at statement close and the data never lands. */
+    {
+        JsonBuilder *sync = json_builder_new();
+        json_builder_begin_object(sync);
+        json_builder_set_member_name(sync, "connectionId");
+        json_builder_add_string_value(sync, conn->connection_id);
+        json_builder_set_member_name(sync, "connProps");
+        json_builder_begin_object(sync);
+        json_builder_set_member_name(sync, "connProps");
+        json_builder_add_string_value(sync, "connPropsWithValues");
+        json_builder_set_member_name(sync, "autoCommit");
+        json_builder_add_boolean_value(sync, TRUE);
+        json_builder_end_object(sync);
+        json_builder_end_object(sync);
+
+        JsonParser *sp = NULL;
+        if (phoenix_avatica_request(conn, "connectionSync", sync, &sp) != 0)
+            ARGUS_LOG_WARN("Phoenix: connectionSync(autoCommit) failed; "
+                           "UPSERT/DELETE may not persist");
+        if (sp) g_object_unref(sp);
+        g_object_unref(sync);
+    }
 
     ARGUS_LOG_INFO("Phoenix connection opened: %s", conn->connection_id);
 
