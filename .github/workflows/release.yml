@@ -141,7 +141,10 @@ jobs:
     environment: main
 
     env:
-      SIGN_ENABLED: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+      # Gate signing on a repository VARIABLE (same as ci.yml): secrets stay
+      # configured, but signing only runs when explicitly enabled, so broken
+      # Azure credentials cannot block a release.
+      SIGN_ENABLED: ${{ vars.AZURE_SIGNING_ACCOUNT }}
 
     defaults:
       run:
