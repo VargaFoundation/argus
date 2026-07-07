@@ -8,15 +8,47 @@
 phoenix_operation_t *phoenix_operation_new(void)
 {
     phoenix_operation_t *op = calloc(1, sizeof(phoenix_operation_t));
+    if (op) argus_row_cache_init(&op->first_frame);
     return op;
 }
 
 void phoenix_operation_free(phoenix_operation_t *op)
 {
     if (!op) return;
+    argus_row_cache_free(&op->first_frame);
     free(op->connection_id);
     free(op->columns);
     free(op);
+}
+
+/* Allocate a server-side statement handle. Avatica rejects
+ * prepareAndExecute with a client-invented statementId
+ * ("missingStatement", empty result), so a createStatement must run
+ * first and its returned id must be used. */
+int phoenix_create_statement(phoenix_conn_t *conn, int *out_stmt_id)
+{
+    JsonBuilder *params = json_builder_new();
+    json_builder_begin_object(params);
+    json_builder_set_member_name(params, "connectionId");
+    json_builder_add_string_value(params, conn->connection_id);
+    json_builder_end_object(params);
+
+    JsonParser *parser = NULL;
+    int rc = phoenix_avatica_request(conn, "createStatement", params, &parser);
+    g_object_unref(params);
+    if (rc != 0) {
+        if (parser) g_object_unref(parser);
+        return -1;
+    }
+
+    JsonObject *o = json_node_get_object(json_parser_get_root(parser));
+    if (!o || !json_object_has_member(o, "statementId")) {
+        g_object_unref(parser);
+        return -1;
+    }
+    *out_stmt_id = (int)json_object_get_int_member(o, "statementId");
+    g_object_unref(parser);
+    return 0;
 }
 
 /* ── Execute a statement via Avatica prepareAndExecute ────────── */
@@ -30,7 +62,13 @@ int phoenix_execute(argus_backend_conn_t raw_conn,
 
     conn->last_error[0] = '\0';
 
-    int stmt_id = conn->next_statement_id++;
+    /* Avatica needs a server-allocated statement handle first. */
+    int stmt_id = 0;
+    if (phoenix_create_statement(conn, &stmt_id) != 0) {
+        snprintf(conn->last_error, sizeof(conn->last_error),
+                 "[Argus][Phoenix] createStatement failed");
+        return -1;
+    }
 
     /* Build prepareAndExecute request */
     JsonBuilder *params = json_builder_new();
@@ -89,7 +127,10 @@ int phoenix_execute(argus_backend_conn_t raw_conn,
                 }
             }
 
-            /* Parse initial frame data */
+            /* Parse the initial frame: prepareAndExecute returns the first
+             * (often only) batch of rows inline. Stash them for the first
+             * fetch — discarding them here is what made every SELECT return
+             * zero rows. */
             if (json_object_has_member(result, "firstFrame")) {
                 JsonObject *frame = json_object_get_object_member(result,
                                                                     "firstFrame");
@@ -100,6 +141,11 @@ int phoenix_execute(argus_backend_conn_t raw_conn,
                 if (frame && json_object_has_member(frame, "offset")) {
                     op->offset = (int)json_object_get_int_member(frame,
                                                                    "offset");
+                }
+                if (frame && op->num_cols > 0) {
+                    phoenix_parse_frame(frame, &op->first_frame, op->num_cols);
+                    op->offset += (int)op->first_frame.num_rows;
+                    op->first_frame_ready = true;
                 }
             }
         }

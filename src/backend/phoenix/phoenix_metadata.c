@@ -55,6 +55,16 @@ static int phoenix_catalog_request(phoenix_conn_t *conn,
         if (frame && json_object_has_member(frame, "done")) {
             op->finished = json_object_get_boolean_member(frame, "done");
         }
+        if (frame && json_object_has_member(frame, "offset")) {
+            op->offset = (int)json_object_get_int_member(frame, "offset");
+        }
+        /* Stash the inline rows so the ODBC fetch delivers them (catalog
+         * responses return their rows in the first frame too). */
+        if (frame && op->num_cols > 0) {
+            phoenix_parse_frame(frame, &op->first_frame, op->num_cols);
+            op->offset += (int)op->first_frame.num_rows;
+            op->first_frame_ready = true;
+        }
     } else {
         op->finished = true;
     }

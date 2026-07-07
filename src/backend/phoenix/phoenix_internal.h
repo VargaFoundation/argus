@@ -40,6 +40,11 @@ typedef struct phoenix_operation {
     bool                finished;
     int                 offset;          /* fetch offset for Avatica fetch */
 
+    /* Rows returned inline by prepareAndExecute / a catalog RPC in the
+     * first frame, stashed here until the ODBC layer's first fetch. */
+    argus_row_cache_t   first_frame;
+    bool                first_frame_ready;
+
     /* Cached column metadata */
     argus_column_desc_t *columns;
     int                  num_cols;
@@ -53,6 +58,9 @@ SQLSMALLINT phoenix_type_decimal_digits(SQLSMALLINT sql_type);
 /* Helper to create/free operations */
 phoenix_operation_t *phoenix_operation_new(void);
 void phoenix_operation_free(phoenix_operation_t *op);
+
+/* Allocate a server-side Avatica statement; returns 0 and sets *out_stmt_id. */
+int phoenix_create_statement(phoenix_conn_t *conn, int *out_stmt_id);
 
 /* CURL response buffer */
 typedef struct phoenix_response {
