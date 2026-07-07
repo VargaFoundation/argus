@@ -298,3 +298,4 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             artifacts/argus-odbc-*
+            artifacts/argus-odbc_*
