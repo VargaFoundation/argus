@@ -182,6 +182,7 @@ jobs:
             mingw-w64-ucrt-x86_64-curl
             mingw-w64-ucrt-x86_64-json-glib
             mingw-w64-ucrt-x86_64-glib-networking
+            mingw-w64-ucrt-x86_64-libmariadbclient
             mingw-w64-ucrt-x86_64-openssl
             mingw-w64-ucrt-x86_64-thrift
             mingw-w64-ucrt-x86_64-cmocka
