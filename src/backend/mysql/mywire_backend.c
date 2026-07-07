@@ -1,6 +1,8 @@
 #include "mywire_internal.h"
 #include "argus/compat.h"
+#include "argus/error.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 /* ── Connection lifecycle ────────────────────────────────────── */
@@ -40,20 +42,37 @@ static int mywire_connect(argus_dbc_t *dbc,
         mysql_options(conn->mysql, MYSQL_OPT_CONNECT_TIMEOUT, &t);
     }
 
-    /* SSL/TLS, driven by the same DBC attributes as the other backends. */
-    if (dbc && dbc->ssl_enabled) {
-        mysql_ssl_set(conn->mysql,
-                      dbc->ssl_key_file, dbc->ssl_cert_file,
-                      dbc->ssl_ca_file, NULL, NULL);
-        my_bool verify = dbc->ssl_verify ? 1 : 0;
-        mysql_options(conn->mysql,
-                      MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify);
+    /* SSL/TLS, driven by the same DBC attributes as the other backends.
+     * SSL=0 must be honoured explicitly: libmariadb >= 3.4 negotiates TLS
+     * whenever the server offers it, so without MYSQL_OPT_SSL_ENFORCE=0 a
+     * plaintext-only server (ClickHouse :9004, a default StarRocks/Doris FE)
+     * is unreachable even with SSL=0. */
+    {
+        my_bool enforce = (dbc && dbc->ssl_enabled) ? 1 : 0;
+        if (dbc && dbc->ssl_enabled) {
+            mysql_ssl_set(conn->mysql,
+                          dbc->ssl_key_file, dbc->ssl_cert_file,
+                          dbc->ssl_ca_file, NULL, NULL);
+            my_bool verify = dbc->ssl_verify ? 1 : 0;
+            mysql_options(conn->mysql,
+                          MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify);
+        }
+        mysql_options(conn->mysql, MYSQL_OPT_SSL_ENFORCE, &enforce);
     }
 
     unsigned int p = (port > 0) ? (unsigned int)port : 3306;
     if (!mysql_real_connect(conn->mysql, host, username, password,
                             (database && *database) ? database : NULL,
                             p, NULL, 0)) {
+        /* Surface the real driver error (auth failed, TLS required, unknown
+         * database, ...) before the handle is closed. */
+        if (dbc) {
+            const char *e = mysql_error(conn->mysql);
+            char msg[512];
+            snprintf(msg, sizeof(msg), "[Argus][MySQL-wire] %s",
+                     (e && *e) ? e : "connection failed");
+            argus_set_error(&dbc->diag, "08001", msg, 0);
+        }
         mysql_close(conn->mysql);
         free(conn);
         return -1;
