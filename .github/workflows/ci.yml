@@ -305,14 +305,14 @@ jobs:
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
             mariadb influxdb3 influxdb3-seed trino pinot bigquery
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
-            trino-ssl
+            trino-ssl hiveserver2
 
       - name: Service diagnostics
         if: failure()
         run: |
           docker ps -a
           docker compose -f tests/integration/docker-compose.yml logs --tail 80 \
-            trino-ssl trino pinot mariadb
+            trino-ssl trino pinot mariadb hiveserver2 bigquery
 
       - name: Configure
         run: cmake -B build -DBUILD_INTEGRATION_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
@@ -333,10 +333,12 @@ jobs:
           PINOT_PORT: "8000"
           BQ_ENDPOINT: "http://127.0.0.1:9050"
           BQ_PROJECT: "test"
+          HIVE_HOST: "127.0.0.1"
+          HIVE_PORT: "10000"
         # Run the backends whose deps are installed here (Trino, MySQL-wire,
         # Pinot, BigQuery). Flight SQL / ADBC require Arrow and run in their
         # own setup.
-        run: cd build && ctest --output-on-failure -L integration -R "trino|mysql|pinot|bigquery"
+        run: cd build && ctest --output-on-failure -L integration -R "trino|mysql|pinot|bigquery|hive_connect|hive_query"
 
       - name: Stop services
         if: always()
