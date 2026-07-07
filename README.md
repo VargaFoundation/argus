@@ -24,11 +24,11 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 | `pinot` | Apache Pinot | HTTP/JSON | libcurl + json-glib | yes |
 | `druid` | Apache Druid | HTTP/JSON | libcurl + json-glib | yes |
 | `bigquery` | Google BigQuery — incl. sovereign clouds (S3NS): every Google endpoint is configurable | REST/JSON | libcurl + json-glib (+ OpenSSL for key files) | yes |
-| `mysql` | StarRocks / Doris / ClickHouse / MySQL / MariaDB | MySQL wire | libmariadb | no |
+| `mysql` | StarRocks / Doris / ClickHouse / MySQL / MariaDB | MySQL wire | libmariadb | yes |
 | `flightsql` | Dremio / InfluxDB 3 / any Arrow Flight SQL server | gRPC / Arrow | arrow-flight-sql (C++) | no |
 | `kudu` | Apache Kudu (deprecated — prefer `BACKEND=impala`) | kudu_client | libkudu_client | no |
 
-The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid and BigQuery; MySQL, Flight SQL and Kudu need dependencies MSYS2 does not provide. Hive/Impala speak through a GIO socket transport (portable, with timeouts and TLS); the installer bundles the glib-networking TLS backend, which the driver loads automatically.
+The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery and MySQL-wire (StarRocks/Doris/ClickHouse); Flight SQL and Kudu need dependencies MSYS2 does not provide. Hive/Impala speak through a GIO socket transport (portable, with timeouts and TLS); the installer bundles the glib-networking TLS backend, which the driver loads automatically.
 
 ### Production Features
 
@@ -91,6 +91,7 @@ pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake \
           mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-pkgconf \
           mingw-w64-ucrt-x86_64-glib2 mingw-w64-ucrt-x86_64-curl \
           mingw-w64-ucrt-x86_64-json-glib mingw-w64-ucrt-x86_64-openssl \
+          mingw-w64-ucrt-x86_64-glib-networking mingw-w64-ucrt-x86_64-libmariadbclient \
           mingw-w64-ucrt-x86_64-thrift mingw-w64-ucrt-x86_64-cmocka
 # thrift c_glib runtime (MSYS2 only ships the compiler):
 bash scripts/build-thrift-c-glib.sh "$PWD/thrift-c-glib-prefix" 0.23.0
