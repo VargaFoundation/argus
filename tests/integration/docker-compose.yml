@@ -16,11 +16,15 @@ services:
         -Dhive.server2.authentication=NOSASL
         -Dhive.server2.thrift.port=10000
     healthcheck:
-      test: ["CMD", "beeline", "-u", "jdbc:hive2://localhost:10000", "-e", "SELECT 1"]
-      interval: 10s
-      timeout: 10s
-      retries: 12
-      start_period: 30s
+      # First boot runs schematool -initSchema before HiveServer2 opens the
+      # Thrift port: allow several minutes before giving up. auth=noSasl is
+      # required — the server runs NOSASL and closes plain-SASL beeline
+      # connections, so a URL without it can never turn healthy.
+      test: ["CMD", "beeline", "-u", "jdbc:hive2://localhost:10000/default;auth=noSasl", "-e", "SELECT 1"]
+      interval: 15s
+      timeout: 15s
+      retries: 30
+      start_period: 120s
 
   # mem_limit keeps the JVM honest: the stock image uses
   # MaxRAMPercentage=80, which sizes the heap on the whole machine when
