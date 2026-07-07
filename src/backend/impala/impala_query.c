@@ -3,6 +3,10 @@
 #include <string.h>
 #include <stdio.h>
 
+/* Defined below; used by impala_execute to drain DML operations. */
+int impala_get_operation_status(argus_backend_conn_t raw_conn,
+                                argus_backend_op_t raw_op, bool *finished);
+
 /* ── Create/free operation handles ────────────────────────────── */
 
 impala_operation_t *impala_operation_new(void)
@@ -88,6 +92,31 @@ int impala_execute(argus_backend_conn_t raw_conn,
 
     g_object_unref(req);
     g_object_unref(resp);
+
+    /* Impala's ExecuteStatement returns as soon as the query is submitted,
+     * even with runAsync=false. For a SELECT the fetch loop later drives the
+     * operation to completion, but a DML/DDL statement is never fetched, so
+     * without waiting here the INSERT/UPDATE/DELETE is abandoned when the
+     * statement is closed and no rows are written — a silent data loss.
+     * Drive the operation to a terminal state now. (Hive's ExecuteStatement
+     * already blocks until completion, which is why only Impala lost DML.) */
+    if (op->op_handle) {
+        conn->last_error[0] = '\0';
+        bool finished = false;
+        /* Safety cap: ~10 min at 20 ms/poll, so a stuck operation cannot
+         * hang the caller forever. */
+        for (int i = 0; !finished && i < 30000; i++) {
+            if (impala_get_operation_status(conn, op, &finished) != 0)
+                break;   /* status RPC failed; let the caller proceed */
+            if (!finished)
+                g_usleep(20000);   /* 20 ms */
+        }
+        if (conn->last_error[0]) {
+            /* The operation reached ERROR_STATE (message already captured). */
+            impala_operation_free(op);
+            return -1;
+        }
+    }
 
     *out_op = op;
     return 0;
