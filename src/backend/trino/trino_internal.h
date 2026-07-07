@@ -20,6 +20,7 @@ typedef struct trino_conn {
     CURL               *curl;
     char               *base_url;       /* e.g. "http://host:port" or "https://..." */
     char               *user;
+    bool                user_explicit;  /* UID given (vs the "argus" default) */
     char               *password;       /* Basic password or Bearer token (NULL if none) */
     trino_auth_mode_t   auth_mode;
     char               *catalog;

@@ -688,8 +688,15 @@ static void trino_build_default_headers(trino_conn_t *conn)
 
     char header_buf[2048];
 
-    snprintf(header_buf, sizeof(header_buf), "X-Trino-User: %s", conn->user);
-    conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+    /* With a bearer token Trino derives the principal from the token; a
+     * default X-Trino-User ("argus") then triggers an impersonation
+     * conflict. Send the header only when it carries a real identity: an
+     * explicit UID, or a non-token auth mode. */
+    if (conn->user_explicit || conn->auth_mode != TRINO_AUTH_BEARER) {
+        snprintf(header_buf, sizeof(header_buf), "X-Trino-User: %s", conn->user);
+        conn->default_headers =
+            curl_slist_append(conn->default_headers, header_buf);
+    }
 
     snprintf(header_buf, sizeof(header_buf), "X-Trino-Catalog: %s", conn->catalog);
     conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
@@ -770,7 +777,8 @@ int trino_connect(argus_dbc_t *dbc,
 
     ARGUS_LOG_DEBUG("Trino base URL: %s (SSL=%d)", conn->base_url, conn->ssl_enabled);
 
-    conn->user = strdup(username && *username ? username : "argus");
+    conn->user_explicit = (username && *username);
+    conn->user = strdup(conn->user_explicit ? username : "argus");
     conn->catalog = strdup(database && *database ? database : "hive");
     conn->schema = strdup("default");
 
