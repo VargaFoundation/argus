@@ -17,7 +17,14 @@ add_custom_command(
         --gen c_glib
         -out "${THRIFT_GEN_DIR}"
         "${THRIFT_IDL}"
-    DEPENDS "${THRIFT_IDL}"
+    # Fix a GObject leak in the generated code: c_glib finalizers never chain
+    # to the parent finalize, so each object's qdata is never freed. See
+    # patch_finalize.cmake. Runs right after generation, on both emitted files.
+    COMMAND ${CMAKE_COMMAND} -DFILE=${THRIFT_GEN_DIR}/t_c_l_i_service_types.c
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/patch_finalize.cmake"
+    COMMAND ${CMAKE_COMMAND} -DFILE=${THRIFT_GEN_DIR}/t_c_l_i_service.c
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/patch_finalize.cmake"
+    DEPENDS "${THRIFT_IDL}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_finalize.cmake"
     COMMENT "Generating Thrift C GLib code from TCLIService.thrift"
 )
 
