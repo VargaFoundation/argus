@@ -11,6 +11,30 @@
  * These map directly to the ODBC catalog functions.
  */
 
+/* Keep only the first n columns of a catalog result. Avatica's getTables
+ * returns the full JDBC shape (TABLE_CAT, TABLE_SCHEM, TABLE_NAME,
+ * TABLE_TYPE, REMARKS, then extra JDBC columns) — 19 columns for PQS 5.0 —
+ * but ODBC's SQLTables must return exactly 5, in that order. Passing the
+ * wider result through crashes strict ODBC clients (.NET). The JDBC and
+ * ODBC leading columns match one-to-one, so projecting to the first n is
+ * correct. Frees the dropped cells to avoid a leak. */
+static void phoenix_project_columns(phoenix_operation_t *op, int n)
+{
+    if (!op || op->num_cols <= n) return;
+
+    argus_row_cache_t *fc = &op->first_frame;
+    for (size_t r = 0; r < fc->num_rows; r++) {
+        argus_cell_t *cells = fc->rows[r].cells;
+        if (!cells) continue;
+        for (int c = n; c < op->num_cols; c++) {
+            free(cells[c].data);
+            cells[c].data = NULL;
+        }
+    }
+    fc->num_cols = n;
+    op->num_cols = n;
+}
+
 /* ── Helper: build a catalog operation result ────────────────── */
 
 static int phoenix_catalog_request(phoenix_conn_t *conn,
@@ -116,6 +140,9 @@ int phoenix_get_tables(argus_backend_conn_t raw_conn,
     g_object_unref(params);
 
     if (rc != 0) return -1;
+
+    /* ODBC SQLTables must expose exactly 5 columns. */
+    phoenix_project_columns(op, 5);
 
     *out_op = op;
     return 0;
