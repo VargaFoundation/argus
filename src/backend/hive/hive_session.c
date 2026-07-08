@@ -243,7 +243,9 @@ setup_protocol:
         }
 
         g_object_set(open_req, "configuration", config, NULL);
-        /* config ownership transferred to open_req */
+        /* g_object_set takes its own ref on the boxed hash table, so release
+         * ours — it is not an ownership transfer. */
+        g_hash_table_unref(config);
     }
 
     gboolean ok = t_c_l_i_service_client_open_session(
