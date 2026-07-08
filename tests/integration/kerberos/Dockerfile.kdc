@@ -1,0 +1,14 @@
+# Minimal MIT Kerberos KDC for the Hive GSSAPI integration test.
+FROM ubuntu:22.04
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y --no-install-recommends \
+        krb5-kdc krb5-admin-server krb5-user \
+    && rm -rf /var/lib/apt/lists/*
+COPY kdc.conf /etc/krb5kdc/kdc.conf
+COPY krb5.conf.container /etc/krb5.conf
+COPY entrypoint-kdc.sh /entrypoint-kdc.sh
+RUN chmod +x /entrypoint-kdc.sh && \
+    printf '*/admin@EXAMPLE.COM *\n' > /etc/krb5kdc/kadm5.acl && \
+    mkdir -p /keytabs
+EXPOSE 88/udp 88/tcp 749/tcp
+ENTRYPOINT ["/entrypoint-kdc.sh"]

@@ -73,6 +73,9 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | PWD | PASSWORD | (empty) | Password for authentication |
 | DATABASE | SCHEMA | default | Initial database/catalog to use |
 | AUTHMECH | AUTH | NOSASL | Authentication mechanism |
+| KRBSERVICENAME | SERVICEPRINCIPALNAME | hive/impala | Kerberos SPN service name |
+| KRBHOSTFQDN | KRBHOST | (HOST) | Kerberos SPN host, if it differs from HOST |
+| KRBREALM | REALM | (from krb5.conf) | Explicit Kerberos realm |
 | BACKEND | DRIVER_TYPE | hive | Backend type: hive, impala, or trino |
 
 ### Default Ports by Backend
@@ -113,7 +116,13 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=hive;DATABASE=def
     it uses the system GSSAPI (a `kinit` ticket or keytab); on **Windows**
     it uses the native SSPI Kerberos of the logged-in domain user — no
     MIT Kerberos install required. The service principal defaults to
-    `hive/<host>`.
+    `hive/<host>` (`impala/<host>` for Impala), with the realm resolved
+    from the Kerberos config. Override any part with:
+    - `KrbServiceName` — the SPN service (default `hive`/`impala`).
+    - `KrbHostFQDN` — the SPN host, when it differs from the connection
+      `HOST` (e.g. connecting through a load balancer or by IP).
+    - `KrbRealm` — an explicit realm, producing `service/host@REALM`
+      (for cross-realm or when no `domain_realm` mapping applies).
   - Over HTTP transport (`TransportMode=HTTP`), `KERBEROS` uses SPNEGO via
     libcurl, and `JWT`/`BEARER`/`DATABRICKS` send a token from `PWD`.
 
