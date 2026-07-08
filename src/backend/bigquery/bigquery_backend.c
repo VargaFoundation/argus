@@ -10,6 +10,23 @@
 
 /* ── CURL helpers ────────────────────────────────────────────── */
 
+/* Apply TLS options shared by the API and the OAuth token endpoint.
+ * Crucial for sovereign clouds (S3NS): their private CA is not in the
+ * system trust store, so without CURLOPT_CAINFO the HTTPS handshake to
+ * both the API and the IAM token endpoint fails unless verification is
+ * disabled. Also supports client certificates for mTLS. */
+void bq_apply_tls(bq_conn_t *conn, CURL *curl)
+{
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);
+    if (conn->ssl_ca_file && *conn->ssl_ca_file)
+        curl_easy_setopt(curl, CURLOPT_CAINFO, conn->ssl_ca_file);
+    if (conn->ssl_cert_file && *conn->ssl_cert_file)
+        curl_easy_setopt(curl, CURLOPT_SSLCERT, conn->ssl_cert_file);
+    if (conn->ssl_key_file && *conn->ssl_key_file)
+        curl_easy_setopt(curl, CURLOPT_SSLKEY, conn->ssl_key_file);
+}
+
 size_t argus_bq_write_cb(void *contents, size_t size, size_t nmemb, void *userp)
 {
     size_t total = size * nmemb;
@@ -32,8 +49,7 @@ int bq_http(bq_conn_t *conn, const char *url, const char *post_body,
     curl_easy_reset(curl);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->headers);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);
+    bq_apply_tls(conn, curl);
     if (conn->connect_timeout_sec > 0)
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
                          (long)conn->connect_timeout_sec);
@@ -442,6 +458,9 @@ static void bq_conn_free(bq_conn_t *conn)
     free(conn->scope);
     free(conn->sa_email);
     argus_secure_free(conn->sa_private_key);
+    free(conn->ssl_ca_file);
+    free(conn->ssl_cert_file);
+    free(conn->ssl_key_file);
     free(conn);
 }
 
@@ -486,6 +505,9 @@ static int bq_connect(argus_dbc_t *dbc,
                          : "https://www.googleapis.com/auth/bigquery");
 
     conn->ssl_verify = dbc->ssl_verify;
+    if (dbc->ssl_ca_file)   conn->ssl_ca_file = strdup(dbc->ssl_ca_file);
+    if (dbc->ssl_cert_file) conn->ssl_cert_file = strdup(dbc->ssl_cert_file);
+    if (dbc->ssl_key_file)  conn->ssl_key_file = strdup(dbc->ssl_key_file);
     conn->connect_timeout_sec = dbc->connect_timeout_sec;
     conn->query_timeout_sec = dbc->query_timeout_sec;
     conn->fetch_buffer_size = dbc->fetch_buffer_size > 0

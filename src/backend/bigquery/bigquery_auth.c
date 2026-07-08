@@ -132,8 +132,9 @@ static int bq_fetch_token(bq_conn_t *conn)
     bq_response_t resp = {0};
     curl_easy_setopt(c, CURLOPT_URL, conn->token_url);
     curl_easy_setopt(c, CURLOPT_POSTFIELDS, body);
-    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
-    curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);
+    /* The IAM token endpoint is on the sovereign cloud too, so it needs
+     * the same private-CA / mTLS material as the API. */
+    bq_apply_tls(conn, c);
     if (conn->connect_timeout_sec > 0)
         curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT,
                          (long)conn->connect_timeout_sec);

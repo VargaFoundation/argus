@@ -54,6 +54,9 @@ typedef struct bq_conn {
     struct curl_slist *headers;       /* Content-Type/Accept + Authorization */
 
     bool               ssl_verify;
+    char              *ssl_ca_file;    /* private CA bundle (S3NS et al.) */
+    char              *ssl_cert_file;  /* client cert for mTLS (optional) */
+    char              *ssl_key_file;   /* client key for mTLS (optional) */
     int                connect_timeout_sec;
     int                query_timeout_sec;
     int                fetch_buffer_size;
@@ -80,6 +83,7 @@ typedef struct bq_response {
 /* bigquery_backend.c */
 int bq_http(bq_conn_t *conn, const char *url, const char *post_body,
             bq_response_t *resp, long *http_code);
+void bq_apply_tls(bq_conn_t *conn, CURL *curl);
 
 /* bigquery_auth.c */
 int  bq_auth_ensure(bq_conn_t *conn);   /* refresh bearer if needed */
