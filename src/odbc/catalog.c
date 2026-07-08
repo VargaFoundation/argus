@@ -449,6 +449,10 @@ static SQLRETURN builtin_get_type_info(argus_stmt_t *stmt,
 {
     stmt->executed = true;
     setup_type_info_metadata(stmt);
+    /* The rows are materialized here, not fetched from a backend op, so mark
+     * the fetch as started: otherwise the first SQLFetch clears this cache
+     * and pulls from a NULL op, dropping every type row. */
+    stmt->fetch_started = true;
 
     /* Count matching types */
     size_t count = 0;
@@ -603,6 +607,7 @@ SQLRETURN SQL_API SQLStatistics(
     /* Return empty result set with proper metadata */
     stmt->executed = true;
     stmt->row_cache.exhausted = true;
+    stmt->fetch_started = true;
     setup_statistics_metadata(stmt);
 
     (void)CatalogName; (void)NameLength1;
@@ -670,6 +675,7 @@ SQLRETURN SQL_API SQLSpecialColumns(
 
     stmt->executed = true;
     stmt->row_cache.exhausted = true;
+    stmt->fetch_started = true;
     setup_special_columns_metadata(stmt);
 
     return SQL_SUCCESS;
@@ -751,6 +757,7 @@ SQLRETURN SQL_API SQLPrimaryKeys(
     /* Return empty result set with proper metadata */
     stmt->executed = true;
     stmt->row_cache.exhausted = true;
+    stmt->fetch_started = true;
     setup_primary_keys_metadata(stmt);
 
     (void)CatalogName; (void)NameLength1;
