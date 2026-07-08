@@ -50,6 +50,10 @@ Add-OdbcDsn -Name MyTrino -DriverName "Argus ODBC Driver" -DsnType User -Platfor
 Remove-OdbcDsn -Name MyTrino -DsnType User -Platform 64-bit
 ```
 
+> **Note:** the Windows ODBC Manager rejects `UID`/`PWD` in a DSN's
+> `-SetPropertyValue`. Supply credentials at connect time (the application's
+> user/password fields) or in a DSN-less connection string instead.
+
 DSN-less connection strings (`DRIVER={Argus ODBC Driver};...`) need no DSN at
 all.
 
