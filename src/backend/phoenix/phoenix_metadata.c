@@ -139,9 +139,25 @@ int phoenix_get_tables(argus_backend_conn_t raw_conn,
         json_builder_add_string_value(params, table_name);
     }
     if (table_types && *table_types) {
+        /* ODBC TableType is a comma-separated list, each value optionally
+         * single-quoted (e.g. "TABLE,VIEW" or "'TABLE','VIEW'"); .NET sends
+         * this form. Avatica's typeList is a JSON array, so tokenize and add
+         * one element per type — passing the whole string as a single array
+         * element made getTables fail for anything but a bare single type. */
         json_builder_set_member_name(params, "typeList");
         json_builder_begin_array(params);
-        json_builder_add_string_value(params, table_types);
+        char *list = strdup(table_types);
+        if (list) {
+            for (char *tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
+                while (*tok == ' ' || *tok == '\'') tok++;      /* lstrip */
+                char *end = tok + strlen(tok);
+                while (end > tok &&
+                       (end[-1] == ' ' || end[-1] == '\'')) *--end = '\0';
+                if (*tok)
+                    json_builder_add_string_value(params, tok);
+            }
+            free(list);
+        }
         json_builder_end_array(params);
     }
     json_builder_end_object(params);
