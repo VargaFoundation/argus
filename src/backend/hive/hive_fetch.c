@@ -28,7 +28,8 @@ static int parse_column_values(GObject *column_obj,
         TStringColumn *str_col = tcol->stringVal;
         GPtrArray *values = NULL;
         GByteArray *nulls = NULL;
-        g_object_get(str_col, "values", &values, "nulls", &nulls, NULL);
+        values = str_col->values;
+        nulls = str_col->nulls;
 
         if (values) {
             for (int r = 0; r < num_rows && r < (int)values->len; r++) {
@@ -62,7 +63,8 @@ static int parse_column_values(GObject *column_obj,
         TI32Column *i32_col = tcol->i32Val;
         GArray *values = NULL;
         GByteArray *nulls = NULL;
-        g_object_get(i32_col, "values", &values, "nulls", &nulls, NULL);
+        values = i32_col->values;
+        nulls = i32_col->nulls;
 
         if (values) {
             for (int r = 0; r < num_rows && r < (int)values->len; r++) {
@@ -93,7 +95,8 @@ static int parse_column_values(GObject *column_obj,
         TI64Column *i64_col = tcol->i64Val;
         GArray *values = NULL;
         GByteArray *nulls = NULL;
-        g_object_get(i64_col, "values", &values, "nulls", &nulls, NULL);
+        values = i64_col->values;
+        nulls = i64_col->nulls;
 
         if (values) {
             for (int r = 0; r < num_rows && r < (int)values->len; r++) {
@@ -124,7 +127,8 @@ static int parse_column_values(GObject *column_obj,
         TDoubleColumn *dbl_col = tcol->doubleVal;
         GArray *values = NULL;
         GByteArray *nulls = NULL;
-        g_object_get(dbl_col, "values", &values, "nulls", &nulls, NULL);
+        values = dbl_col->values;
+        nulls = dbl_col->nulls;
 
         if (values) {
             for (int r = 0; r < num_rows && r < (int)values->len; r++) {
@@ -155,7 +159,8 @@ static int parse_column_values(GObject *column_obj,
         TBoolColumn *bool_col = tcol->boolVal;
         GArray *values = NULL;
         GByteArray *nulls = NULL;
-        g_object_get(bool_col, "values", &values, "nulls", &nulls, NULL);
+        values = bool_col->values;
+        nulls = bool_col->nulls;
 
         if (values) {
             for (int r = 0; r < num_rows && r < (int)values->len; r++) {
@@ -185,7 +190,8 @@ static int parse_column_values(GObject *column_obj,
         TByteColumn *byte_col = tcol->byteVal;
         GArray *values = NULL;
         GByteArray *nulls = NULL;
-        g_object_get(byte_col, "values", &values, "nulls", &nulls, NULL);
+        values = byte_col->values;
+        nulls = byte_col->nulls;
 
         if (values) {
             for (int r = 0; r < num_rows && r < (int)values->len; r++) {
@@ -216,7 +222,8 @@ static int parse_column_values(GObject *column_obj,
         TI16Column *i16_col = tcol->i16Val;
         GArray *values = NULL;
         GByteArray *nulls = NULL;
-        g_object_get(i16_col, "values", &values, "nulls", &nulls, NULL);
+        values = i16_col->values;
+        nulls = i16_col->nulls;
 
         if (values) {
             for (int r = 0; r < num_rows && r < (int)values->len; r++) {
@@ -247,7 +254,8 @@ static int parse_column_values(GObject *column_obj,
         TBinaryColumn *bin_col = tcol->binaryVal;
         GPtrArray *values = NULL;
         GByteArray *nulls = NULL;
-        g_object_get(bin_col, "values", &values, "nulls", &nulls, NULL);
+        values = bin_col->values;
+        nulls = bin_col->nulls;
 
         if (values) {
             for (int r = 0; r < num_rows && r < (int)values->len; r++) {
@@ -288,37 +296,37 @@ static int get_column_row_count(GObject *column_obj)
 
     if (tcol->__isset_stringVal && tcol->stringVal) {
         GPtrArray *v = NULL;
-        g_object_get(tcol->stringVal, "values", &v, NULL);
+        v = tcol->stringVal->values;
         return v ? (int)v->len : 0;
     }
     if (tcol->__isset_i32Val && tcol->i32Val) {
         GArray *v = NULL;
-        g_object_get(tcol->i32Val, "values", &v, NULL);
+        v = tcol->i32Val->values;
         return v ? (int)v->len : 0;
     }
     if (tcol->__isset_i64Val && tcol->i64Val) {
         GArray *v = NULL;
-        g_object_get(tcol->i64Val, "values", &v, NULL);
+        v = tcol->i64Val->values;
         return v ? (int)v->len : 0;
     }
     if (tcol->__isset_doubleVal && tcol->doubleVal) {
         GArray *v = NULL;
-        g_object_get(tcol->doubleVal, "values", &v, NULL);
+        v = tcol->doubleVal->values;
         return v ? (int)v->len : 0;
     }
     if (tcol->__isset_boolVal && tcol->boolVal) {
         GArray *v = NULL;
-        g_object_get(tcol->boolVal, "values", &v, NULL);
+        v = tcol->boolVal->values;
         return v ? (int)v->len : 0;
     }
     if (tcol->__isset_byteVal && tcol->byteVal) {
         GArray *v = NULL;
-        g_object_get(tcol->byteVal, "values", &v, NULL);
+        v = tcol->byteVal->values;
         return v ? (int)v->len : 0;
     }
     if (tcol->__isset_i16Val && tcol->i16Val) {
         GArray *v = NULL;
-        g_object_get(tcol->i16Val, "values", &v, NULL);
+        v = tcol->i16Val->values;
         return v ? (int)v->len : 0;
     }
     return 0;
@@ -391,7 +399,7 @@ int hive_fetch_results(argus_backend_conn_t raw_conn,
 
     /* Get columns from TRowSet */
     GPtrArray *tcolumns = NULL;
-    g_object_get(row_set, "columns", &tcolumns, NULL);
+    tcolumns = row_set->columns;
 
     if (!tcolumns || tcolumns->len == 0) {
         if (row_set) g_object_unref(row_set);
@@ -508,7 +516,7 @@ int hive_get_result_metadata(argus_backend_conn_t raw_conn,
     }
 
     GPtrArray *col_descs = NULL;
-    g_object_get(schema, "columns", &col_descs, NULL);
+    col_descs = schema->columns;
 
     if (!col_descs) {
         g_object_unref(schema);
@@ -534,7 +542,7 @@ int hive_get_result_metadata(argus_backend_conn_t raw_conn,
         const char *type_name = "STRING";
         if (type_desc) {
             GPtrArray *types = NULL;
-            g_object_get(type_desc, "types", &types, NULL);
+            types = type_desc->types;
             if (types && types->len > 0) {
                 TTypeEntry *te = (TTypeEntry *)g_ptr_array_index(types, 0);
                 TPrimitiveTypeEntry *pte = NULL;
