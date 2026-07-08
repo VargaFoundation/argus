@@ -94,6 +94,17 @@ static int phoenix_catalog_request(phoenix_conn_t *conn,
     }
 
     g_object_unref(parser);
+
+    /* No columns means the RPC returned an empty/unsupported result (PQS 5.0
+     * getTypeInfo) or an Avatica error body (getPrimaryKeys rejects our
+     * field). Fail rather than hand the ODBC layer a malformed 0-column
+     * result set — SQLGetTypeInfo then falls back to the built-in type list,
+     * and other functions surface a clean error instead of crashing clients. */
+    if (op->num_cols <= 0) {
+        phoenix_operation_free(op);
+        return -1;
+    }
+
     *out_op = op;
     return 0;
 }
@@ -188,6 +199,12 @@ int phoenix_get_columns(argus_backend_conn_t raw_conn,
     g_object_unref(params);
 
     if (rc != 0) return -1;
+
+    /* ODBC SQLColumns must expose exactly 18 columns; Avatica's getColumns
+     * returns the wider JDBC shape (29 for PQS 5.0) whose leading 18 match
+     * ODBC one-to-one. The extra columns crash strict clients (.NET's
+     * OdbcMetaDataFactory null-refs when enumerating table metadata). */
+    phoenix_project_columns(op, 18);
 
     *out_op = op;
     return 0;
