@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(argus VERSION 0.5.5 LANGUAGES C)
+project(argus VERSION 0.5.6 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
