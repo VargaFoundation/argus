@@ -65,6 +65,18 @@ static void apply_dsn_param(argus_dbc_t *dbc, const char *key, const char *val)
     } else if (strcasecmp(key, "AUTHMECH") == 0 || strcasecmp(key, "AUTH") == 0) {
         free(dbc->auth_mechanism);
         dbc->auth_mechanism = strdup(val);
+    } else if (strcasecmp(key, "KRBSERVICENAME") == 0 ||
+               strcasecmp(key, "SERVICEPRINCIPALNAME") == 0) {
+        free(dbc->krb_service_name);
+        dbc->krb_service_name = strdup(val);
+    } else if (strcasecmp(key, "KRBHOSTFQDN") == 0 ||
+               strcasecmp(key, "KRBHOST") == 0) {
+        free(dbc->krb_host_fqdn);
+        dbc->krb_host_fqdn = strdup(val);
+    } else if (strcasecmp(key, "KRBREALM") == 0 ||
+               strcasecmp(key, "REALM") == 0) {
+        free(dbc->krb_realm);
+        dbc->krb_realm = strdup(val);
     } else if (strcasecmp(key, "RETRYCOUNT") == 0) {
         dbc->retry_count = atoi(val);
     } else if (strcasecmp(key, "RETRYDELAY") == 0) {

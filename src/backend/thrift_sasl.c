@@ -159,6 +159,7 @@ int argus_thrift_sasl_handshake_plain(ThriftTransport *transport,
 int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
                                        const char *service_name,
                                        const char *hostname,
+                                       const char *realm,
                                        char *errmsg, size_t errmsg_size)
 {
     OM_uint32 major, minor;
@@ -168,18 +169,26 @@ int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
     gss_buffer_desc output_token = GSS_C_EMPTY_BUFFER;
     int rc = -1;
 
-    /* Build target principal: service@hostname */
+    /* Build the target principal. Without a realm, use the hostbased form
+     * "service@host" (GSSAPI resolves the realm from krb5.conf). With an
+     * explicit realm, use the full principal "service/host@REALM". */
+    const char *svc = service_name ? service_name : "impala";
     char principal[512];
-    snprintf(principal, sizeof(principal), "%s@%s",
-             service_name ? service_name : "impala", hostname);
+    gss_OID name_type;
+    if (realm && *realm) {
+        snprintf(principal, sizeof(principal), "%s/%s@%s",
+                 svc, hostname, realm);
+        name_type = (gss_OID)GSS_KRB5_NT_PRINCIPAL_NAME;
+    } else {
+        snprintf(principal, sizeof(principal), "%s@%s", svc, hostname);
+        name_type = GSS_C_NT_HOSTBASED_SERVICE;
+    }
 
     gss_buffer_desc name_buf;
     name_buf.value = principal;
     name_buf.length = strlen(principal);
 
-    major = gss_import_name(&minor, &name_buf,
-                            GSS_C_NT_HOSTBASED_SERVICE,
-                            &target_name);
+    major = gss_import_name(&minor, &name_buf, name_type, &target_name);
     if (GSS_ERROR(major)) {
         snprintf(errmsg, errmsg_size,
                  "gss_import_name failed for %s (major=%u, minor=%u)",
@@ -429,6 +438,7 @@ static void sspi_errmsg(SECURITY_STATUS st, const char *what,
 int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
                                        const char *service_name,
                                        const char *hostname,
+                                       const char *realm,
                                        char *errmsg, size_t errmsg_size)
 {
     CredHandle cred;
@@ -437,10 +447,16 @@ int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
     SECURITY_STATUS st;
     int rc = -1;
 
-    /* SSPI SPN uses "service/host" (GSSAPI uses "service@host"). */
+    /* SSPI SPN uses "service/host" (GSSAPI uses "service@host"); an explicit
+     * realm is appended as "service/host@REALM" for cross-realm targets.
+     * Normally SSPI resolves the realm from the joined domain. */
     char spn[512];
-    snprintf(spn, sizeof(spn), "%s/%s",
-             service_name ? service_name : "impala", hostname);
+    if (realm && *realm)
+        snprintf(spn, sizeof(spn), "%s/%s@%s",
+                 service_name ? service_name : "impala", hostname, realm);
+    else
+        snprintf(spn, sizeof(spn), "%s/%s",
+                 service_name ? service_name : "impala", hostname);
 
     TimeStamp expiry;
     st = AcquireCredentialsHandleA(NULL, (SEC_CHAR *)"Kerberos",
@@ -638,11 +654,13 @@ cleanup:
 int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
                                        const char *service_name,
                                        const char *hostname,
+                                       const char *realm,
                                        char *errmsg, size_t errmsg_size)
 {
     (void)transport;
     (void)service_name;
     (void)hostname;
+    (void)realm;
     snprintf(errmsg, errmsg_size,
              "GSSAPI (Kerberos) support not available: "
              "driver was built without libgssapi");

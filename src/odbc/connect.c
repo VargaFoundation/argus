@@ -200,6 +200,19 @@ SQLRETURN SQL_API SQLDriverConnect(
     if (!v) v = argus_conn_params_get(&params, "AUTH");
     if (v) { free(dbc->auth_mechanism); dbc->auth_mechanism = strdup(v); }
 
+    /* Kerberos SPN overrides (optional) */
+    v = argus_conn_params_get(&params, "KRBSERVICENAME");
+    if (!v) v = argus_conn_params_get(&params, "SERVICEPRINCIPALNAME");
+    if (v) { free(dbc->krb_service_name); dbc->krb_service_name = strdup(v); }
+
+    v = argus_conn_params_get(&params, "KRBHOSTFQDN");
+    if (!v) v = argus_conn_params_get(&params, "KRBHOST");
+    if (v) { free(dbc->krb_host_fqdn); dbc->krb_host_fqdn = strdup(v); }
+
+    v = argus_conn_params_get(&params, "KRBREALM");
+    if (!v) v = argus_conn_params_get(&params, "REALM");
+    if (v) { free(dbc->krb_realm); dbc->krb_realm = strdup(v); }
+
     v = argus_conn_params_get(&params, "BACKEND");
     if (!v) v = argus_conn_params_get(&params, "DRIVER_TYPE");
     if (v) { free(dbc->backend_name); dbc->backend_name = strdup(v); }

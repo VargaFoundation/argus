@@ -56,6 +56,14 @@ struct argus_dbc {
     char        *password;
     char        *database;
     char        *auth_mechanism; /* "NOSASL" or "PLAIN" */
+
+    /* Kerberos SPN overrides (Hive/Impala GSSAPI/SSPI). Default: service is
+     * the backend name ("hive"/"impala") and the host is the connection HOST;
+     * realm comes from krb5.conf. These let the SPN differ from the connection
+     * host (load balancers) or pin a cross-realm principal. */
+    char        *krb_service_name; /* overrides "hive"/"impala" */
+    char        *krb_host_fqdn;    /* overrides HOST in the SPN */
+    char        *krb_realm;        /* explicit realm → service/host@REALM */
     char        *backend_name;  /* "hive", "impala", etc. */
 
     /* SSL/TLS settings */

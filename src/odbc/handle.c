@@ -149,6 +149,9 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     argus_secure_free(dbc->password);
     free(dbc->database);
     free(dbc->auth_mechanism);
+    free(dbc->krb_service_name);
+    free(dbc->krb_host_fqdn);
+    free(dbc->krb_realm);
     free(dbc->backend_name);
     free(dbc->current_catalog);
 

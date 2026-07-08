@@ -74,10 +74,15 @@ int impala_connect(argus_dbc_t *dbc,
         char sasl_err[512];
         int sasl_rc;
         if (gssapi) {
-            ARGUS_LOG_DEBUG("Impala: Performing SASL GSSAPI handshake to %s:%d",
-                            host, port);
+            const char *svc = (dbc->krb_service_name && *dbc->krb_service_name)
+                              ? dbc->krb_service_name : "impala";
+            const char *spn_host = (dbc->krb_host_fqdn && *dbc->krb_host_fqdn)
+                                   ? dbc->krb_host_fqdn : host;
+            ARGUS_LOG_DEBUG("Impala: SASL GSSAPI handshake to SPN %.128s/%.256s",
+                            svc, spn_host);
             sasl_rc = argus_thrift_sasl_handshake_gssapi(
-                raw, "impala", host, sasl_err, sizeof(sasl_err));
+                raw, svc, spn_host, dbc->krb_realm,
+                sasl_err, sizeof(sasl_err));
         } else {
             ARGUS_LOG_DEBUG("Impala: Performing SASL PLAIN handshake to %s:%d",
                             host, port);
