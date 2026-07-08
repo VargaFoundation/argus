@@ -737,14 +737,15 @@ SQLRETURN SQL_API SQLPrimaryKeys(
         free(schema);
         free(table_name);
 
-        if (rc != 0) {
-            if (stmt->diag.count == 0)
-                argus_set_error(&stmt->diag, "HY000",
-                                "[Argus] Failed to get primary keys", 0);
-            return SQL_ERROR;
-        }
-
-        return catalog_dispatch(stmt);
+        /* On success, dispatch the backend result. On failure (the backend
+         * cannot produce primary-key metadata — e.g. Phoenix's Avatica
+         * getPrimaryKeys is unsupported), fall through to the standard empty
+         * result set rather than erroring: catalog functions must return the
+         * correct column shape, and a malformed/erroring SQLPrimaryKeys
+         * crashes strict clients enumerating metadata. */
+        if (rc == 0)
+            return catalog_dispatch(stmt);
+        argus_diag_clear(&stmt->diag);
     }
 
     /* Return empty result set with proper metadata */
