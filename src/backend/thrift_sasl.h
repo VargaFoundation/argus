@@ -27,16 +27,22 @@ int argus_thrift_sasl_handshake_plain(ThriftTransport *transport,
                                       char *errmsg, size_t errmsg_size);
 
 /*
- * Perform a SASL handshake using GSSAPI (Kerberos) via the system GSSAPI library.
+ * Perform a SASL handshake using GSSAPI (Kerberos) via the system GSSAPI
+ * library (POSIX) or SSPI (Windows).
  *
- * The caller must have a valid Kerberos TGT (via kinit or keytab).
- * The service_principal is typically "impala/<hostname>" or "hive/<hostname>".
+ * The caller must have a valid Kerberos TGT (via kinit/keytab on POSIX, or the
+ * logged-in domain on Windows). The target SPN is `service_name/hostname`; if
+ * `realm` is non-NULL/non-empty the full principal `service/host@REALM` is used
+ * (cross-realm / explicit realm), otherwise the realm is resolved from the
+ * system Kerberos config. `hostname` should be the SPN host (which may differ
+ * from the TCP connect host — e.g. behind a load balancer).
  *
  * Returns 0 on success, -1 on failure (errmsg filled in).
  */
 int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
                                        const char *service_name,
                                        const char *hostname,
+                                       const char *realm,
                                        char *errmsg, size_t errmsg_size);
 
 #endif /* ARGUS_THRIFT_SASL_H */
