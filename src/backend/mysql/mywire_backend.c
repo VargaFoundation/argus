@@ -43,20 +43,23 @@ static int mywire_connect(argus_dbc_t *dbc,
     }
 
     /* SSL/TLS, driven by the same DBC attributes as the other backends.
-     * SSL=0 must be honoured explicitly: libmariadb >= 3.4 negotiates TLS
+     * SSL=0 must be honoured explicitly. libmariadb >= 3.4 negotiates TLS
      * whenever the server offers it, so without MYSQL_OPT_SSL_ENFORCE=0 a
      * plaintext-only server (ClickHouse :9004, a default StarRocks/Doris FE)
-     * is unreachable even with SSL=0. */
+     * is unreachable even with SSL=0. ENFORCE=0 alone is not enough either:
+     * libmariadb's my_auth.c re-enables use_ssl unless server-cert
+     * verification is also turned off, so a plaintext handshake still fails
+     * with "SSL is required, but the server does not support it". Clear both. */
     {
         my_bool enforce = (dbc && dbc->ssl_enabled) ? 1 : 0;
+        my_bool verify = 0;
         if (dbc && dbc->ssl_enabled) {
             mysql_ssl_set(conn->mysql,
                           dbc->ssl_key_file, dbc->ssl_cert_file,
                           dbc->ssl_ca_file, NULL, NULL);
-            my_bool verify = dbc->ssl_verify ? 1 : 0;
-            mysql_options(conn->mysql,
-                          MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify);
+            verify = dbc->ssl_verify ? 1 : 0;
         }
+        mysql_options(conn->mysql, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify);
         mysql_options(conn->mysql, MYSQL_OPT_SSL_ENFORCE, &enforce);
     }
 
