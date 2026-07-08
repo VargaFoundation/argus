@@ -80,7 +80,12 @@ int phoenix_execute(argus_backend_conn_t raw_conn,
     json_builder_set_member_name(params, "sql");
     json_builder_add_string_value(params, query);
     json_builder_set_member_name(params, "maxRowCount");
-    json_builder_add_int_value(params, -1);  /* unlimited */
+    json_builder_add_int_value(params, -1);  /* unlimited total */
+    /* Without maxRowsInFirstFrame, PQS 5.0 puts zero rows in the first
+     * frame (done=true, rows=[]) and closes the result set, so every SELECT
+     * came back empty. Ask for a real first batch. */
+    json_builder_set_member_name(params, "maxRowsInFirstFrame");
+    json_builder_add_int_value(params, 1000);
     json_builder_end_object(params);
 
     JsonParser *parser = NULL;
