@@ -1,0 +1,19 @@
+[libdefaults]
+    default_realm = EXAMPLE.COM
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    dns_canonicalize_hostname = false
+    rdns = false
+    ticket_lifetime = 24h
+    forwardable = true
+    udp_preference_limit = 1
+
+[realms]
+    EXAMPLE.COM = {
+        kdc = kdc.example.com
+        admin_server = kdc.example.com
+    }
+
+[domain_realm]
+    .example.com = EXAMPLE.COM
+    hive.example.com = EXAMPLE.COM

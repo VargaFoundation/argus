@@ -1,0 +1,50 @@
+# Standalone Kerberos test stack: an MIT KDC and a kerberized HiveServer2.
+# Iterated here in isolation; folded into the main docker-compose.yml once green.
+services:
+  kdc:
+    build:
+      context: .
+      dockerfile: Dockerfile.kdc
+    image: argus-kdc
+    container_name: argus-kdc
+    hostname: kdc.example.com
+    ports:
+      - "88:88/tcp"
+      - "88:88/udp"
+    volumes:
+      - krb-keytabs:/keytabs
+
+  hiveserver2-krb:
+    image: apache/hive:4.0.0
+    container_name: argus-hive-krb
+    hostname: hive.example.com
+    depends_on:
+      - kdc
+    ports:
+      # 10000 is used by the stock NOSASL hiveserver2; publish on 10001 so
+      # both coexist. The GSSAPI SPN is host-based (port-independent).
+      - "10001:10000"
+      - "10003:10002"
+    environment:
+      SERVICE_NAME: hiveserver2
+      SERVICE_OPTS: >-
+        -Dhive.server2.authentication=KERBEROS
+        -Dhive.server2.authentication.kerberos.principal=hive/_HOST@EXAMPLE.COM
+        -Dhive.server2.authentication.kerberos.keytab=/etc/security/keytabs/hive.keytab
+        -Dhive.server2.thrift.sasl.qop=auth
+    volumes:
+      - krb-keytabs:/etc/security/keytabs:ro
+      - ./krb5.conf.container:/etc/krb5.conf:ro
+      # Only core-site (enables kerberos UGI). The stock hive-site.xml is kept
+      # so the scratch-dir config stays intact; the KERBEROS auth/qop/keytab
+      # settings come from SERVICE_OPTS instead of a replaced hive-site.xml.
+      - ./core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/10000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+volumes:
+  krb-keytabs:
