@@ -281,15 +281,21 @@ Backend=bigquery;Project=my-project;Database=my_dataset;
 BQKeyFile=/etc/argus/sa-key.json;BQLocation=EU
 ```
 
-Sovereign cloud (S3NS-style: custom API + IAM endpoints and audience):
+Sovereign cloud (S3NS-style: custom API + IAM endpoints, audience and a
+private CA). `SSLCAFile` is honoured for **both** the API and the token
+endpoint — a sovereign deployment's private PKI is not in the system trust
+store, so without it the TLS handshake fails:
 
 ```
 Backend=bigquery;Project=my-project;
 BQEndpoint=https://bigquery.s3ns.example;
 BQTokenEndpoint=https://iam.s3ns.example/token;
 BQAudience=https://iam.s3ns.example/token;
-BQKeyFile=/etc/argus/sa-key.json
+BQKeyFile=/etc/argus/sa-key.json;
+SSL=1;SSLVerify=1;SSLCAFile=/etc/argus/s3ns-ca.pem
 ```
+
+For mutual TLS, add `SSLCertFile=` / `SSLKeyFile=`.
 
 Emulator / tests (no auth):
 
