@@ -339,6 +339,17 @@ set_target_properties(argus_odbc PROPERTIES
     C_VISIBILITY_PRESET hidden
 )
 
+# Bind the driver's internal cross-calls between its own ODBC entry points to
+# its own definitions. Without this, the unixODBC Driver Manager (which exports
+# the same SQL* symbols) interposes them: e.g. the driver's SQLConnectW would
+# call the Driver Manager's SQLConnect instead of its own, passing a driver
+# handle the DM cannot use — every DM-based connection then fails with IM005,
+# blocking all Linux BI tools. macOS (two-level namespace) and Windows
+# (__declspec) are immune, so only the ELF/GNU-ld case needs the flag.
+if(NOT WIN32 AND NOT APPLE)
+    target_link_options(argus_odbc PRIVATE "LINKER:-Bsymbolic-functions")
+endif()
+
 # Static library for unit tests (all symbols visible)
 if(BUILD_TESTING)
     add_library(argus_odbc_static STATIC ${ARGUS_SOURCES})

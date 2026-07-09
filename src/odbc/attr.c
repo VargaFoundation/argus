@@ -1,4 +1,5 @@
 #include "argus/handle.h"
+#include "argus/log.h"
 #include "argus/odbc_api.h"
 #include "argus/compat.h"
 #include <string.h>
@@ -123,6 +124,14 @@ SQLRETURN SQL_API SQLSetConnectAttr(
         }
         return SQL_SUCCESS;
 
+    case SQL_ATTR_ANSI_APP:
+        /* The unixODBC Driver Manager sets this on a Unicode-capable driver to
+         * announce whether the application is ANSI. We support both the ANSI
+         * and the wide (W) entry points, so accept it — returning an error
+         * here makes unixODBC abort the connection with IM005, which blocks
+         * every Linux BI tool (they all go through the Driver Manager). */
+        return SQL_SUCCESS;
+
     case SQL_ATTR_ASYNC_ENABLE:
     case SQL_ATTR_METADATA_ID:
     case SQL_ATTR_QUIET_MODE:
@@ -135,6 +144,7 @@ SQLRETURN SQL_API SQLSetConnectAttr(
         return SQL_SUCCESS;
 
     default:
+        ARGUS_LOG_DEBUG("SQLSetConnectAttr: unhandled attribute %d", Attribute);
         return argus_set_error(&dbc->diag, "HY092",
                                "[Argus] Invalid attribute identifier", 0);
     }
