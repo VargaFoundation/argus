@@ -117,6 +117,7 @@ if(BUILD_INTEGRATION_TESTS)
     argus_add_integration_test(test_impala_connect integration/test_impala_connect.c)
     argus_add_integration_test(test_impala_query integration/test_impala_query.c)
     argus_add_integration_test(test_hive_http integration/test_hive_http.c)
+    argus_add_integration_test(test_bi_folding integration/test_bi_folding.c)
 
     # Spark (Thrift Server) and Flink (SQL Gateway hiveserver2 endpoint) speak the
     # HiveServer2 protocol and are exercised through the Hive backend.

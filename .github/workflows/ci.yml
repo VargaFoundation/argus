@@ -340,7 +340,7 @@ jobs:
         # Run the backends whose deps are installed here (Trino, MySQL-wire,
         # Pinot, BigQuery). Flight SQL / ADBC require Arrow and run in their
         # own setup.
-        run: cd build && ctest --output-on-failure -L integration -R "trino|mysql|pinot|bigquery|hive_connect|hive_query"
+        run: cd build && ctest --output-on-failure -L integration -R "trino|mysql|pinot|bigquery|hive_connect|hive_query|bi_folding"
 
       - name: Stop services
         if: always()
