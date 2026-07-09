@@ -457,13 +457,17 @@ static SQLRETURN convert_cell_to_target(
     }
 
     case SQL_C_TYPE_TIMESTAMP: {
-        /* Parse "YYYY-MM-DD HH:MM:SS" or "YYYY-MM-DD HH:MM:SS.fff...fffffffff" */
+        /* Parse "YYYY-MM-DD HH:MM:SS[.fff]" with either a space or an ISO-8601
+         * 'T' between the date and time — Druid and other engines return
+         * "2026-07-01T10:00:00.000Z". The %*[ T] scanset consumes whichever
+         * separator is present. A trailing fraction and 'Z' are handled below /
+         * ignored. A date with no time part is accepted as midnight. */
         SQL_TIMESTAMP_STRUCT ts;
         memset(&ts, 0, sizeof(ts));
-        int n = sscanf(cell->data, "%4hd-%2hu-%2hu %2hu:%2hu:%2hu",
+        int n = sscanf(cell->data, "%4hd-%2hu-%2hu%*[ T]%2hu:%2hu:%2hu",
                        &ts.year, &ts.month, &ts.day,
                        &ts.hour, &ts.minute, &ts.second);
-        if (n < 6) {
+        if (n != 6 && n != 3) {
             return argus_set_error(diag, "22007",
                                    "[Argus] Invalid timestamp format", 0);
         }
