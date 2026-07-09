@@ -135,15 +135,37 @@ static void test_identifier_quote(void **state)
 {
     (void)state;
 
-    argus_dbc_t *dbc = create_test_dbc();
+    /* The identifier quote char is dialect-specific: backtick for HiveQL
+     * (Hive/Impala), the MySQL wire dialect and BigQuery; ANSI double quote
+     * for Trino, Pinot, Druid and Phoenix. Power BI's query folding depends
+     * on this, so verify each compiled-in backend advertises the right one. */
+    static const struct { const char *backend; const char *quote; } cases[] = {
+        {"hive", "`"}, {"impala", "`"}, {"mysql", "`"}, {"bigquery", "`"},
+        {"trino", "\""}, {"pinot", "\""}, {"druid", "\""}, {"phoenix", "\""},
+    };
 
-    SQLCHAR buf[32];
-    SQLRETURN ret = SQLGetInfo((SQLHDBC)dbc, SQL_IDENTIFIER_QUOTE_CHAR,
-                                buf, sizeof(buf), NULL);
-    assert_int_equal(ret, SQL_SUCCESS);
-    assert_string_equal((char *)buf, "`");
+    extern void argus_backends_init(void);
+    extern const argus_backend_t *argus_backend_find(const char *name);
+    argus_backends_init();
 
-    free_test_dbc(dbc);
+    int checked = 0;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const argus_backend_t *b = argus_backend_find(cases[i].backend);
+        if (!b) continue;  /* backend not compiled in on this build */
+
+        argus_dbc_t *dbc = create_test_dbc();
+        dbc->backend = b;
+
+        SQLCHAR buf[32];
+        SQLRETURN ret = SQLGetInfo((SQLHDBC)dbc, SQL_IDENTIFIER_QUOTE_CHAR,
+                                    buf, sizeof(buf), NULL);
+        assert_int_equal(ret, SQL_SUCCESS);
+        assert_string_equal((char *)buf, cases[i].quote);
+        checked++;
+
+        free_test_dbc(dbc);
+    }
+    assert_true(checked > 0);
 }
 
 /* ── Test: Cursor capabilities ───────────────────────────────── */

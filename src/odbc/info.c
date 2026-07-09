@@ -55,6 +55,23 @@ static SQLRETURN set_uinteger_info(SQLUINTEGER value,
     return SQL_SUCCESS;
 }
 
+/* The identifier quote character is dialect-specific. Power BI's Power Query
+ * reads it from SQLGetInfo and generates folded SQL with it, so a wrong value
+ * makes every generated query fail on the server (e.g. Trino rejects backtick).
+ * HiveQL (Hive/Impala/Spark/Flink), the MySQL wire dialect (MariaDB/StarRocks/
+ * Doris/ClickHouse) and BigQuery quote with a backtick; everything else —
+ * Trino, Pinot, Druid, Phoenix, Flight SQL — follows the ANSI double quote. */
+static const char *backend_quote_char(const argus_dbc_t *dbc)
+{
+    if (dbc && dbc->backend && dbc->backend->name) {
+        const char *n = dbc->backend->name;
+        if (strcmp(n, "hive") == 0 || strcmp(n, "impala") == 0 ||
+            strcmp(n, "mysql") == 0 || strcmp(n, "bigquery") == 0)
+            return "`";
+    }
+    return "\"";
+}
+
 /* ── ODBC API: SQLGetInfo ────────────────────────────────────── */
 
 SQLRETURN SQL_API SQLGetInfo(
@@ -121,7 +138,8 @@ SQLRETURN SQL_API SQLGetInfo(
 
     /* ── Identifier info ─────────────────────────────────────── */
     case SQL_IDENTIFIER_QUOTE_CHAR:
-        return set_string_info("`", InfoValue, BufferLength, StringLength);
+        return set_string_info(backend_quote_char(dbc), InfoValue,
+                               BufferLength, StringLength);
     case SQL_CATALOG_NAME_SEPARATOR:
         return set_string_info(".", InfoValue, BufferLength, StringLength);
     case SQL_CATALOG_TERM:
