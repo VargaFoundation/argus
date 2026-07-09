@@ -15,6 +15,7 @@
 /* Forward declare the generated Thrift types */
 #include "gen-c_glib/t_c_l_i_service.h"
 #include "gen-c_glib/t_c_l_i_service_types.h"
+#include "gen-c_glib/argus_thrift_prime.h"
 
 /* Impala connection state (same Thrift stack as Hive) */
 typedef struct impala_conn {
