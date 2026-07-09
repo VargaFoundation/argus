@@ -50,6 +50,10 @@ int hive_connect(argus_dbc_t *dbc,
                  const char *database, const char *auth_mechanism,
                  argus_backend_conn_t *out_conn)
 {
+    /* Register all thrift GTypes once before any concurrent use — the
+     * generated get_type() functions are not thread-safe. */
+    argus_thrift_prime_types();
+
     GError *error = NULL;
     bool sasl = use_sasl(auth_mechanism);
     bool gssapi = use_gssapi(auth_mechanism);

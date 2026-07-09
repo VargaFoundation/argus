@@ -12,6 +12,7 @@ add_custom_command(
         "${THRIFT_GEN_DIR}/t_c_l_i_service.h"
         "${THRIFT_GEN_DIR}/t_c_l_i_service_types.c"
         "${THRIFT_GEN_DIR}/t_c_l_i_service_types.h"
+        "${THRIFT_GEN_DIR}/argus_thrift_prime.c"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${THRIFT_GEN_DIR}"
     COMMAND ${THRIFT_COMPILER}
         --gen c_glib
@@ -24,7 +25,15 @@ add_custom_command(
         -P "${CMAKE_CURRENT_SOURCE_DIR}/patch_finalize.cmake"
     COMMAND ${CMAKE_COMMAND} -DFILE=${THRIFT_GEN_DIR}/t_c_l_i_service.c
         -P "${CMAKE_CURRENT_SOURCE_DIR}/patch_finalize.cmake"
-    DEPENDS "${THRIFT_IDL}" "${CMAKE_CURRENT_SOURCE_DIR}/patch_finalize.cmake"
+    # Generate a helper that registers every generated GType once, thread-safely
+    # (thrift's get_type() functions are not thread-safe). See gen_prime.cmake.
+    COMMAND ${CMAKE_COMMAND}
+        -DHEADER=${THRIFT_GEN_DIR}/t_c_l_i_service_types.h
+        -DOUT=${THRIFT_GEN_DIR}/argus_thrift_prime.c
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/gen_prime.cmake"
+    DEPENDS "${THRIFT_IDL}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/patch_finalize.cmake"
+        "${CMAKE_CURRENT_SOURCE_DIR}/gen_prime.cmake"
     COMMENT "Generating Thrift C GLib code from TCLIService.thrift"
 )
 
@@ -32,6 +41,7 @@ add_custom_command(
 add_library(argus_thrift_generated STATIC
     "${THRIFT_GEN_DIR}/t_c_l_i_service.c"
     "${THRIFT_GEN_DIR}/t_c_l_i_service_types.c"
+    "${THRIFT_GEN_DIR}/argus_thrift_prime.c"
 )
 
 target_include_directories(argus_thrift_generated
