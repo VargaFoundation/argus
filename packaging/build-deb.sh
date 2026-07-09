@@ -28,18 +28,41 @@ mkdir -p "$PKG_DIR/usr/include/argus"
 cp "$BUILD_DIR/src/libargus_odbc.so" "$PKG_DIR/usr/lib/x86_64-linux-gnu/"
 cp "$PROJECT_DIR/include/argus/"*.h "$PKG_DIR/usr/include/argus/"
 
-# Create control file
+# Compute the runtime library dependencies from the built .so so the package
+# declares exactly what it needs (thrift_c_glib, mariadb, krb5, … for the
+# backends that were compiled in). dpkg-shlibdeps also handles the t64 library
+# renames automatically. Fall back to an explicit superset if it is unavailable
+# or the .so links non-packaged libraries (e.g. a local dev build).
+LIB_DEPS=""
+if command -v dpkg-shlibdeps >/dev/null 2>&1; then
+    SHLIBDIR="$(mktemp -d)"
+    mkdir -p "$SHLIBDIR/debian"
+    printf 'Source: argus-odbc\n\nPackage: argus-odbc\nArchitecture: %s\nDepends: ${shlibs:Depends}\n' \
+        "$ARCH" > "$SHLIBDIR/debian/control"
+    : > "$SHLIBDIR/debian/substvars"
+    LIB_DEPS="$( (cd "$SHLIBDIR" && dpkg-shlibdeps -O \
+        "$PKG_DIR/usr/lib/x86_64-linux-gnu/libargus_odbc.so" 2>/dev/null) \
+        | sed -n 's/^shlibs:Depends=//p')"
+    rm -rf "$SHLIBDIR"
+fi
+if [ -z "$LIB_DEPS" ]; then
+    echo "dpkg-shlibdeps unavailable — using the explicit dependency superset"
+    LIB_DEPS="libglib2.0-0, libcurl4, libjson-glib-1.0-0, \
+libthrift-c-glib0t64 | libthrift-c-glib0, libmariadb3, libgssapi-krb5-2"
+fi
+
+# Create control file (unixodbc is a runtime requirement not seen by ldd)
 cat > "$PKG_DIR/DEBIAN/control" <<EOF
 Package: argus-odbc
 Version: ${VERSION}
 Section: libs
 Priority: optional
 Architecture: ${ARCH}
-Depends: unixodbc, libglib2.0-0, libcurl4, libjson-glib-1.0-0
+Depends: unixodbc, ${LIB_DEPS}
 Maintainer: Varga <contact@varga.co>
 Description: Argus ODBC Driver for Data Warehouses
- Argus is a universal ODBC driver supporting Hive, Impala,
- Trino, Phoenix, and Kudu backends.
+ Argus is a universal ODBC driver supporting Hive, Impala, Trino, Phoenix,
+ Pinot, Druid, BigQuery, MySQL-wire (StarRocks/Doris/ClickHouse) and Kudu.
 EOF
 
 # Create postinst script
