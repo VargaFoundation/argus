@@ -1,0 +1,1 @@
+#table( type table [name = text, regionkey = number] , {{"ARGENTINA", 1} , {"BRAZIL", 1} , {"CANADA", 1} } )
