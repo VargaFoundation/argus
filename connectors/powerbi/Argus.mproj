@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Power Query SDK project for the Argus connector.
+  Build with the VS Code "Power Query SDK" extension (Build → Argus.mez) or with
+  MakePQX:  MakePQX.exe pack -mz Argus.mez .
+-->
+<Project Sdk="Microsoft.PowerQuery.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net5.0</TargetFramework>
+    <Language>M</Language>
+    <ProjectGuid>b3f4c2a0-0e9a-4d31-9b7c-argus0000pbi</ProjectGuid>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="Argus.pq" />
+    <None Include="Argus.query.pq" />
+    <None Include="resources.resx" />
+    <None Include="Argus16.png" />
+    <None Include="Argus20.png" />
+    <None Include="Argus24.png" />
+    <None Include="Argus32.png" />
+    <None Include="Argus40.png" />
+    <None Include="Argus48.png" />
+    <None Include="Argus64.png" />
+    <None Include="Argus80.png" />
+  </ItemGroup>
+</Project>
