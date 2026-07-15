@@ -271,6 +271,31 @@ jobs:
           name: argus-odbc-installer
           path: installer/staging/argus-odbc-installer.exe
 
+  build-powerbi-connector:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Power Query SdkTools
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\argus-pqsdk\sdktools-2.155.2.nupkg
+          key: pq-sdktools-2.155.2
+
+      # Compile Argus.pq with the real MakePQX toolchain so a broken connector
+      # (M syntax / dialect regression) fails CI, mirroring the pqtest guard.
+      - name: Compile the Power BI connector (.mez)
+        shell: pwsh
+        run: connectors/powerbi/build.ps1 -OutDir connector-dist -ToolsCacheDir "$env:RUNNER_TEMP\argus-pqsdk"
+
+      - name: Upload connector (.mez)
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-powerbi-connector
+          path: connector-dist/Argus.mez
+
   integration-tests:
     runs-on: ubuntu-latest
 

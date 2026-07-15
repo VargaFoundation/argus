@@ -279,8 +279,45 @@ jobs:
             argus-odbc-*-windows-x64-installer.exe
             argus-odbc-*-windows-x64.intunewin
 
+  build-powerbi-connector:
+    runs-on: windows-latest
+    environment: main
+
+    env:
+      # Power BI connector signing is deliberately separate from the driver's
+      # Azure Trusted Signing: MakePQX signs a .pqx only with a .pfx certificate
+      # and has no Trusted Signing / Key Vault path. With no cert configured the
+      # build degrades to an unsigned Argus.mez (same spirit as the driver's
+      # continue-on-error signing).
+      PQ_SIGNING_CERT_BASE64: ${{ secrets.PQ_SIGNING_CERT_BASE64 }}
+      PQ_SIGNING_CERT_PASSWORD: ${{ secrets.PQ_SIGNING_CERT_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Power Query SdkTools
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\argus-pqsdk\sdktools-2.155.2.nupkg
+          key: pq-sdktools-2.155.2
+
+      - name: Build and sign the Power BI connector
+        shell: pwsh
+        run: connectors/powerbi/build.ps1 -OutDir connector-dist -ToolsCacheDir "$env:RUNNER_TEMP\argus-pqsdk"
+
+      - name: Upload connector
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-powerbi
+          if-no-files-found: warn
+          path: |
+            connector-dist/Argus.mez
+            connector-dist/Argus.pqx
+            connector-dist/Argus.pqx.thumbprint.txt
+
   release:
-    needs: [build-linux, build-macos, build-windows]
+    needs: [build-linux, build-macos, build-windows, build-powerbi-connector]
     runs-on: ubuntu-latest
 
     steps:
@@ -302,3 +339,6 @@ jobs:
           files: |
             artifacts/argus-odbc-*
             artifacts/argus-odbc_*
+            artifacts/Argus.mez
+            artifacts/Argus.pqx
+            artifacts/Argus.pqx.thumbprint.txt
