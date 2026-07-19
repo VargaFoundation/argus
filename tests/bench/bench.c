@@ -61,12 +61,28 @@ static long run_once(SQLHDBC dbc, const char *sql, int *ncols_out)
     /* ARGUS_BENCH_NODECODE=1 fetches rows without materializing any cell, to
      * isolate backend fetch+parse cost from the ODBC decode (SQLGetData). */
     int decode = getenv("ARGUS_BENCH_NODECODE") == NULL;
+    /* ARGUS_BENCH_CKSUM=1 accumulates a content checksum so two runs (e.g. fast
+     * JSON vs DOM) can be proven byte-identical. */
+    int cksum_on = getenv("ARGUS_BENCH_CKSUM") != NULL;
+    unsigned long long cksum = 1469598103934665603ULL;   /* FNV-1a offset */
     while (SQLFetch(stmt) == SQL_SUCCESS) {
         if (decode)
-            for (SQLSMALLINT c = 1; c <= ncols; c++)
-                SQLGetData(stmt, c, SQL_C_CHAR, buf, sizeof(buf), &ind);
+            for (SQLSMALLINT c = 1; c <= ncols; c++) {
+                SQLRETURN gr = SQLGetData(stmt, c, SQL_C_CHAR, buf, sizeof(buf), &ind);
+                if (cksum_on && SQL_SUCCEEDED(gr)) {
+                    long n = (ind == SQL_NULL_DATA) ? -1 : ind;
+                    cksum = (cksum ^ (unsigned long long)(n & 0xff)) * 1099511628211ULL;
+                    if (n > 0) {
+                        long m = n < (long)sizeof(buf) ? n : (long)sizeof(buf);
+                        for (long k = 0; k < m; k++)
+                            cksum = (cksum ^ (unsigned char)buf[k]) * 1099511628211ULL;
+                    }
+                }
+            }
         rows++;
     }
+    if (cksum_on)
+        fprintf(stderr, "  cksum=%016llx rows=%ld\n", cksum, rows);
 
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
     return rows;
