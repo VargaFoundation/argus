@@ -76,6 +76,8 @@ struct argus_dbc {
     /* Additional connection parameters */
     char        *app_name;
     int          fetch_buffer_size;
+    long         max_scroll_rows;  /* cap for static-cursor materialization
+                                    * (0 = ARGUS_DEFAULT_MAX_SCROLL_ROWS) */
     int          retry_count;
     int          retry_delay_sec;
     int          socket_timeout_sec;
@@ -133,6 +135,37 @@ typedef enum {
     ARGUS_DAE_PUTTING    = 2
 } argus_dae_state_t;
 
+/* ── Descriptors ──────────────────────────────────────────────────
+ * ODBC requires the four descriptors (ARD/APD/IRD/IPD) to be real, distinct
+ * handles that SQLAllocHandle(SQL_HANDLE_DESC) can also allocate explicitly.
+ * A descriptor is a thin object: an implicit one is a typed view onto its
+ * statement's data, an explicit one carries its own binding-record array. */
+#define ARGUS_DESC_SIGNATURE 0x41524758U  /* 'ARGX' */
+
+typedef enum {
+    ARGUS_DESC_ARD = 0,  /* Application Row Descriptor      */
+    ARGUS_DESC_APD,      /* Application Parameter Descriptor */
+    ARGUS_DESC_IRD,      /* Implementation Row Descriptor    */
+    ARGUS_DESC_IPD       /* Implementation Parameter Descriptor */
+} argus_desc_type_t;
+
+typedef struct argus_desc {
+    unsigned int         signature;
+    argus_desc_type_t    type;
+    bool                 is_explicit;   /* allocated via SQLAllocHandle */
+    argus_stmt_t        *stmt;          /* implicit: owner; explicit: associated stmt or NULL */
+    argus_dbc_t         *dbc;           /* explicit: owning connection */
+    /* Explicit descriptors carry their own records; implicit ones leave these
+     * NULL and route through the statement. */
+    argus_col_binding_t *records;
+    int                  record_capacity;
+    argus_diag_t         diag;
+} argus_desc_t;
+
+static inline bool argus_valid_desc(SQLHANDLE h) {
+    return h && ((argus_desc_t *)h)->signature == ARGUS_DESC_SIGNATURE;
+}
+
 /* Statement handle */
 struct argus_stmt {
     unsigned int            signature;
@@ -159,9 +192,25 @@ struct argus_stmt {
     bool                    fetch_started;
     SQLLEN                  row_count;   /* -1 if unknown */
 
-    /* Column bindings (dynamically allocated) */
+    /* Column bindings. `bindings` is the ACTIVE application row descriptor's
+     * record array — normally the implicit one below, but swapped to point at
+     * an explicitly-associated ARD's records by SQLSetStmtAttr. The whole fetch
+     * path reads `bindings`, so association just re-points it. */
     argus_col_binding_t    *bindings;
     int                     bindings_capacity;
+    /* The implicit ARD's own array, owned by the stmt and freed with it. Equals
+     * `bindings` unless an explicit ARD is associated. */
+    argus_col_binding_t    *implicit_bindings;
+    int                     implicit_bindings_capacity;
+
+    /* The four descriptors, embedded so their handles are stable and distinct.
+     * active_ard is &desc_ard by default, or an explicit descriptor once one is
+     * associated as the application row descriptor. */
+    argus_desc_t            desc_ard;
+    argus_desc_t            desc_apd;
+    argus_desc_t            desc_ird;
+    argus_desc_t            desc_ipd;
+    argus_desc_t           *active_ard;
 
     /* Parameter bindings */
     argus_param_binding_t   param_bindings[ARGUS_MAX_PARAMS];
@@ -175,10 +224,16 @@ struct argus_stmt {
     SQLULEN                 max_rows;
     SQLULEN                 query_timeout;
     SQLULEN                 row_array_size;
+    SQLULEN                 row_bind_type;   /* SQL_BIND_BY_COLUMN (default), or
+                                              * the size of the application's row
+                                              * struct for row-wise binding */
     SQLULEN                *rows_fetched_ptr;
     SQLUSMALLINT           *row_status_ptr;
     SQLULEN                 metadata_id;     /* SQL_TRUE or SQL_FALSE */
     SQLULEN                 use_bookmarks;   /* SQL_UB_OFF (default) */
+    SQLULEN                 noscan;          /* SQL_NOSCAN_OFF (default): the
+                                              * driver scans for and translates
+                                              * ODBC escape sequences */
 
     /* Async execution state */
     bool                    async_enabled;
@@ -240,6 +295,16 @@ SQLRETURN argus_free_env(argus_env_t *env);
 SQLRETURN argus_free_dbc(argus_dbc_t *dbc);
 SQLRETURN argus_free_stmt(argus_stmt_t *stmt);
 void argus_stmt_reset(argus_stmt_t *stmt);
+
+/* Explicit descriptor handles (SQLAllocHandle/SQLFreeHandle SQL_HANDLE_DESC). */
+SQLRETURN argus_alloc_desc(argus_dbc_t *dbc, argus_desc_t **out);
+SQLRETURN argus_free_desc(argus_desc_t *desc);
+
+/* The statement a descriptor operates on (its owner for implicit ones, its
+ * associated stmt for explicit ones), or NULL if an explicit descriptor is not
+ * associated. Descriptor API entry points accept a real descriptor handle or,
+ * for Driver-Manager backward compatibility, a raw statement handle. */
+argus_stmt_t *argus_desc_stmt(SQLHANDLE handle);
 
 /* Connection pool */
 argus_backend_conn_t argus_pool_acquire(

@@ -11,37 +11,39 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* argus_desc_t and its signature now live in handle.h — descriptors are real,
+ * distinct handles (see the descriptor block there). */
+
 extern SQLSMALLINT argus_copy_string(const char *src,
                                       SQLCHAR *dst, SQLSMALLINT dst_len);
 
-/* ── Descriptor signature and types ──────────────────────────── */
+/* ── Descriptor handle resolution ─────────────────────────────────
+ * The four descriptor entry points accept a real descriptor handle or, for
+ * Driver-Manager backward compatibility, a raw statement handle. An implicit
+ * descriptor (or an explicit one associated with a statement) resolves to that
+ * statement, and field access flows through the statement's data. A standalone
+ * explicit descriptor — allocated but not yet associated — has no statement, so
+ * field access flows through its own record array. */
 
-#define ARGUS_DESC_SIGNATURE 0x41524758U  /* 'ARGX' - unique descriptor signature */
-
-typedef enum {
-    ARGUS_DESC_IRD = 0,  /* Implementation Row Descriptor */
-    ARGUS_DESC_IPD,      /* Implementation Parameter Descriptor */
-    ARGUS_DESC_ARD,      /* Application Row Descriptor */
-    ARGUS_DESC_APD       /* Application Parameter Descriptor */
-} argus_desc_type_t;
-
-/*
- * Lightweight descriptor handle: just points back to the parent
- * statement and carries a type tag. All data lives in argus_stmt_t.
- */
-typedef struct argus_desc {
-    unsigned int      signature;
-    argus_desc_type_t type;
-    argus_stmt_t     *stmt;
-    argus_diag_t      diag;
-} argus_desc_t;
-
-/* ── Descriptor handle retrieval ─────────────────────────────── */
-
-/*
- * We allocate descriptors on-demand as part of SQLGetStmtAttr.
- * For now, SQLGetDescField works with the statement directly.
- */
+/* Grow a standalone explicit descriptor's record array to hold `n` records,
+ * zero-filling the new tail and keeping the active-ARD statement view in sync. */
+static int desc_ensure_records(argus_desc_t *d, int n)
+{
+    if (n <= d->record_capacity) return 0;
+    int cap = n < 8 ? 8 : n;
+    argus_col_binding_t *p = realloc(
+        d->records, (size_t)cap * sizeof(argus_col_binding_t));
+    if (!p) return -1;
+    memset(p + d->record_capacity, 0,
+           (size_t)(cap - d->record_capacity) * sizeof(argus_col_binding_t));
+    d->records = p;
+    d->record_capacity = cap;
+    if (d->stmt && d->stmt->active_ard == d) {
+        d->stmt->bindings = p;
+        d->stmt->bindings_capacity = cap;
+    }
+    return 0;
+}
 
 /* ── ODBC API: SQLGetDescField ───────────────────────────────── */
 
@@ -53,24 +55,43 @@ SQLRETURN SQL_API SQLGetDescField(
     SQLINTEGER  BufferLength,
     SQLINTEGER *StringLength)
 {
-    /*
-     * The Driver Manager may pass a descriptor handle directly.
-     * Since we don't allocate explicit descriptors, this is called
-     * when the DM maps descriptor operations. We handle the most
-     * common fields that BI tools query.
-     *
-     * The DescriptorHandle for implicit descriptors will actually
-     * be a statement handle (the DM routes calls accordingly).
-     * We detect this via the signature.
-     */
-    argus_stmt_t *stmt = NULL;
+    argus_stmt_t *stmt = argus_desc_stmt((SQLHANDLE)DescriptorHandle);
 
-    /* Check if it's actually a statement handle (implicit descriptor) */
-    if (argus_valid_stmt((SQLHANDLE)DescriptorHandle)) {
-        stmt = (argus_stmt_t *)DescriptorHandle;
-    } else {
-        /* Possibly an explicit descriptor - not supported */
-        return SQL_INVALID_HANDLE;
+    /* A standalone explicit descriptor (allocated, not yet associated) has no
+     * statement; answer from its own records. Only the header count and the
+     * per-record application fields are meaningful for it. */
+    if (!stmt) {
+        if (!argus_valid_desc((SQLHANDLE)DescriptorHandle))
+            return SQL_INVALID_HANDLE;
+        argus_desc_t *d = (argus_desc_t *)DescriptorHandle;
+        if (RecNumber == 0 && FieldIdentifier == SQL_DESC_COUNT) {
+            if (Value) *(SQLSMALLINT *)Value = (SQLSMALLINT)d->record_capacity;
+            if (StringLength) *StringLength = sizeof(SQLSMALLINT);
+            return SQL_SUCCESS;
+        }
+        if (RecNumber >= 1 && RecNumber <= d->record_capacity && d->records) {
+            const argus_col_binding_t *b = &d->records[RecNumber - 1];
+            if (FieldIdentifier == SQL_DESC_DATA_PTR) {
+                if (Value) *(SQLPOINTER *)Value = b->target_value;
+                if (StringLength) *StringLength = sizeof(SQLPOINTER);
+                return SQL_SUCCESS;
+            }
+            if (FieldIdentifier == SQL_DESC_TYPE ||
+                FieldIdentifier == SQL_DESC_CONCISE_TYPE) {
+                if (Value) *(SQLSMALLINT *)Value = b->target_type;
+                if (StringLength) *StringLength = sizeof(SQLSMALLINT);
+                return SQL_SUCCESS;
+            }
+            if (FieldIdentifier == SQL_DESC_OCTET_LENGTH) {
+                if (Value) *(SQLLEN *)Value = b->buffer_length;
+                if (StringLength) *StringLength = sizeof(SQLLEN);
+                return SQL_SUCCESS;
+            }
+        }
+        if (Value && BufferLength >= (SQLINTEGER)sizeof(SQLINTEGER))
+            *(SQLINTEGER *)Value = 0;
+        if (StringLength) *StringLength = 0;
+        return SQL_SUCCESS;
     }
 
     /* Header fields (RecNumber == 0) */
@@ -275,11 +296,42 @@ SQLRETURN SQL_API SQLSetDescField(
 {
     (void)BufferLength; /* No string descriptor fields handled yet */
 
-    if (!argus_valid_stmt((SQLHANDLE)DescriptorHandle)) {
-        return SQL_INVALID_HANDLE;
-    }
+    argus_stmt_t *stmt = argus_desc_stmt((SQLHANDLE)DescriptorHandle);
 
-    argus_stmt_t *stmt = (argus_stmt_t *)DescriptorHandle;
+    /* A standalone explicit descriptor stores field changes in its own records
+     * until it is associated with a statement. */
+    if (!stmt) {
+        if (!argus_valid_desc((SQLHANDLE)DescriptorHandle))
+            return SQL_INVALID_HANDLE;
+        argus_desc_t *d = (argus_desc_t *)DescriptorHandle;
+        if (FieldIdentifier == SQL_DESC_COUNT) return SQL_SUCCESS;
+        if (RecNumber >= 1) {
+            if (desc_ensure_records(d, RecNumber) != 0)
+                return argus_set_error(&d->diag, "HY001",
+                                       "[Argus] Memory allocation failed", 0);
+            argus_col_binding_t *b = &d->records[RecNumber - 1];
+            switch (FieldIdentifier) {
+            case SQL_DESC_DATA_PTR:
+                b->target_value = Value;
+                b->bound = (Value != NULL);
+                break;
+            case SQL_DESC_TYPE:
+            case SQL_DESC_CONCISE_TYPE:
+                b->target_type = (SQLSMALLINT)(intptr_t)Value;
+                break;
+            case SQL_DESC_OCTET_LENGTH:
+                b->buffer_length = (SQLLEN)(intptr_t)Value;
+                break;
+            case SQL_DESC_OCTET_LENGTH_PTR:
+            case SQL_DESC_INDICATOR_PTR:
+                b->str_len_or_ind = (SQLLEN *)Value;
+                break;
+            default:
+                break;
+            }
+        }
+        return SQL_SUCCESS;
+    }
 
     /*
      * For implicit descriptors routed through a statement handle,
@@ -350,11 +402,28 @@ SQLRETURN SQL_API SQLSetDescRec(
     (void)Precision;
     (void)Scale;
 
-    if (!argus_valid_stmt((SQLHANDLE)DescriptorHandle)) {
-        return SQL_INVALID_HANDLE;
-    }
+    argus_stmt_t *stmt = argus_desc_stmt((SQLHANDLE)DescriptorHandle);
 
-    argus_stmt_t *stmt = (argus_stmt_t *)DescriptorHandle;
+    /* Standalone explicit descriptor: write the record into its own array. */
+    if (!stmt) {
+        if (!argus_valid_desc((SQLHANDLE)DescriptorHandle))
+            return SQL_INVALID_HANDLE;
+        argus_desc_t *d = (argus_desc_t *)DescriptorHandle;
+        if (RecNumber < 1)
+            return argus_set_error(&d->diag, "07009",
+                                   "[Argus] Invalid descriptor index", 0);
+        if (desc_ensure_records(d, RecNumber) != 0)
+            return argus_set_error(&d->diag, "HY001",
+                                   "[Argus] Memory allocation failed", 0);
+        argus_col_binding_t *b = &d->records[RecNumber - 1];
+        b->target_type    = Type;
+        b->target_value   = DataPtr;
+        b->buffer_length  = Length;
+        b->str_len_or_ind = StringLengthPtr;
+        b->bound          = (DataPtr != NULL);
+        (void)IndicatorPtr;
+        return SQL_SUCCESS;
+    }
 
     if (RecNumber < 1) {
         return argus_set_error(&stmt->diag, "07009",
@@ -395,11 +464,12 @@ SQLRETURN SQL_API SQLGetDescRec(
     SQLSMALLINT *ScalePtr,
     SQLSMALLINT *NullablePtr)
 {
-    argus_stmt_t *stmt = NULL;
-    if (argus_valid_stmt((SQLHANDLE)DescriptorHandle)) {
-        stmt = (argus_stmt_t *)DescriptorHandle;
-    } else {
-        return SQL_INVALID_HANDLE;
+    argus_stmt_t *stmt = argus_desc_stmt((SQLHANDLE)DescriptorHandle);
+    if (!stmt) {
+        /* A standalone explicit descriptor has no column metadata to report. */
+        if (!argus_valid_desc((SQLHANDLE)DescriptorHandle))
+            return SQL_INVALID_HANDLE;
+        return SQL_NO_DATA;
     }
 
     if (RecNumber < 1 || RecNumber > (SQLSMALLINT)stmt->num_cols) {

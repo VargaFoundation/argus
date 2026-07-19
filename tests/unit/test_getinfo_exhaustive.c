@@ -172,6 +172,35 @@ static void test_bi_critical_values(void **state)
     assert_true(agg & SQL_AF_COUNT);
     assert_true(agg & SQL_AF_SUM);
 
+    /* Async is reported NONE: the scaffolding exists but the backends'
+     * get_operation_status is passive and never advances the query, so async
+     * would hang (see test_async.c). NONE is the honest value until that is
+     * fixed. */
+    SQLUINTEGER async_mode = 0;
+    SQLGetInfo((SQLHDBC)dbc, SQL_ASYNC_MODE, &async_mode, sizeof(async_mode), NULL);
+    assert_int_equal(async_mode, SQL_AM_NONE);
+
+    free_test_dbc(dbc);
+}
+
+/* SQLCancelHandle (ODBC 3.8) is callable and advertised. */
+static void test_cancel_handle(void **state)
+{
+    (void)state;
+    argus_dbc_t *dbc = create_test_dbc();
+
+    SQLUSMALLINT supported = SQL_FALSE;
+#ifdef SQL_API_SQLCANCELHANDLE
+    SQLGetFunctions((SQLHDBC)dbc, SQL_API_SQLCANCELHANDLE, &supported);
+    assert_int_equal(supported, SQL_TRUE);
+#endif
+
+    /* On a connection handle there is nothing to cancel — succeeds trivially. */
+    assert_int_equal(SQLCancelHandle(SQL_HANDLE_DBC, (SQLHANDLE)dbc), SQL_SUCCESS);
+    /* An unsupported handle type is rejected. */
+    assert_int_equal(SQLCancelHandle(SQL_HANDLE_ENV, (SQLHANDLE)dbc->env),
+                     SQL_INVALID_HANDLE);
+
     free_test_dbc(dbc);
 }
 
@@ -184,6 +213,7 @@ int main(void)
         cmocka_unit_test(test_integer_info_types),
         cmocka_unit_test(test_unknown_info_types_fallback),
         cmocka_unit_test(test_bi_critical_values),
+        cmocka_unit_test(test_cancel_handle),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

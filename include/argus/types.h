@@ -19,6 +19,12 @@
 /* Default fetch batch size */
 #define ARGUS_DEFAULT_BATCH_SIZE 1000
 
+/* Default cap on how many rows a static (scrollable) cursor will materialise in
+ * memory. A scrollable cursor buffers the whole result set, so an unbounded
+ * SELECT would OOM the process; past this cap the driver fails cleanly and tells
+ * the application to use a forward-only cursor. Override with MaxScrollRows. */
+#define ARGUS_DEFAULT_MAX_SCROLL_ROWS 5000000L
+
 /* Column descriptor - describes a result column */
 typedef struct argus_column_desc {
     SQLCHAR      name[ARGUS_MAX_COLUMN_NAME];

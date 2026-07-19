@@ -817,6 +817,13 @@ static SQLRETURN build_scroll_cache(argus_stmt_t *stmt)
                      ? dbc->fetch_buffer_size
                      : ARGUS_DEFAULT_BATCH_SIZE;
 
+    /* Bound the materialisation: a static cursor buffers the whole result, so
+     * an unbounded SELECT would exhaust memory. Past the cap, fail cleanly with
+     * an actionable diagnostic rather than OOM the process. */
+    size_t max_rows = (dbc->max_scroll_rows > 0)
+                      ? (size_t)dbc->max_scroll_rows
+                      : (size_t)ARGUS_DEFAULT_MAX_SCROLL_ROWS;
+
     while (1) {
         argus_row_cache_clear(&stmt->row_cache);
         int num_cols = 0;
@@ -852,6 +859,24 @@ static SQLRETURN build_scroll_cache(argus_stmt_t *stmt)
         }
 
         if (stmt->row_cache.num_rows == 0) break;
+
+        /* Enforce the materialisation cap before growing further. */
+        if (total + stmt->row_cache.num_rows > max_rows) {
+            for (size_t i = 0; i < total; i++) {
+                if (all_rows[i].cells) {
+                    for (int c = 0; c < stmt->num_cols; c++)
+                        free(all_rows[i].cells[c].data);
+                    free(all_rows[i].cells);
+                }
+            }
+            free(all_rows);
+            char msg[192];
+            snprintf(msg, sizeof(msg),
+                     "[Argus] Result set exceeds the static-cursor limit of %zu "
+                     "rows (MaxScrollRows); use a forward-only cursor for this "
+                     "query", max_rows);
+            return argus_set_error(&stmt->diag, "HY001", msg, 0);
+        }
 
         /* Copy rows into scroll cache */
         if (total + stmt->row_cache.num_rows > capacity) {
@@ -895,6 +920,47 @@ static SQLRETURN build_scroll_cache(argus_stmt_t *stmt)
 
 /* ── Internal: deliver scroll cache row to bound columns ─────── */
 
+/*
+ * Where row `rowset_idx` of the current rowset writes, for one bound column.
+ *
+ * ODBC has two layouts and they offset differently:
+ *   column-wise (SQL_BIND_BY_COLUMN, the default) — each column is its own
+ *     array, so the value advances by the column's buffer length and the
+ *     indicator by sizeof(SQLLEN);
+ *   row-wise — each row is one application struct, SQL_ATTR_ROW_BIND_TYPE is
+ *     that struct's size, and BOTH pointers advance by it.
+ *
+ * Using the column-wise arithmetic on a row-wise binding writes inside the
+ * application's buffer but at the wrong offset: no crash, no diagnostic, just
+ * wrong data. Hence one helper, used by every fetch path.
+ */
+static void resolve_bind_target(const argus_stmt_t *stmt,
+                                const argus_col_binding_t *bind,
+                                SQLULEN rowset_idx,
+                                SQLPOINTER *out_target,
+                                SQLLEN **out_ind)
+{
+    SQLPOINTER target = bind->target_value;
+    SQLLEN    *ind    = bind->str_len_or_ind;
+
+    if (rowset_idx > 0) {
+        size_t value_stride, ind_stride;
+
+        if (stmt->row_bind_type == SQL_BIND_BY_COLUMN) {
+            value_stride = (size_t)bind->buffer_length;
+            ind_stride   = sizeof(SQLLEN);
+        } else {
+            value_stride = ind_stride = (size_t)stmt->row_bind_type;
+        }
+
+        if (target) target = (char *)target + rowset_idx * value_stride;
+        if (ind)    ind    = (SQLLEN *)((char *)ind + rowset_idx * ind_stride);
+    }
+
+    *out_target = target;
+    *out_ind    = ind;
+}
+
 static SQLRETURN deliver_scroll_row(argus_stmt_t *stmt, size_t row_idx,
                                      SQLULEN rowset_idx)
 {
@@ -909,14 +975,9 @@ static SQLRETURN deliver_scroll_row(argus_stmt_t *stmt, size_t row_idx,
         argus_col_binding_t *bind = &stmt->bindings[col];
         argus_cell_t *cell = &row->cells[col];
 
-        SQLPOINTER target = bind->target_value;
-        SQLLEN *ind_ptr = bind->str_len_or_ind;
-        if (rowset_idx > 0 && target) {
-            target = (char *)target + rowset_idx * bind->buffer_length;
-            if (ind_ptr)
-                ind_ptr = (SQLLEN *)((char *)ind_ptr +
-                           rowset_idx * sizeof(SQLLEN));
-        }
+        SQLPOINTER target = NULL;
+        SQLLEN *ind_ptr = NULL;
+        resolve_bind_target(stmt, bind, rowset_idx, &target, &ind_ptr);
 
         SQLRETURN ret = convert_cell_to_target(
             cell, bind->target_type,
@@ -977,18 +1038,11 @@ static SQLRETURN fetch_single_row(argus_stmt_t *stmt, SQLULEN rowset_idx)
         argus_col_binding_t *bind = &stmt->bindings[col];
         argus_cell_t *cell = &row->cells[col];
 
-        /*
-         * For block cursors (row_array_size > 1), offset the target
-         * pointer by rowset_idx * buffer_length for column-wise binding.
-         */
-        SQLPOINTER target = bind->target_value;
-        SQLLEN *ind_ptr = bind->str_len_or_ind;
-        if (rowset_idx > 0 && target) {
-            target = (char *)target + rowset_idx * bind->buffer_length;
-            if (ind_ptr)
-                ind_ptr = (SQLLEN *)((char *)ind_ptr +
-                           rowset_idx * sizeof(SQLLEN));
-        }
+        /* Block cursors (row_array_size > 1) write row rowset_idx of the
+         * rowset; the layout decides the arithmetic. */
+        SQLPOINTER target = NULL;
+        SQLLEN *ind_ptr = NULL;
+        resolve_bind_target(stmt, bind, rowset_idx, &target, &ind_ptr);
 
         SQLRETURN ret = convert_cell_to_target(
             cell, bind->target_type,

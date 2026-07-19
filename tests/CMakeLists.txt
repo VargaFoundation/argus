@@ -30,6 +30,8 @@ argus_add_unit_test(test_handle unit/test_handle.c)
 argus_add_unit_test(test_connect_string unit/test_connect_string.c)
 argus_add_unit_test(test_diag unit/test_diag.c)
 argus_add_unit_test(test_info unit/test_info.c)
+argus_add_unit_test(test_dialect unit/test_dialect.c)
+argus_add_unit_test(test_escape unit/test_escape.c)
 argus_add_unit_test(test_bind_parameter unit/test_bind_parameter.c)
 argus_add_unit_test(test_unicode unit/test_unicode.c)
 argus_add_unit_test(test_descriptor unit/test_descriptor.c)
@@ -118,6 +120,9 @@ if(BUILD_INTEGRATION_TESTS)
     argus_add_integration_test(test_impala_query integration/test_impala_query.c)
     argus_add_integration_test(test_hive_http integration/test_hive_http.c)
     argus_add_integration_test(test_bi_folding integration/test_bi_folding.c)
+    argus_add_integration_test(test_bi_escapes integration/test_bi_escapes.c)
+    argus_add_integration_test(test_block_cursor integration/test_block_cursor.c)
+    argus_add_integration_test(test_async integration/test_async.c)
 
     # Spark (Thrift Server) and Flink (SQL Gateway hiveserver2 endpoint) speak the
     # HiveServer2 protocol and are exercised through the Hive backend.

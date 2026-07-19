@@ -170,6 +170,9 @@ static void test_identifier_quote(void **state)
 
 /* ── Test: Cursor capabilities ───────────────────────────────── */
 
+/* SQLFetchScroll implements a static cursor over a materialised snapshot, so
+ * both options are advertised. Keyset and dynamic are not: SQLSetStmtAttr
+ * downgrades them to static rather than honouring them. */
 static void test_scroll_options(void **state)
 {
     (void)state;
@@ -180,7 +183,21 @@ static void test_scroll_options(void **state)
     SQLRETURN ret = SQLGetInfo((SQLHDBC)dbc, SQL_SCROLL_OPTIONS,
                                 &scroll_opts, sizeof(scroll_opts), NULL);
     assert_int_equal(ret, SQL_SUCCESS);
-    assert_int_equal(scroll_opts, SQL_SO_FORWARD_ONLY);
+    assert_int_equal(scroll_opts, SQL_SO_FORWARD_ONLY | SQL_SO_STATIC);
+
+    SQLUINTEGER static_attr1 = 0;
+    ret = SQLGetInfo((SQLHDBC)dbc, SQL_STATIC_CURSOR_ATTRIBUTES1,
+                     &static_attr1, sizeof(static_attr1), NULL);
+    assert_int_equal(ret, SQL_SUCCESS);
+    assert_true(static_attr1 & SQL_CA1_NEXT);
+    assert_true(static_attr1 & SQL_CA1_ABSOLUTE);   /* FIRST / LAST / ABSOLUTE */
+    assert_true(static_attr1 & SQL_CA1_RELATIVE);   /* PRIOR / RELATIVE */
+
+    SQLUINTEGER keyset_attr1 = 0;
+    ret = SQLGetInfo((SQLHDBC)dbc, SQL_KEYSET_CURSOR_ATTRIBUTES1,
+                     &keyset_attr1, sizeof(keyset_attr1), NULL);
+    assert_int_equal(ret, SQL_SUCCESS);
+    assert_int_equal(keyset_attr1, 0);
 
     free_test_dbc(dbc);
 }

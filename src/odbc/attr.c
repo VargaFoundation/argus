@@ -313,13 +313,80 @@ SQLRETURN SQL_API SQLSetStmtAttr(
         return SQL_SUCCESS;
     }
 
+    /* An application sets NOSCAN_ON when it knows its SQL is already native
+     * and wants the driver to skip escape translation. Honouring it matters:
+     * SQL that legitimately contains a brace would otherwise be reparsed. */
+    case SQL_ATTR_NOSCAN: {
+        SQLULEN ns = (SQLULEN)(uintptr_t)Value;
+        stmt->noscan = (ns == SQL_NOSCAN_ON) ? SQL_NOSCAN_ON : SQL_NOSCAN_OFF;
+        return SQL_SUCCESS;
+    }
+
+    /* The scrollable/cursor-type pair must agree, or an application that asks
+     * for a scrollable cursor this way gets a forward-only one. */
+    case SQL_ATTR_CURSOR_SCROLLABLE: {
+        SQLULEN sc = (SQLULEN)(uintptr_t)Value;
+        stmt->cursor_type = (sc == SQL_SCROLLABLE)
+                            ? SQL_CURSOR_STATIC : SQL_CURSOR_FORWARD_ONLY;
+        return SQL_SUCCESS;
+    }
+
+    /* SQL_BIND_BY_COLUMN, or the size of the application's row struct for
+     * row-wise binding. fetch.c honours it; accepting it and then writing
+     * column-wise put data at the wrong offset inside the caller's buffer. */
+    case SQL_ATTR_ROW_BIND_TYPE:
+        stmt->row_bind_type = (SQLULEN)(uintptr_t)Value;
+        return SQL_SUCCESS;
+
+    /* Associate an explicitly-allocated application row descriptor. The whole
+     * fetch path reads stmt->bindings, so association re-points it at the
+     * descriptor's own records; SQL_NULL_HDESC (or the implicit ARD) reverts to
+     * the statement's own array. The implementation descriptors are read-only. */
+    case SQL_ATTR_APP_ROW_DESC: {
+        argus_desc_t *d = (argus_desc_t *)Value;
+        if (d == NULL || d == &stmt->desc_ard) {
+            stmt->active_ard        = &stmt->desc_ard;
+            stmt->bindings          = stmt->implicit_bindings;
+            stmt->bindings_capacity = stmt->implicit_bindings_capacity;
+            return SQL_SUCCESS;
+        }
+        if (!argus_valid_desc((SQLHANDLE)d) || !d->is_explicit)
+            return argus_set_error(&stmt->diag, "HY024",
+                                   "[Argus] Invalid descriptor handle", 0);
+        d->type          = ARGUS_DESC_ARD;
+        d->stmt          = stmt;
+        stmt->active_ard = d;
+        stmt->bindings          = d->records;
+        stmt->bindings_capacity = d->record_capacity;
+        return SQL_SUCCESS;
+    }
+
+    /* APP_PARAM_DESC: accept association (parameters are substituted
+     * client-side, so the record view is what SQLGet/SetDescField exercises)
+     * without re-pointing the fixed param array. */
+    case SQL_ATTR_APP_PARAM_DESC: {
+        argus_desc_t *d = (argus_desc_t *)Value;
+        if (d != NULL && d != &stmt->desc_apd) {
+            if (!argus_valid_desc((SQLHANDLE)d) || !d->is_explicit)
+                return argus_set_error(&stmt->diag, "HY024",
+                                       "[Argus] Invalid descriptor handle", 0);
+            d->type = ARGUS_DESC_APD;
+            d->stmt = stmt;
+        }
+        return SQL_SUCCESS;
+    }
+
+    /* The implementation descriptors are read-only: an application cannot
+     * substitute its own. */
+    case SQL_ATTR_IMP_ROW_DESC:
+    case SQL_ATTR_IMP_PARAM_DESC:
+        return argus_set_error(&stmt->diag, "HY017",
+                               "[Argus] Cannot set an implementation descriptor", 0);
+
     case SQL_ATTR_CONCURRENCY:
-    case SQL_ATTR_CURSOR_SCROLLABLE:
     case SQL_ATTR_CURSOR_SENSITIVITY:
-    case SQL_ATTR_NOSCAN:
     case SQL_ATTR_RETRIEVE_DATA:
     case SQL_ATTR_MAX_LENGTH:
-    case SQL_ATTR_ROW_BIND_TYPE:
         /* Accept but ignore */
         return SQL_SUCCESS;
 
@@ -381,8 +448,12 @@ SQLRETURN SQL_API SQLGetStmtAttr(
         if (StringLength) *StringLength = sizeof(SQLULEN);
         return SQL_SUCCESS;
 
+    /* Follows the cursor type: a static cursor really does scroll (fetch.c
+     * builds a full snapshot for it), a forward-only one does not. */
     case SQL_ATTR_CURSOR_SCROLLABLE:
-        if (Value) *(SQLULEN *)Value = SQL_NONSCROLLABLE;
+        if (Value)
+            *(SQLULEN *)Value = (stmt->cursor_type == SQL_CURSOR_STATIC)
+                                ? SQL_SCROLLABLE : SQL_NONSCROLLABLE;
         if (StringLength) *StringLength = sizeof(SQLULEN);
         return SQL_SUCCESS;
 
@@ -401,16 +472,24 @@ SQLRETURN SQL_API SQLGetStmtAttr(
         if (StringLength) *StringLength = sizeof(SQLULEN);
         return SQL_SUCCESS;
 
-    case SQL_ATTR_IMP_ROW_DESC:
-    case SQL_ATTR_IMP_PARAM_DESC:
+    /* The four descriptors are distinct handles. The application row descriptor
+     * may be an explicitly-associated one (active_ard); the rest are the
+     * statement's embedded implicit descriptors. Returning the same stmt
+     * pointer for all four, as before, made them indistinguishable. */
     case SQL_ATTR_APP_ROW_DESC:
+        if (Value) *(SQLPOINTER *)Value = (SQLPOINTER)stmt->active_ard;
+        if (StringLength) *StringLength = sizeof(SQLPOINTER);
+        return SQL_SUCCESS;
     case SQL_ATTR_APP_PARAM_DESC:
-        /*
-         * Return the stmt handle itself as the descriptor handle.
-         * Our descriptors are backed by stmt->bindings / stmt->param_bindings,
-         * and SQLSetDescField/SQLGetDescField already accept stmt handles.
-         */
-        if (Value) *(SQLPOINTER *)Value = (SQLPOINTER)stmt;
+        if (Value) *(SQLPOINTER *)Value = (SQLPOINTER)&stmt->desc_apd;
+        if (StringLength) *StringLength = sizeof(SQLPOINTER);
+        return SQL_SUCCESS;
+    case SQL_ATTR_IMP_ROW_DESC:
+        if (Value) *(SQLPOINTER *)Value = (SQLPOINTER)&stmt->desc_ird;
+        if (StringLength) *StringLength = sizeof(SQLPOINTER);
+        return SQL_SUCCESS;
+    case SQL_ATTR_IMP_PARAM_DESC:
+        if (Value) *(SQLPOINTER *)Value = (SQLPOINTER)&stmt->desc_ipd;
         if (StringLength) *StringLength = sizeof(SQLPOINTER);
         return SQL_SUCCESS;
 
@@ -452,12 +531,12 @@ SQLRETURN SQL_API SQLGetStmtAttr(
         return SQL_SUCCESS;
 
     case SQL_ATTR_NOSCAN:
-        if (Value) *(SQLULEN *)Value = SQL_NOSCAN_OFF;
+        if (Value) *(SQLULEN *)Value = stmt->noscan;
         if (StringLength) *StringLength = sizeof(SQLULEN);
         return SQL_SUCCESS;
 
     case SQL_ATTR_ROW_BIND_TYPE:
-        if (Value) *(SQLULEN *)Value = SQL_BIND_BY_COLUMN;
+        if (Value) *(SQLULEN *)Value = stmt->row_bind_type;
         if (StringLength) *StringLength = sizeof(SQLULEN);
         return SQL_SUCCESS;
 
@@ -543,29 +622,56 @@ SQLRETURN SQL_API SQLSetCursorName(
 
 /* ── ODBC API: SQLCopyDesc ────────────────────────────────────── */
 
+/* The binding-record array a descriptor exposes: an explicit one's own, or the
+ * active array of the statement an implicit one belongs to. */
+static argus_col_binding_t *desc_records(SQLHANDLE h, int *capacity)
+{
+    if (argus_valid_desc(h)) {
+        argus_desc_t *d = (argus_desc_t *)h;
+        if (d->is_explicit) { *capacity = d->record_capacity; return d->records; }
+    }
+    argus_stmt_t *stmt = argus_desc_stmt(h);
+    if (!stmt) { *capacity = 0; return NULL; }
+    *capacity = stmt->bindings_capacity;
+    return stmt->bindings;
+}
+
 SQLRETURN SQL_API SQLCopyDesc(
     SQLHDESC SourceDescHandle,
     SQLHDESC TargetDescHandle)
 {
-    argus_stmt_t *src = NULL;
-    argus_stmt_t *dst = NULL;
-
-    if (argus_valid_stmt((SQLHANDLE)SourceDescHandle))
-        src = (argus_stmt_t *)SourceDescHandle;
-    else
+    int src_cap = 0;
+    argus_col_binding_t *src = desc_records((SQLHANDLE)SourceDescHandle, &src_cap);
+    if (!src && !argus_desc_stmt((SQLHANDLE)SourceDescHandle))
         return SQL_INVALID_HANDLE;
 
-    if (argus_valid_stmt((SQLHANDLE)TargetDescHandle))
-        dst = (argus_stmt_t *)TargetDescHandle;
-    else
-        return SQL_INVALID_HANDLE;
-
-    /* Copy column bindings from source to target */
-    if (src->bindings_capacity > 0 && src->bindings) {
-        if (argus_stmt_ensure_bindings(dst, src->bindings_capacity) != 0)
+    /* Grow the target to hold the source records. An explicit target grows its
+     * own array; an implicit one grows its statement's. */
+    if (src_cap > 0 && src) {
+        if (argus_valid_desc((SQLHANDLE)TargetDescHandle) &&
+            ((argus_desc_t *)TargetDescHandle)->is_explicit) {
+            argus_desc_t *d = (argus_desc_t *)TargetDescHandle;
+            if (d->record_capacity < src_cap) {
+                argus_col_binding_t *p = realloc(
+                    d->records, (size_t)src_cap * sizeof(argus_col_binding_t));
+                if (!p) return SQL_ERROR;
+                d->records = p;
+                d->record_capacity = src_cap;
+                /* If this descriptor is the active ARD, keep the stmt view fresh. */
+                if (d->stmt && d->stmt->active_ard == d) {
+                    d->stmt->bindings = p;
+                    d->stmt->bindings_capacity = src_cap;
+                }
+            }
+            memcpy(d->records, src, (size_t)src_cap * sizeof(argus_col_binding_t));
+            return SQL_SUCCESS;
+        }
+        argus_stmt_t *dst_stmt = argus_desc_stmt((SQLHANDLE)TargetDescHandle);
+        if (!dst_stmt) return SQL_INVALID_HANDLE;
+        if (argus_stmt_ensure_bindings(dst_stmt, src_cap) != 0)
             return SQL_ERROR;
-        memcpy(dst->bindings, src->bindings,
-               (size_t)src->bindings_capacity * sizeof(argus_col_binding_t));
+        memcpy(dst_stmt->bindings, src,
+               (size_t)src_cap * sizeof(argus_col_binding_t));
     }
 
     return SQL_SUCCESS;

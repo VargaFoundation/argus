@@ -115,6 +115,15 @@ typedef struct argus_backend {
      * available. Lets the ODBC layer surface the real server error (e.g.
      * "table not found") instead of a generic one. */
     bool (*get_last_error)(argus_backend_conn_t conn, char *buf, size_t buflen);
+
+    /* The server's own version string, e.g. "467" or "3.1.3" (optional, may be
+     * NULL). Writes up to buflen-1 chars + NUL into buf; returns true if a
+     * version was available. Backs SQLGetInfo(SQL_DBMS_VER), which BI tools use
+     * to gate features — a driver that invents a version makes them gate on a
+     * fiction, so a backend that cannot answer should leave this NULL and let
+     * the ODBC layer report "unknown". Cache it at connect time rather than
+     * paying a round trip per call. */
+    bool (*get_server_version)(argus_backend_conn_t conn, char *buf, size_t buflen);
 } argus_backend_t;
 
 /* Backend registry */

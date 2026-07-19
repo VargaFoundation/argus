@@ -93,6 +93,11 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLNativeSql(
 ARGUS_EXPORT SQLRETURN SQL_API SQLCancel(
     SQLHSTMT StatementHandle);
 
+/* ODBC 3.8: cancel an operation on any handle. */
+ARGUS_EXPORT SQLRETURN SQL_API SQLCancelHandle(
+    SQLSMALLINT HandleType,
+    SQLHANDLE   Handle);
+
 ARGUS_EXPORT SQLRETURN SQL_API SQLRowCount(
     SQLHSTMT StatementHandle,
     SQLLEN  *RowCount);

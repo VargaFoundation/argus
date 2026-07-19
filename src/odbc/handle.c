@@ -72,10 +72,29 @@ SQLRETURN argus_alloc_stmt(argus_dbc_t *dbc, argus_stmt_t **out)
     g_mutex_init(&stmt->mutex);
     stmt->row_count       = -1;
     stmt->row_array_size  = 1;
+    stmt->row_bind_type   = SQL_BIND_BY_COLUMN;
+    stmt->noscan          = SQL_NOSCAN_OFF;   /* the driver translates escapes */
     stmt->paramset_size   = 1;
     stmt->param_bind_type = SQL_PARAM_BIND_BY_COLUMN;
     argus_diag_clear(&stmt->diag);
     argus_row_cache_init(&stmt->row_cache);
+
+    /* The four implicit descriptors are distinct handles that view this
+     * statement's data. active_ard starts as the implicit ARD; associating an
+     * explicit one later re-points it (and stmt->bindings) at that. */
+    stmt->desc_ard.signature = ARGUS_DESC_SIGNATURE;
+    stmt->desc_ard.type = ARGUS_DESC_ARD;
+    stmt->desc_ard.stmt = stmt;
+    stmt->desc_apd.signature = ARGUS_DESC_SIGNATURE;
+    stmt->desc_apd.type = ARGUS_DESC_APD;
+    stmt->desc_apd.stmt = stmt;
+    stmt->desc_ird.signature = ARGUS_DESC_SIGNATURE;
+    stmt->desc_ird.type = ARGUS_DESC_IRD;
+    stmt->desc_ird.stmt = stmt;
+    stmt->desc_ipd.signature = ARGUS_DESC_SIGNATURE;
+    stmt->desc_ipd.type = ARGUS_DESC_IPD;
+    stmt->desc_ipd.stmt = stmt;
+    stmt->active_ard = &stmt->desc_ard;
 
     /* Pre-allocate columns and bindings for common case */
     if (argus_stmt_ensure_columns(stmt, 64) != 0 ||
@@ -85,6 +104,10 @@ SQLRETURN argus_alloc_stmt(argus_dbc_t *dbc, argus_stmt_t **out)
         free(stmt);
         return SQL_ERROR;
     }
+
+    /* The implicit ARD owns the array ensure_bindings just made active. */
+    stmt->implicit_bindings = stmt->bindings;
+    stmt->implicit_bindings_capacity = stmt->bindings_capacity;
 
     *out = stmt;
     return SQL_SUCCESS;
@@ -117,6 +140,17 @@ int argus_stmt_ensure_bindings(argus_stmt_t *stmt, int ncols)
            (size_t)(cap - stmt->bindings_capacity) * sizeof(argus_col_binding_t));
     stmt->bindings = p;
     stmt->bindings_capacity = cap;
+
+    /* Keep whichever ARD owns this array in sync with the realloc, so its
+     * `records` pointer never dangles: the explicit one when associated, else
+     * the statement's own implicit array. */
+    if (stmt->active_ard && stmt->active_ard->is_explicit) {
+        stmt->active_ard->records = p;
+        stmt->active_ard->record_capacity = cap;
+    } else {
+        stmt->implicit_bindings = p;
+        stmt->implicit_bindings_capacity = cap;
+    }
     return 0;
 }
 
@@ -275,10 +309,70 @@ SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
     argus_stmt_reset(stmt);
     g_mutex_clear(&stmt->mutex);
     free(stmt->columns);
-    free(stmt->bindings);
+    /* Free the statement's own array, not stmt->bindings, which may currently
+     * point at an explicitly-associated descriptor the application still owns
+     * and will free with SQLFreeHandle(SQL_HANDLE_DESC). */
+    free(stmt->implicit_bindings);
     stmt->signature = 0;
     free(stmt);
     return SQL_SUCCESS;
+}
+
+/* ── Explicit descriptors ─────────────────────────────────────────
+ * An application allocates these on a connection and may associate one as a
+ * statement's ARD or APD via SQLSetStmtAttr. It carries its own record array;
+ * the implicit descriptors, by contrast, are embedded in the statement. */
+SQLRETURN argus_alloc_desc(argus_dbc_t *dbc, argus_desc_t **out)
+{
+    if (!argus_valid_dbc(dbc)) return SQL_INVALID_HANDLE;
+    if (!out) return SQL_ERROR;
+    *out = NULL;
+
+    argus_desc_t *desc = calloc(1, sizeof(argus_desc_t));
+    if (!desc) return SQL_ERROR;
+
+    desc->signature   = ARGUS_DESC_SIGNATURE;
+    /* Explicitly-allocated descriptors are application descriptors; ODBC lets
+     * one serve as either an ARD or an APD depending on where it is set. ARD is
+     * the neutral default until associated. */
+    desc->type        = ARGUS_DESC_ARD;
+    desc->is_explicit = true;
+    desc->dbc         = dbc;
+    argus_diag_clear(&desc->diag);
+
+    *out = desc;
+    return SQL_SUCCESS;
+}
+
+SQLRETURN argus_free_desc(argus_desc_t *desc)
+{
+    if (!argus_valid_desc(desc)) return SQL_INVALID_HANDLE;
+
+    /* If this descriptor is still associated with a statement as its active
+     * ARD, detach it first so the statement reverts to its own implicit array
+     * rather than reading freed memory. */
+    argus_stmt_t *stmt = desc->stmt;
+    if (stmt && stmt->active_ard == desc) {
+        stmt->bindings          = stmt->implicit_bindings;
+        stmt->bindings_capacity = stmt->implicit_bindings_capacity;
+        stmt->active_ard        = &stmt->desc_ard;
+    }
+
+    free(desc->records);
+    desc->signature = 0;
+    free(desc);
+    return SQL_SUCCESS;
+}
+
+argus_stmt_t *argus_desc_stmt(SQLHANDLE handle)
+{
+    if (argus_valid_desc(handle))
+        return ((argus_desc_t *)handle)->stmt;
+    /* The Driver Manager may still route descriptor calls through the statement
+     * handle for implicit descriptors — accept that for compatibility. */
+    if (argus_valid_stmt(handle))
+        return (argus_stmt_t *)handle;
+    return NULL;
 }
 
 /* ── ODBC API: SQLAllocHandle ─────────────────────────────────── */
@@ -303,6 +397,10 @@ SQLRETURN SQL_API SQLAllocHandle(
         return argus_alloc_stmt((argus_dbc_t *)InputHandle,
                                 (argus_stmt_t **)OutputHandle);
 
+    case SQL_HANDLE_DESC:
+        return argus_alloc_desc((argus_dbc_t *)InputHandle,
+                                (argus_desc_t **)OutputHandle);
+
     default:
         return SQL_ERROR;
     }
@@ -321,6 +419,8 @@ SQLRETURN SQL_API SQLFreeHandle(
         return argus_free_dbc((argus_dbc_t *)Handle);
     case SQL_HANDLE_STMT:
         return argus_free_stmt((argus_stmt_t *)Handle);
+    case SQL_HANDLE_DESC:
+        return argus_free_desc((argus_desc_t *)Handle);
     default:
         return SQL_ERROR;
     }

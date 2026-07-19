@@ -8,6 +8,8 @@ set(ARGUS_SOURCES
     odbc/fetch.c
     odbc/catalog.c
     odbc/info.c
+    odbc/dialect.c
+    odbc/escape.c
     odbc/diag.c
     odbc/attr.c
     odbc/util.c
@@ -41,6 +43,24 @@ set(ARGUS_LINK_DIRS
 )
 
 set(ARGUS_COMPILE_DEFS ARGUS_BUILD_DLL SQL_NOUNICODEMAP)
+
+# SQLGetInfo must report the driver's real identity, not a literal that drifts.
+# SQL_DRIVER_VER's format is fixed by ODBC at "##.##.####" (2-digit major,
+# 2-digit minor, 4-digit build), and SQL_DRIVER_NAME is the driver's file name,
+# which differs per platform.
+if(WIN32)
+    set(ARGUS_DRIVER_FILE_NAME "argus_odbc.dll")
+elseif(APPLE)
+    set(ARGUS_DRIVER_FILE_NAME "libargus_odbc.dylib")
+else()
+    set(ARGUS_DRIVER_FILE_NAME "libargus_odbc.so")
+endif()
+list(APPEND ARGUS_COMPILE_DEFS
+    ARGUS_DRIVER_NAME="${ARGUS_DRIVER_FILE_NAME}"
+    ARGUS_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    ARGUS_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    ARGUS_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+)
 
 # Windows: the installer setup entry points (ConfigDSN), winsock for the
 # Trino OAuth2 loopback, odbccp32 for the installer API and advapi32 for

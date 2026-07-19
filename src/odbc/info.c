@@ -1,6 +1,23 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
+#include "argus/dialect.h"
+#include "argus/log.h"
 #include <string.h>
+#include <stdio.h>
+
+/* Normally injected by the build (see src/CMakeLists.txt). */
+#ifndef ARGUS_DRIVER_NAME
+#define ARGUS_DRIVER_NAME "libargus_odbc.so"
+#endif
+#ifndef ARGUS_VERSION_MAJOR
+#define ARGUS_VERSION_MAJOR 0
+#endif
+#ifndef ARGUS_VERSION_MINOR
+#define ARGUS_VERSION_MINOR 0
+#endif
+#ifndef ARGUS_VERSION_PATCH
+#define ARGUS_VERSION_PATCH 0
+#endif
 
 /* Fallback defines for ODBC macros not present in all implementations */
 #ifndef SQL_DL_SQL92_DATE
@@ -58,18 +75,10 @@ static SQLRETURN set_uinteger_info(SQLUINTEGER value,
 /* The identifier quote character is dialect-specific. Power BI's Power Query
  * reads it from SQLGetInfo and generates folded SQL with it, so a wrong value
  * makes every generated query fail on the server (e.g. Trino rejects backtick).
- * HiveQL (Hive/Impala/Spark/Flink), the MySQL wire dialect (MariaDB/StarRocks/
- * Doris/ClickHouse) and BigQuery quote with a backtick; everything else —
- * Trino, Pinot, Druid, Phoenix, Flight SQL — follows the ANSI double quote. */
+ * The per-backend values live in the dialect table (src/odbc/dialect.c). */
 static const char *backend_quote_char(const argus_dbc_t *dbc)
 {
-    if (dbc && dbc->backend && dbc->backend->name) {
-        const char *n = dbc->backend->name;
-        if (strcmp(n, "hive") == 0 || strcmp(n, "impala") == 0 ||
-            strcmp(n, "mysql") == 0 || strcmp(n, "bigquery") == 0)
-            return "`";
-    }
-    return "\"";
+    return argus_dialect_for(dbc)->quote_char;
 }
 
 /* ── ODBC API: SQLGetInfo ────────────────────────────────────── */
@@ -89,9 +98,15 @@ SQLRETURN SQL_API SQLGetInfo(
     switch (InfoType) {
     /* ── Driver/data source info ─────────────────────────────── */
     case SQL_DRIVER_NAME:
-        return set_string_info("libargus_odbc.so", InfoValue, BufferLength, StringLength);
-    case SQL_DRIVER_VER:
-        return set_string_info("00.01.0000", InfoValue, BufferLength, StringLength);
+        return set_string_info(ARGUS_DRIVER_NAME, InfoValue, BufferLength, StringLength);
+    case SQL_DRIVER_VER: {
+        /* ODBC fixes the format at "##.##.####"; the numbers come from the
+         * project version so this cannot drift from the shipped build. */
+        char ver[16];
+        snprintf(ver, sizeof(ver), "%02d.%02d.%04d",
+                 ARGUS_VERSION_MAJOR, ARGUS_VERSION_MINOR, ARGUS_VERSION_PATCH);
+        return set_string_info(ver, InfoValue, BufferLength, StringLength);
+    }
     case SQL_DRIVER_ODBC_VER:
         return set_string_info("03.80", InfoValue, BufferLength, StringLength);
     case SQL_ODBC_VER:
@@ -119,8 +134,32 @@ SQLRETURN SQL_API SQLGetInfo(
         }
         return set_string_info(dbms_name, InfoValue, BufferLength, StringLength);
     }
-    case SQL_DBMS_VER:
-        return set_string_info("04.00.0000", InfoValue, BufferLength, StringLength);
+    /*
+     * The real server version when the backend can report one. ODBC fixes the
+     * shape at "##.##.####" optionally followed by the vendor's own string
+     * ("04.01.0000 Rdb 4.1"), so the raw value is both parsed and appended —
+     * Trino's "467" has no minor/release part, and a tool that wants the truth
+     * reads the suffix.
+     *
+     * A backend with no get_server_version hook reports 00.00.0000 (unknown)
+     * rather than the invented "04.00.0000" this used to return: BI tools gate
+     * features on this value, so a plausible lie is worse than an obvious gap.
+     */
+    case SQL_DBMS_VER: {
+        char raw[128] = {0};
+        if (dbc->connected && dbc->backend && dbc->backend->get_server_version &&
+            dbc->backend->get_server_version(dbc->backend_conn, raw, sizeof(raw)) &&
+            raw[0]) {
+            unsigned major = 0, minor = 0, release = 0;
+            sscanf(raw, "%u.%u.%u", &major, &minor, &release);
+
+            char ver[192];
+            snprintf(ver, sizeof(ver), "%02u.%02u.%04u %s",
+                     major, minor, release, raw);
+            return set_string_info(ver, InfoValue, BufferLength, StringLength);
+        }
+        return set_string_info("00.00.0000", InfoValue, BufferLength, StringLength);
+    }
 
     /* ── SQL conformance ─────────────────────────────────────── */
     case SQL_ODBC_API_CONFORMANCE:
@@ -153,40 +192,30 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_CATALOG_LOCATION:
         return set_usmallint_info(SQL_CL_START, InfoValue, StringLength);
 
-    /* ── String functions ────────────────────────────────────── */
+    /* ── Scalar functions ────────────────────────────────────────
+     * Derived from the dialect's fn_map, never hard-coded: reporting a bit here
+     * is a promise that {fn NAME(...)} will be translated by escape.c (ODBC
+     * spec, "Escape Sequences in ODBC"). Deriving both from one table is what
+     * keeps that promise true, and makes the answer backend-specific — Druid
+     * and Hive do not have the same functions. */
     case SQL_STRING_FUNCTIONS:
         return set_uinteger_info(
-            SQL_FN_STR_CONCAT | SQL_FN_STR_LENGTH | SQL_FN_STR_SUBSTRING |
-            SQL_FN_STR_LTRIM | SQL_FN_STR_RTRIM | SQL_FN_STR_LCASE |
-            SQL_FN_STR_UCASE | SQL_FN_STR_REPLACE | SQL_FN_STR_LEFT |
-            SQL_FN_STR_RIGHT | SQL_FN_STR_LOCATE | SQL_FN_STR_REPEAT |
-            SQL_FN_STR_SPACE,
+            argus_dialect_fn_bitmap(argus_dialect_for(dbc), ARGUS_FN_GROUP_STRING),
             InfoValue, StringLength);
 
     case SQL_NUMERIC_FUNCTIONS:
         return set_uinteger_info(
-            SQL_FN_NUM_ABS | SQL_FN_NUM_CEILING | SQL_FN_NUM_FLOOR |
-            SQL_FN_NUM_MOD | SQL_FN_NUM_ROUND | SQL_FN_NUM_SQRT |
-            SQL_FN_NUM_POWER | SQL_FN_NUM_LOG | SQL_FN_NUM_EXP |
-            SQL_FN_NUM_SIGN | SQL_FN_NUM_TRUNCATE | SQL_FN_NUM_RAND |
-            SQL_FN_NUM_LOG10 | SQL_FN_NUM_ACOS | SQL_FN_NUM_ASIN |
-            SQL_FN_NUM_ATAN | SQL_FN_NUM_COS | SQL_FN_NUM_SIN |
-            SQL_FN_NUM_TAN,
+            argus_dialect_fn_bitmap(argus_dialect_for(dbc), ARGUS_FN_GROUP_NUMERIC),
             InfoValue, StringLength);
 
     case SQL_SYSTEM_FUNCTIONS:
         return set_uinteger_info(
-            SQL_FN_SYS_IFNULL | SQL_FN_SYS_DBNAME | SQL_FN_SYS_USERNAME,
+            argus_dialect_fn_bitmap(argus_dialect_for(dbc), ARGUS_FN_GROUP_SYSTEM),
             InfoValue, StringLength);
 
     case SQL_TIMEDATE_FUNCTIONS:
         return set_uinteger_info(
-            SQL_FN_TD_NOW | SQL_FN_TD_CURDATE | SQL_FN_TD_YEAR |
-            SQL_FN_TD_MONTH | SQL_FN_TD_DAYOFMONTH | SQL_FN_TD_HOUR |
-            SQL_FN_TD_MINUTE | SQL_FN_TD_SECOND | SQL_FN_TD_EXTRACT |
-            SQL_FN_TD_CURRENT_DATE | SQL_FN_TD_CURRENT_TIME |
-            SQL_FN_TD_CURRENT_TIMESTAMP | SQL_FN_TD_QUARTER |
-            SQL_FN_TD_WEEK | SQL_FN_TD_DAYOFWEEK | SQL_FN_TD_DAYOFYEAR,
+            argus_dialect_fn_bitmap(argus_dialect_for(dbc), ARGUS_FN_GROUP_TIMEDATE),
             InfoValue, StringLength);
 
     /* ── SQL syntax support ──────────────────────────────────── */
@@ -205,15 +234,33 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_MAX_COLUMN_NAME_LEN:
         return set_usmallint_info(256, InfoValue, StringLength);
 
-    /* ── Cursor capabilities ─────────────────────────────────── */
+    /* ── Cursor capabilities ─────────────────────────────────────
+     * SQLFetchScroll implements a real static cursor over a materialised copy
+     * of the result set (FIRST/LAST/PRIOR/ABSOLUTE/RELATIVE), and
+     * SQLSetStmtAttr accepts SQL_CURSOR_STATIC. Reporting forward-only here
+     * meant every BI tool that asks before it scrolls concluded it could not,
+     * and fell back to refetching. Keyset and dynamic stay at zero: they are
+     * downgraded to static, so claiming them would be a lie of a different
+     * kind. */
     case SQL_SCROLL_OPTIONS:
-        return set_uinteger_info(SQL_SO_FORWARD_ONLY, InfoValue, StringLength);
+        return set_uinteger_info(SQL_SO_FORWARD_ONLY | SQL_SO_STATIC,
+                                 InfoValue, StringLength);
     case SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1:
         return set_uinteger_info(SQL_CA1_NEXT, InfoValue, StringLength);
     case SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES2:
-        return set_uinteger_info(0, InfoValue, StringLength);
+        return set_uinteger_info(SQL_CA2_READ_ONLY_CONCURRENCY,
+                                 InfoValue, StringLength);
+    /* SQL_CA1_ABSOLUTE covers FETCH_FIRST/LAST/ABSOLUTE, SQL_CA1_RELATIVE
+     * covers FETCH_PRIOR/RELATIVE — all handled in fetch.c's scroll cache.
+     * SQLSetPos implements SQL_POSITION and SQL_REFRESH only. */
     case SQL_STATIC_CURSOR_ATTRIBUTES1:
+        return set_uinteger_info(
+            SQL_CA1_NEXT | SQL_CA1_ABSOLUTE | SQL_CA1_RELATIVE |
+            SQL_CA1_POS_POSITION | SQL_CA1_POS_REFRESH | SQL_CA1_LOCK_NO_CHANGE,
+            InfoValue, StringLength);
     case SQL_STATIC_CURSOR_ATTRIBUTES2:
+        return set_uinteger_info(SQL_CA2_READ_ONLY_CONCURRENCY,
+                                 InfoValue, StringLength);
     case SQL_DYNAMIC_CURSOR_ATTRIBUTES1:
     case SQL_DYNAMIC_CURSOR_ATTRIBUTES2:
     case SQL_KEYSET_CURSOR_ATTRIBUTES1:
@@ -275,13 +322,20 @@ SQLRETURN SQL_API SQLGetInfo(
         return set_string_info("N", InfoValue, BufferLength, StringLength);
     case SQL_MULTIPLE_ACTIVE_TXN:
         return set_string_info("N", InfoValue, BufferLength, StringLength);
+    /* Reporting outer-join capability commits the driver to accepting the
+     * {oj ...} escape, so both answers come from the dialect. Backends whose
+     * join surface we have not verified (Phoenix, Pinot, Druid, Flight SQL,
+     * Kudu) report none rather than claim all of them. */
     case SQL_OUTER_JOINS:
-        return set_string_info("Y", InfoValue, BufferLength, StringLength);
+        return set_string_info(argus_dialect_for(dbc)->supports_oj ? "Y" : "N",
+                               InfoValue, BufferLength, StringLength);
     case SQL_OJ_CAPABILITIES:
         return set_uinteger_info(
-            SQL_OJ_LEFT | SQL_OJ_RIGHT | SQL_OJ_FULL |
-            SQL_OJ_NESTED | SQL_OJ_NOT_ORDERED |
-            SQL_OJ_INNER | SQL_OJ_ALL_COMPARISON_OPS,
+            argus_dialect_for(dbc)->supports_oj
+                ? (SQL_OJ_LEFT | SQL_OJ_RIGHT | SQL_OJ_FULL |
+                   SQL_OJ_NESTED | SQL_OJ_NOT_ORDERED |
+                   SQL_OJ_INNER | SQL_OJ_ALL_COMPARISON_OPS)
+                : 0,
             InfoValue, StringLength);
     case SQL_SUBQUERIES:
         return set_uinteger_info(
@@ -334,8 +388,17 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_SQL_CONFORMANCE:
         return set_uinteger_info(SQL_SC_SQL92_ENTRY, InfoValue, StringLength);
 
+    /* Level 1 interface conformance, matching the commercial Simba/Starburst
+     * drivers for these same engines. Level 1 = Core + features 101-109: schema
+     * qualification, scrollable cursors (SQLFetchScroll), SQLPrimaryKeys,
+     * SQLBrowseConnect, SQLSetPos POSITION/REFRESH, SQLMoreResults, and real
+     * descriptor handles (SQLAllocHandle SQL_HANDLE_DESC) — all present. The two
+     * OLTP features Level 1 also lists, stored procedures (105) and transactions
+     * with rollback (109), are absent from Trino/BigQuery/Hive/… and reported so
+     * honestly via SQL_PROCEDURES="N" and SQL_TXN_CAPABLE=SQL_TC_NONE, exactly
+     * as the commercial drivers do over the same engines. */
     case SQL_ODBC_INTERFACE_CONFORMANCE:
-        return set_uinteger_info(SQL_OIC_CORE, InfoValue, StringLength);
+        return set_uinteger_info(SQL_OIC_LEVEL1, InfoValue, StringLength);
 
     case SQL_SQL92_PREDICATES:
         return set_uinteger_info(
@@ -379,6 +442,16 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_PARAM_ARRAY_SELECTS:
         return set_uinteger_info(SQL_PAS_NO_SELECT, InfoValue, StringLength);
 
+    /* Reported NONE, and this is deliberate. The statement-async scaffolding
+     * exists (SQL_ATTR_ASYNC_ENABLE, execute.c async_poll returning
+     * SQL_STILL_EXECUTING), but the backends' get_operation_status is *passive*:
+     * trino_get_operation_status reports finished from the current op state and
+     * never advances the query — Trino only progresses when its nextUri is
+     * polled, which happens during fetch, not during async_poll. So an async
+     * SQLExecDirect would return SQL_STILL_EXECUTING forever (proven by
+     * tests/integration/test_async.c). Advertising SQL_AM_STATEMENT would make
+     * BI tools hang. To advertise it honestly, get_operation_status must drive
+     * the operation forward one step per poll; until then, NONE is the truth. */
     case SQL_ASYNC_MODE:
         return set_uinteger_info(SQL_AM_NONE, InfoValue, StringLength);
 
@@ -406,8 +479,11 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_BOOKMARK_PERSISTENCE:
         return set_uinteger_info(0, InfoValue, StringLength);
 
+    /* SQLDescribeParam can only guess (SQL_VARCHAR/255): none of these engines
+     * is asked to prepare server-side, so there is no parameter metadata to
+     * report. Saying "Y" here made applications trust that guess. */
     case SQL_DESCRIBE_PARAMETER:
-        return set_string_info("Y", InfoValue, BufferLength, StringLength);
+        return set_string_info("N", InfoValue, BufferLength, StringLength);
 
     case SQL_INTEGRITY:
         return set_string_info("N", InfoValue, BufferLength, StringLength);
@@ -415,11 +491,16 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_MAX_INDEX_SIZE:
         return set_uinteger_info(0, InfoValue, StringLength);
 
+    /* The driver forwards whatever SQL it is given, and SQL_CREATE_TABLE /
+     * SQL_DROP_TABLE / SQL_INSERT_STATEMENT below advertise DDL and DML. What
+     * a given user may actually write is the server's decision, not ours. */
     case SQL_DATA_SOURCE_READ_ONLY:
-        return set_string_info("Y", InfoValue, BufferLength, StringLength);
+        return set_string_info("N", InfoValue, BufferLength, StringLength);
 
+    /* SQLSetPos implements these two; ADD/UPDATE/DELETE return HYC00. */
     case SQL_POS_OPERATIONS:
-        return set_uinteger_info(SQL_POS_POSITION, InfoValue, StringLength);
+        return set_uinteger_info(SQL_POS_POSITION | SQL_POS_REFRESH,
+                                 InfoValue, StringLength);
 
     case SQL_LOCK_TYPES:
         return set_uinteger_info(SQL_LCK_NO_CHANGE, InfoValue, StringLength);
@@ -440,9 +521,14 @@ SQLRETURN SQL_API SQLGetInfo(
         return set_uinteger_info(SQL_SDF_CURRENT_DATE | SQL_SDF_CURRENT_TIMESTAMP,
                                   InfoValue, StringLength);
 
+    /* Reporting SQL-92 datetime literals means {d '...'} / {ts '...'} will be
+     * rendered as DATE '...' / TIMESTAMP '...', so the answer follows the
+     * dialect's literal style rather than being assumed for every backend. */
     case SQL_DATETIME_LITERALS:
         return set_uinteger_info(
-            SQL_DL_SQL92_DATE | SQL_DL_SQL92_TIMESTAMP,
+            argus_dialect_for(dbc)->literals == ARGUS_LIT_ANSI
+                ? (SQL_DL_SQL92_DATE | SQL_DL_SQL92_TIMESTAMP)
+                : 0,
             InfoValue, StringLength);
 
     case SQL_CATALOG_NAME:
@@ -530,7 +616,19 @@ SQLRETURN SQL_API SQLGetInfo(
 #endif
 
     default:
-        /* Return empty/zero for unknown info types */
+        /*
+         * Deliberately permissive, and a documented deviation: ODBC reserves
+         * HY096 for an InfoType that does not exist, but this branch cannot
+         * tell those apart from the ones simply not handled above. For the
+         * latter — the overwhelming majority — zero means "capability absent",
+         * which is both the right answer and what the caller expects, so
+         * erroring would break working applications to no end.
+         *
+         * The log line is the safety net: it makes the gap visible while
+         * debugging a BI tool instead of hiding behind a silent zero.
+         */
+        ARGUS_LOG_DEBUG("SQLGetInfo: unhandled InfoType %u, reporting zero/empty",
+                        (unsigned)InfoType);
         if (InfoValue && BufferLength > 0)
             memset(InfoValue, 0, (size_t)BufferLength);
         if (StringLength) *StringLength = 0;
@@ -615,8 +713,11 @@ SQLRETURN SQL_API SQLGetFunctions(
         SET_FUNC(SQL_API_SQLCOPYDESC);
         SET_FUNC(SQL_API_SQLSETDESCREC);
         SET_FUNC(SQL_API_SQLDESCRIBEPARAM);
+        /* SQLSetPos is here because SQL_POSITION and SQL_REFRESH work;
+         * SQL_POS_OPERATIONS says which. SQLBulkOperations is deliberately
+         * absent — it is a pure HYC00 stub, and claiming it made applications
+         * call it and fail. */
         SET_FUNC(SQL_API_SQLSETPOS);
-        SET_FUNC(SQL_API_SQLBULKOPERATIONS);
 
         #undef SET_FUNC
         return SQL_SUCCESS;
@@ -668,6 +769,9 @@ SQLRETURN SQL_API SQLGetFunctions(
 
     /* Single function query */
     switch (FunctionId) {
+#ifdef SQL_API_SQLCANCELHANDLE
+    case SQL_API_SQLCANCELHANDLE:   /* ODBC 3.8 */
+#endif
     case SQL_API_SQLALLOCHANDLE:
     case SQL_API_SQLFREEHANDLE:
     case SQL_API_SQLFREESTMT:
@@ -726,10 +830,11 @@ SQLRETURN SQL_API SQLGetFunctions(
     case SQL_API_SQLSETDESCREC:
     case SQL_API_SQLDESCRIBEPARAM:
     case SQL_API_SQLSETPOS:
-    case SQL_API_SQLBULKOPERATIONS:
         *Supported = SQL_TRUE;
         break;
     default:
+        /* Includes SQL_API_SQLBULKOPERATIONS: a pure HYC00 stub, so SQL_FALSE
+         * is the honest answer and keeps applications from calling it. */
         *Supported = SQL_FALSE;
         break;
     }

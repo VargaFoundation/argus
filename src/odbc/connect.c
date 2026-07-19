@@ -256,6 +256,9 @@ SQLRETURN SQL_API SQLDriverConnect(
     v = argus_conn_params_get(&params, "FETCHBUFFERSIZE");
     if (v) dbc->fetch_buffer_size = atoi(v);
 
+    v = argus_conn_params_get(&params, "MAXSCROLLROWS");
+    if (v) dbc->max_scroll_rows = atol(v);
+
     v = argus_conn_params_get(&params, "SOCKETTIMEOUT");
     if (v) dbc->socket_timeout_sec = atoi(v);
 

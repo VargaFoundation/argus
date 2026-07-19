@@ -87,6 +87,8 @@ static void apply_dsn_param(argus_dbc_t *dbc, const char *key, const char *val)
         dbc->query_timeout_sec = atoi(val);
     } else if (strcasecmp(key, "FETCHBUFFERSIZE") == 0) {
         dbc->fetch_buffer_size = atoi(val);
+    } else if (strcasecmp(key, "MAXSCROLLROWS") == 0) {
+        dbc->max_scroll_rows = atol(val);
     } else if (strcasecmp(key, "LOGLEVEL") == 0) {
         dbc->log_level = atoi(val);
     } else if (strcasecmp(key, "LOGFILE") == 0) {

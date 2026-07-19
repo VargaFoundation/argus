@@ -1,6 +1,7 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
 #include "argus/log.h"
+#include "argus/dialect.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -705,6 +706,49 @@ static char *resolve_query(argus_stmt_t *stmt, const char *query)
     return strdup(query);
 }
 
+/* ── Internal: ODBC escape sequence translation ──────────────── */
+
+/*
+ * Rewrite {fn ...}, {ts ...}, {oj ...} & co. into the backend's own grammar.
+ * SQLGetInfo told the application which of these the driver accepts, so this
+ * has to run before the SQL reaches the server — Tableau, Excel and Qlik all
+ * generate them (Power Query does not, which is why the Power BI connector
+ * never needed it).
+ *
+ * Takes ownership of `query` and returns the string to use (possibly the same
+ * pointer), or NULL on error with stmt->diag set. The result is always
+ * malloc'd, matching what the rest of the statement path frees.
+ */
+static char *apply_escapes(argus_stmt_t *stmt, char *query)
+{
+    char *translated = NULL;
+
+    if (stmt->noscan == SQL_NOSCAN_ON) return query;
+
+    switch (argus_escape_translate(argus_dialect_for(stmt->dbc), query,
+                                   &translated, &stmt->diag)) {
+    case ARGUS_ESCAPE_NONE:
+        return query;
+
+    case ARGUS_ESCAPE_OK: {
+        /* escape.c allocates with GLib; hand back a malloc'd copy so callers
+         * keep using free(). */
+        char *dup = strdup(translated);
+        g_free(translated);
+        free(query);
+        if (!dup)
+            argus_set_error(&stmt->diag, "HY001",
+                            "[Argus] Memory allocation failed", 0);
+        return dup;
+    }
+
+    case ARGUS_ESCAPE_ERROR:
+    default:
+        free(query);
+        return NULL;
+    }
+}
+
 /* ── Internal: execute or poll async ─────────────────────────── */
 
 static SQLRETURN exec_or_async(argus_stmt_t *stmt, const char *query)
@@ -767,6 +811,14 @@ SQLRETURN SQL_API SQLExecDirect(
         return err;
     }
 
+    /* Escapes first: parameter substitution injects literals that must not be
+     * rescanned, and stmt->query is expected to hold native SQL from here on. */
+    query = apply_escapes(stmt, query);
+    if (!query) {
+        ARGUS_STMT_UNLOCK(stmt);
+        return SQL_ERROR;
+    }
+
     /* Store the query */
     free(stmt->query);
     stmt->query = query;
@@ -811,6 +863,14 @@ SQLRETURN SQL_API SQLPrepare(
                                "[Argus] Memory allocation failed", 0);
         ARGUS_STMT_UNLOCK(stmt);
         return err;
+    }
+
+    /* Translate here rather than at SQLExecute so a bad escape is reported at
+     * prepare time, where the application expects to hear about bad SQL. */
+    query = apply_escapes(stmt, query);
+    if (!query) {
+        ARGUS_STMT_UNLOCK(stmt);
+        return SQL_ERROR;
     }
 
     free(stmt->query);
@@ -1052,12 +1112,49 @@ SQLRETURN SQL_API SQLNativeSql(
     argus_dbc_t *dbc = (argus_dbc_t *)ConnectionHandle;
     if (!argus_valid_dbc(dbc)) return SQL_INVALID_HANDLE;
 
-    /* Pass-through: Hive SQL is the native form */
-    size_t src_len;
-    if (TextLength1 == SQL_NTS)
-        src_len = InStatementText ? strlen((const char *)InStatementText) : 0;
-    else
-        src_len = (size_t)TextLength1;
+    argus_diag_clear(&dbc->diag);
+
+    if (!InStatementText)
+        return argus_set_error(&dbc->diag, "HY009",
+                               "[Argus] NULL statement text", 0);
+
+    /* The translation is dialect-specific, so without a connection there is no
+     * right answer — better to say so than to silently apply the ANSI dialect
+     * and reject an escape the real backend would have accepted. */
+    if (!dbc->connected)
+        return argus_set_error(&dbc->diag, "08003",
+                               "[Argus] Connection not open", 0);
+
+    char *in = argus_str_dup(InStatementText, TextLength1);
+    if (!in)
+        return argus_set_error(&dbc->diag, "HY001",
+                               "[Argus] Memory allocation failed", 0);
+
+    /* Show the application exactly what the server will be sent: the escape
+     * sequences replaced by this backend's grammar. That is the whole point of
+     * SQLNativeSql, and it is how a BI tool's "view native query" reports the
+     * truth. */
+    char      *native = NULL;
+    SQLRETURN  ret    = SQL_SUCCESS;
+
+    switch (argus_escape_translate(argus_dialect_for(dbc), in, &native, &dbc->diag)) {
+    case ARGUS_ESCAPE_NONE:
+        break;                      /* already native; `in` stands */
+    case ARGUS_ESCAPE_OK:
+        free(in);
+        in = strdup(native);
+        g_free(native);
+        if (!in)
+            return argus_set_error(&dbc->diag, "HY001",
+                                   "[Argus] Memory allocation failed", 0);
+        break;
+    case ARGUS_ESCAPE_ERROR:
+    default:
+        free(in);
+        return SQL_ERROR;
+    }
+
+    size_t src_len = strlen(in);
 
     if (TextLength2Ptr)
         *TextLength2Ptr = (SQLINTEGER)src_len;
@@ -1065,12 +1162,17 @@ SQLRETURN SQL_API SQLNativeSql(
     if (OutStatementText && BufferLength > 0) {
         size_t copy = src_len < (size_t)(BufferLength - 1)
                       ? src_len : (size_t)(BufferLength - 1);
-        if (InStatementText)
-            memcpy(OutStatementText, InStatementText, copy);
+        memcpy(OutStatementText, in, copy);
         OutStatementText[copy] = '\0';
+        if (copy < src_len) {
+            argus_diag_push(&dbc->diag, "01004",
+                            "[Argus] String data, right truncated", 0);
+            ret = SQL_SUCCESS_WITH_INFO;
+        }
     }
 
-    return SQL_SUCCESS;
+    free(in);
+    return ret;
 }
 
 /* ── ODBC API: SQLCancel ─────────────────────────────────────── */
@@ -1128,6 +1230,28 @@ SQLRETURN SQL_API SQLCancel(SQLHSTMT StatementHandle)
 
     ARGUS_LOG_DEBUG("Operation cancelled successfully");
     return SQL_SUCCESS;
+}
+
+/* ── ODBC 3.8 API: SQLCancelHandle ───────────────────────────── */
+
+/*
+ * Cancel an operation on any handle. For a statement this is SQLCancel; the
+ * connection-level async model (SQL_ATTR_ASYNC_DBC_FUNCTIONS_ENABLE) is not
+ * offered — the driver's async is statement-level — so a connection handle has
+ * nothing to cancel and succeeds trivially. Advertised because the driver
+ * reports SQL_DRIVER_ODBC_VER = "03.80".
+ */
+SQLRETURN SQL_API SQLCancelHandle(SQLSMALLINT HandleType, SQLHANDLE Handle)
+{
+    switch (HandleType) {
+    case SQL_HANDLE_STMT:
+        return SQLCancel((SQLHSTMT)Handle);
+    case SQL_HANDLE_DBC:
+        if (!argus_valid_dbc(Handle)) return SQL_INVALID_HANDLE;
+        return SQL_SUCCESS;
+    default:
+        return SQL_INVALID_HANDLE;
+    }
 }
 
 /* ── ODBC API: SQLMoreResults ────────────────────────────────── */
