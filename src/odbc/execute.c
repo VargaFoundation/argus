@@ -507,68 +507,29 @@ static char *substitute_params(const char *sql,
 
 static SQLRETURN async_poll(argus_stmt_t *stmt)
 {
-    argus_dbc_t *dbc = stmt->dbc;
-    if (!dbc || !dbc->backend || !dbc->backend->get_operation_status) {
-        stmt->async_state = ARGUS_ASYNC_ERROR;
-        return argus_set_error(&stmt->diag, "HY000",
-                               "[Argus] Backend does not support async polling", 0);
-    }
-
-    bool finished = false;
-    int rc = dbc->backend->get_operation_status(
-        dbc->backend_conn, stmt->op, &finished);
-    if (rc != 0) {
-        stmt->async_state = ARGUS_ASYNC_ERROR;
-        stmt->errors_total++;
-        if (dbc) dbc->errors_total++;
-        if (stmt->diag.count == 0)
-            argus_set_error(&stmt->diag, "HY000",
-                            "[Argus] Async status check failed", 0);
-        return SQL_ERROR;
-    }
-
-    if (!finished) {
+    /*
+     * The execute runs on a background worker thread (async_worker below). A
+     * poll just checks whether it has finished: while the worker runs, only the
+     * async_done atomic is read here — never the execution fields the worker
+     * writes — so there is no data race. On completion, g_thread_join is a
+     * memory barrier that publishes all of the worker's writes to this thread.
+     */
+    if (!g_atomic_int_get(&stmt->async_done)) {
         stmt->async_state = ARGUS_ASYNC_RUNNING;
         return SQL_STILL_EXECUTING;
     }
 
-    /* Operation is done — fetch metadata */
-    gint64 exec_end = g_get_monotonic_time();
-    stmt->execute_time_ms = (double)(exec_end - g_get_monotonic_time()) / 1000.0;
-    stmt->executed = true;
-    stmt->async_state = ARGUS_ASYNC_DONE;
-
-    if (dbc->backend->get_result_metadata) {
-        int ncols = 0;
-        argus_column_desc_t tmp_cols[64];
-        rc = dbc->backend->get_result_metadata(
-            dbc->backend_conn, stmt->op, tmp_cols, &ncols);
-        if (rc == 0 && ncols > 0) {
-            if (ncols <= 64) {
-                if (argus_stmt_ensure_columns(stmt, ncols) == 0) {
-                    memcpy(stmt->columns, tmp_cols,
-                           (size_t)ncols * sizeof(argus_column_desc_t));
-                    stmt->num_cols = ncols;
-                    stmt->metadata_fetched = true;
-                }
-            } else {
-                if (argus_stmt_ensure_columns(stmt, ncols) == 0) {
-                    int ncols2 = 0;
-                    rc = dbc->backend->get_result_metadata(
-                        dbc->backend_conn, stmt->op,
-                        stmt->columns, &ncols2);
-                    if (rc == 0 && ncols2 > 0) {
-                        stmt->num_cols = ncols2;
-                        stmt->metadata_fetched = true;
-                    }
-                }
-            }
-        }
+    if (stmt->async_thread) {
+        g_thread_join(stmt->async_thread);
+        stmt->async_thread = NULL;
     }
 
+    SQLRETURN ret = stmt->async_result;
+    stmt->async_state = (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO)
+                        ? ARGUS_ASYNC_DONE : ARGUS_ASYNC_ERROR;
     free(stmt->async_query);
     stmt->async_query = NULL;
-    return SQL_SUCCESS;
+    return ret;
 }
 
 /* ── Internal: execute a query on the backend ────────────────── */
@@ -749,24 +710,47 @@ static char *apply_escapes(argus_stmt_t *stmt, char *query)
     }
 }
 
+/* ── Internal: async worker thread ───────────────────────────── */
+
+/*
+ * Runs the (blocking) backend execute on a background thread so SQLExecDirect /
+ * SQLExecute can return SQL_STILL_EXECUTING immediately and the application can
+ * poll for completion. While this runs, the polling side reads only the
+ * async_done atomic — never the execution fields written here — so there is no
+ * data race; the g_thread_join on the polling side publishes these writes.
+ */
+static gpointer async_worker(gpointer data)
+{
+    argus_stmt_t *stmt = (argus_stmt_t *)data;
+    SQLRETURN ret = do_execute(stmt, stmt->async_query);
+    stmt->async_result = ret;
+    g_atomic_int_set(&stmt->async_done, 1);
+    return NULL;
+}
+
 /* ── Internal: execute or poll async ─────────────────────────── */
 
 static SQLRETURN exec_or_async(argus_stmt_t *stmt, const char *query)
 {
-    /* If async is enabled and we're already polling, continue polling */
+    /* Already in flight: poll the worker. */
     if (stmt->async_enabled &&
         (stmt->async_state == ARGUS_ASYNC_SUBMITTED ||
          stmt->async_state == ARGUS_ASYNC_RUNNING)) {
         return async_poll(stmt);
     }
 
-    /* If async is enabled, submit and return STILL_EXECUTING */
+    /* Async enabled and idle: hand the execute to a worker thread and return
+     * control immediately. The application re-calls the same function to poll. */
     if (stmt->async_enabled) {
-        SQLRETURN ret = do_execute(stmt, query);
-        if (ret != SQL_SUCCESS) return ret;
-        stmt->async_state = ARGUS_ASYNC_SUBMITTED;
         free(stmt->async_query);
         stmt->async_query = strdup(query);
+        if (!stmt->async_query)
+            return argus_set_error(&stmt->diag, "HY001",
+                                   "[Argus] Memory allocation failed", 0);
+        stmt->async_result = SQL_ERROR;
+        g_atomic_int_set(&stmt->async_done, 0);
+        stmt->async_state = ARGUS_ASYNC_RUNNING;
+        stmt->async_thread = g_thread_new("argus-async", async_worker, stmt);
         return SQL_STILL_EXECUTING;
     }
 
@@ -1194,7 +1178,24 @@ SQLRETURN SQL_API SQLCancel(SQLHSTMT StatementHandle)
         }
     }
 
-    /* Reset async state */
+    /* Async in flight: the worker owns async_query and the execution fields, so
+     * it must be joined before we touch either. Joining waits for the in-flight
+     * statement to finish (the driver does not offer a mid-flight interrupt of a
+     * running backend call); this is a valid, if blocking, cancel. */
+    if (stmt->async_state == ARGUS_ASYNC_SUBMITTED ||
+        stmt->async_state == ARGUS_ASYNC_RUNNING) {
+        if (stmt->async_thread) {
+            g_thread_join(stmt->async_thread);
+            stmt->async_thread = NULL;
+        }
+        stmt->async_state = ARGUS_ASYNC_IDLE;
+        g_atomic_int_set(&stmt->async_done, 0);
+        free(stmt->async_query);
+        stmt->async_query = NULL;
+        ARGUS_STMT_UNLOCK(stmt);
+        return SQL_SUCCESS;
+    }
+    /* Reset any stale (non-running) async bookkeeping. */
     if (stmt->async_state != ARGUS_ASYNC_IDLE) {
         stmt->async_state = ARGUS_ASYNC_IDLE;
         free(stmt->async_query);
@@ -1252,6 +1253,51 @@ SQLRETURN SQL_API SQLCancelHandle(SQLSMALLINT HandleType, SQLHANDLE Handle)
     default:
         return SQL_INVALID_HANDLE;
     }
+}
+
+/* ── ODBC 3.8 API: SQLCompleteAsync ──────────────────────────── */
+
+/*
+ * Block until a statement's outstanding asynchronous operation finishes and
+ * hand back its return code in *AsyncRetCodePtr. Connections have no
+ * async operations of their own, so a DBC handle completes trivially.
+ */
+SQLRETURN SQL_API SQLCompleteAsync(SQLSMALLINT HandleType, SQLHANDLE Handle,
+                                   RETCODE *AsyncRetCodePtr)
+{
+    if (HandleType == SQL_HANDLE_DBC) {
+        if (!argus_valid_dbc(Handle)) return SQL_INVALID_HANDLE;
+        if (AsyncRetCodePtr) *AsyncRetCodePtr = SQL_SUCCESS;
+        return SQL_SUCCESS;
+    }
+    if (HandleType != SQL_HANDLE_STMT) return SQL_INVALID_HANDLE;
+
+    argus_stmt_t *stmt = (argus_stmt_t *)Handle;
+    if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
+
+    ARGUS_STMT_LOCK(stmt);
+
+    if (stmt->async_state != ARGUS_ASYNC_SUBMITTED &&
+        stmt->async_state != ARGUS_ASYNC_RUNNING) {
+        /* Nothing outstanding to complete. */
+        if (AsyncRetCodePtr) *AsyncRetCodePtr = SQL_SUCCESS;
+        ARGUS_STMT_UNLOCK(stmt);
+        return SQL_SUCCESS;
+    }
+
+    if (stmt->async_thread) {
+        g_thread_join(stmt->async_thread);
+        stmt->async_thread = NULL;
+    }
+    SQLRETURN ret = stmt->async_result;
+    stmt->async_state = (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO)
+                        ? ARGUS_ASYNC_DONE : ARGUS_ASYNC_ERROR;
+    free(stmt->async_query);
+    stmt->async_query = NULL;
+
+    if (AsyncRetCodePtr) *AsyncRetCodePtr = ret;
+    ARGUS_STMT_UNLOCK(stmt);
+    return SQL_SUCCESS;
 }
 
 /* ── ODBC API: SQLMoreResults ────────────────────────────────── */

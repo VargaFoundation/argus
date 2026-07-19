@@ -98,6 +98,12 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLCancelHandle(
     SQLSMALLINT HandleType,
     SQLHANDLE   Handle);
 
+/* ODBC 3.8: block until an async operation on a handle completes. */
+ARGUS_EXPORT SQLRETURN SQL_API SQLCompleteAsync(
+    SQLSMALLINT HandleType,
+    SQLHANDLE   Handle,
+    RETCODE    *AsyncRetCodePtr);
+
 ARGUS_EXPORT SQLRETURN SQL_API SQLRowCount(
     SQLHSTMT StatementHandle,
     SQLLEN  *RowCount);

@@ -238,7 +238,10 @@ struct argus_stmt {
     /* Async execution state */
     bool                    async_enabled;
     argus_async_state_t     async_state;
-    char                   *async_query;    /* query saved for async polling */
+    char                   *async_query;    /* query the worker thread runs */
+    GThread                *async_thread;   /* worker running a background execute */
+    gint                    async_done;     /* atomic flag: worker has finished */
+    SQLRETURN               async_result;   /* worker's return code, valid once done */
 
     /* Data-at-execution state */
     argus_dae_state_t       dae_state;

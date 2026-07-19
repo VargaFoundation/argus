@@ -7,20 +7,25 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 
 /*
- * Async execution status + SQLCancelHandle.
+ * Statement-level asynchronous execution.
  *
- * The driver reports SQL_ASYNC_MODE = SQL_AM_NONE. This is deliberate and this
- * test is the guard: the statement-async scaffolding exists, but the backends'
- * get_operation_status is passive (it never advances the Trino query, which
- * only progresses when its nextUri is polled during fetch), so an async execute
- * returns SQL_STILL_EXECUTING forever. Advertising SQL_AM_STATEMENT would make
- * BI tools hang. This test asserts the honest NONE and demonstrates the hang,
- * so nobody re-advertises async without first making the operation advance.
+ * The driver runs the backend execute on a worker thread, so SQLExecDirect /
+ * SQLExecute return SQL_STILL_EXECUTING immediately and the application polls
+ * (or blocks with SQLCompleteAsync). This is backend-agnostic, so the driver
+ * advertises SQL_ASYNC_MODE = SQL_AM_STATEMENT. These tests prove it actually
+ * completes and produces the right result — the opposite of the old guard that
+ * documented the (now fixed) never-completes behaviour.
  *
  * Defaults target Trino. Override with BI_HOST/BI_PORT/BI_BACKEND/BI_DATABASE.
  */
+
+/* ODBC 3.8; absent from some unixODBC headers. Identical redeclaration is
+ * harmless if the header already provides it. */
+SQLRETURN SQL_API SQLCompleteAsync(SQLSMALLINT HandleType, SQLHANDLE Handle,
+                                   RETCODE *AsyncRetCodePtr);
 
 static const char *env_or(const char *n, const char *d)
 {
@@ -58,24 +63,22 @@ static int teardown(void **state)
     return 0;
 }
 
-/* Async is honestly reported NOT available. */
-static void test_async_mode_is_none(void **state)
+/* Async is now honestly advertised at statement level. */
+static void test_async_mode_is_statement(void **state)
 {
     (void)state;
     SQLUINTEGER mode = 0;
     assert_int_equal(SQLGetInfo(g_dbc, SQL_ASYNC_MODE, &mode, sizeof(mode), NULL),
                      SQL_SUCCESS);
-    assert_int_equal(mode, SQL_AM_NONE);
+    assert_int_equal(mode, SQL_AM_STATEMENT);
 }
 
 /*
- * Demonstrate WHY async is not advertised: with SQL_ATTR_ASYNC_ENABLE on, an
- * execute never completes — get_operation_status is passive and the query is
- * never advanced. A bounded number of polls all return SQL_STILL_EXECUTING.
- * This is the evidence behind reporting SQL_AM_NONE; if a future change makes
- * async advance, flip this to assert completion and advertise SQL_AM_STATEMENT.
+ * With SQL_ATTR_ASYNC_ENABLE on, the first SQLExecDirect returns immediately
+ * with SQL_STILL_EXECUTING (the execute is on a worker thread); re-calling it
+ * polls, and it completes with SUCCESS. The result is then readable.
  */
-static void test_async_does_not_complete_yet(void **state)
+static void test_async_execute_completes(void **state)
 {
     (void)state;
     SQLHSTMT stmt = SQL_NULL_HSTMT;
@@ -83,12 +86,54 @@ static void test_async_does_not_complete_yet(void **state)
     assert_int_equal(SQLSetStmtAttr(stmt, SQL_ATTR_ASYNC_ENABLE,
                                     (SQLPOINTER)SQL_ASYNC_ENABLE_ON, 0), SQL_SUCCESS);
 
+    /* Poll the way a real ODBC app does: re-call, waiting a little between
+     * tries, until it completes (bounded so a hung backend fails the test). */
     SQLRETURN r = SQL_STILL_EXECUTING;
-    for (int i = 0; i < 200 && r == SQL_STILL_EXECUTING; i++)
+    int polls = 0;
+    while (r == SQL_STILL_EXECUTING && polls < 30000) {   /* up to ~30s */
         r = SQLExecDirect(stmt, (SQLCHAR *)"SELECT 1", SQL_NTS);
+        polls++;
+        if (r == SQL_STILL_EXECUTING) usleep(1000);       /* 1 ms */
+    }
 
-    /* Passive status → never finishes. Documents the known limitation. */
+    /* It really ran asynchronously (returned STILL_EXECUTING at least once) and
+     * then completed. */
+    assert_true(r == SQL_SUCCESS || r == SQL_SUCCESS_WITH_INFO);
+    assert_true(polls > 1);
+
+    /* The result is correct. Read it synchronously. */
+    assert_int_equal(SQLSetStmtAttr(stmt, SQL_ATTR_ASYNC_ENABLE,
+                                    (SQLPOINTER)SQL_ASYNC_ENABLE_OFF, 0), SQL_SUCCESS);
+    SQLSMALLINT ncols = 0;
+    assert_int_equal(SQLNumResultCols(stmt, &ncols), SQL_SUCCESS);
+    assert_int_equal(ncols, 1);
+    assert_int_equal(SQLFetch(stmt), SQL_SUCCESS);
+    SQLINTEGER v = 0;
+    SQLLEN ind = 0;
+    assert_int_equal(SQLGetData(stmt, 1, SQL_C_SLONG, &v, sizeof(v), &ind), SQL_SUCCESS);
+    assert_int_equal(v, 1);
+
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+}
+
+/*
+ * SQLCompleteAsync blocks for an outstanding async operation and hands back its
+ * return code.
+ */
+static void test_complete_async_blocks_for_result(void **state)
+{
+    (void)state;
+    SQLHSTMT stmt = SQL_NULL_HSTMT;
+    assert_int_equal(SQLAllocHandle(SQL_HANDLE_STMT, g_dbc, &stmt), SQL_SUCCESS);
+    assert_int_equal(SQLSetStmtAttr(stmt, SQL_ATTR_ASYNC_ENABLE,
+                                    (SQLPOINTER)SQL_ASYNC_ENABLE_ON, 0), SQL_SUCCESS);
+
+    SQLRETURN r = SQLExecDirect(stmt, (SQLCHAR *)"SELECT 1", SQL_NTS);
     assert_int_equal(r, SQL_STILL_EXECUTING);
+
+    RETCODE async_rc = SQL_ERROR;
+    assert_int_equal(SQLCompleteAsync(SQL_HANDLE_STMT, stmt, &async_rc), SQL_SUCCESS);
+    assert_true(async_rc == SQL_SUCCESS || async_rc == SQL_SUCCESS_WITH_INFO);
 
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 }
@@ -99,8 +144,6 @@ static void test_cancel_handle_on_statement(void **state)
     (void)state;
     SQLHSTMT stmt = SQL_NULL_HSTMT;
     assert_int_equal(SQLAllocHandle(SQL_HANDLE_STMT, g_dbc, &stmt), SQL_SUCCESS);
-    /* Nothing running: cancel is a no-op success (the backend cancel is a
-     * best-effort, and there is no active operation to reject). */
     SQLRETURN r = SQLCancelHandle(SQL_HANDLE_STMT, stmt);
     assert_true(r == SQL_SUCCESS || r == SQL_SUCCESS_WITH_INFO);
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
@@ -109,8 +152,9 @@ static void test_cancel_handle_on_statement(void **state)
 int main(void)
 {
     const struct CMUnitTest tests[] = {
-        cmocka_unit_test(test_async_mode_is_none),
-        cmocka_unit_test(test_async_does_not_complete_yet),
+        cmocka_unit_test(test_async_mode_is_statement),
+        cmocka_unit_test(test_complete_async_blocks_for_result),
+        cmocka_unit_test(test_async_execute_completes),
         cmocka_unit_test(test_cancel_handle_on_statement),
     };
     return cmocka_run_group_tests(tests, setup, teardown);

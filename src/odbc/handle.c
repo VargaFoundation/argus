@@ -269,8 +269,15 @@ void argus_stmt_reset(argus_stmt_t *stmt)
     stmt->scroll_position  = 0;
     stmt->scroll_cached    = false;
 
-    /* Reset async state */
+    /* Reset async state. A worker thread may still be running an execute and
+     * owns async_query and the execution fields, so it must be joined before
+     * anything here is torn down. */
+    if (stmt->async_thread) {
+        g_thread_join(stmt->async_thread);
+        stmt->async_thread = NULL;
+    }
     stmt->async_state = ARGUS_ASYNC_IDLE;
+    g_atomic_int_set(&stmt->async_done, 0);
     free(stmt->async_query);
     stmt->async_query = NULL;
 

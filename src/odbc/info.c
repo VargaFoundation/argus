@@ -442,18 +442,14 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_PARAM_ARRAY_SELECTS:
         return set_uinteger_info(SQL_PAS_NO_SELECT, InfoValue, StringLength);
 
-    /* Reported NONE, and this is deliberate. The statement-async scaffolding
-     * exists (SQL_ATTR_ASYNC_ENABLE, execute.c async_poll returning
-     * SQL_STILL_EXECUTING), but the backends' get_operation_status is *passive*:
-     * trino_get_operation_status reports finished from the current op state and
-     * never advances the query — Trino only progresses when its nextUri is
-     * polled, which happens during fetch, not during async_poll. So an async
-     * SQLExecDirect would return SQL_STILL_EXECUTING forever (proven by
-     * tests/integration/test_async.c). Advertising SQL_AM_STATEMENT would make
-     * BI tools hang. To advertise it honestly, get_operation_status must drive
-     * the operation forward one step per poll; until then, NONE is the truth. */
+    /* Statement-level async is real: SQLExecDirect/SQLExecute with
+     * SQL_ATTR_ASYNC_ENABLE_ON run the backend execute on a worker thread
+     * (execute.c async_worker) and return SQL_STILL_EXECUTING immediately; the
+     * application polls by re-calling the function, and SQLCompleteAsync blocks
+     * for the result. Backend-agnostic — it does not depend on a per-backend
+     * get_operation_status advancing the query — so this is advertised honestly. */
     case SQL_ASYNC_MODE:
-        return set_uinteger_info(SQL_AM_NONE, InfoValue, StringLength);
+        return set_uinteger_info(SQL_AM_STATEMENT, InfoValue, StringLength);
 
     case SQL_INFO_SCHEMA_VIEWS:
         return set_uinteger_info(0, InfoValue, StringLength);
@@ -771,6 +767,9 @@ SQLRETURN SQL_API SQLGetFunctions(
     switch (FunctionId) {
 #ifdef SQL_API_SQLCANCELHANDLE
     case SQL_API_SQLCANCELHANDLE:   /* ODBC 3.8 */
+#endif
+#ifdef SQL_API_SQLCOMPLETEASYNC
+    case SQL_API_SQLCOMPLETEASYNC:  /* ODBC 3.8 */
 #endif
     case SQL_API_SQLALLOCHANDLE:
     case SQL_API_SQLFREEHANDLE:
