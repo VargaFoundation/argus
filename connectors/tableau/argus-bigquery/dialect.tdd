@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Inherits Tableau's BigQuerySQLDialect: with base set, every function and
+  property defaults to the base dialect's implementation.
+
+  See connectors/tableau/README.md for why a base dialect is preferred here over
+  a ~1300-line complete definition, and run TDVT after a Tableau upgrade — the
+  SDK warns that base dialects can change between versions. Override individual
+  functions below only when GoogleSQL genuinely differs; never to work around
+  the driver, which generates no SQL of its own.
+-->
+<dialect name='ArgusBigQueryDialect'
+         class='argus_bigquery'
+         base='BigQuerySQLDialect'
+         version='18.1'>
+</dialect>

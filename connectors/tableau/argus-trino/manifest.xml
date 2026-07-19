@@ -1,0 +1,78 @@
+<?xml version='1.0' encoding='utf-8' ?>
+
+<!--
+  Argus ODBC — Tableau connector for the Trino backend.
+
+  Why one connector per backend: a .taco declares exactly one <dialect>, so
+  unlike the Power BI .mez (which picks LimitClauseKind at runtime from a
+  Backend dropdown) the SQL dialect is fixed when the connector is built. Trino
+  maps onto Tableau's PrestoDialect; hive/impala/mysql/bigquery get their own
+  connectors from the same template.
+
+  The customizations below are not tuning knobs — each one states a fact about
+  the Argus driver or about Trino. If one of them ever has to paper over what
+  SQLGetInfo reports, the bug is in the driver, not here.
+-->
+<connector-plugin class='argus_trino'
+                  superclass='odbc'
+                  plugin-version='0.1.0'
+                  name='Argus (Trino)'
+                  version='18.1'
+                  min-version-tableau='2020.4'>
+
+  <vendor-information>
+    <company name="Varga Foundation"/>
+    <support-link url="https://github.com/VargaFoundation/argus/issues"/>
+    <driver-download-link url="https://github.com/VargaFoundation/argus/releases"/>
+  </vendor-information>
+
+  <connection-customization class="argus_trino" enabled="true" version="10.0">
+    <vendor name="Varga Foundation"/>
+    <driver name="Argus ODBC Driver"/>
+    <customizations>
+      <!-- Top-N: Trino spells it LIMIT / OFFSET…FETCH, never TOP or ROWNUM. -->
+      <customization name="CAP_QUERY_TOP_N" value="yes"/>
+      <customization name="CAP_QUERY_TOPSTYLE_LIMIT" value="yes"/>
+      <customization name="CAP_QUERY_TOPSTYLE_TOP" value="no"/>
+      <customization name="CAP_QUERY_TOPSTYLE_ROWNUM" value="no"/>
+      <customization name="CAP_QUERY_SUBQUERIES" value="yes"/>
+      <customization name="CAP_QUERY_SUBQUERIES_WITH_TOP" value="yes"/>
+      <customization name="CAP_QUERY_GROUP_BY_DEGREE" value="yes"/>
+      <customization name="CAP_QUERY_SORT_BY_DEGREE" value="yes"/>
+      <customization name="CAP_QUERY_WHERE_FALSE_METADATA" value="yes"/>
+      <customization name="CAP_QUERY_TOP_0_METADATA" value="yes"/>
+
+      <!-- Trino is a query engine over catalogs: no temp tables, and Tableau's
+           SELECT INTO forms have no equivalent (CREATE TABLE AS is not it). -->
+      <customization name="CAP_CREATE_TEMP_TABLES" value="no"/>
+      <customization name="CAP_SELECT_INTO" value="no"/>
+      <customization name="CAP_SELECT_TOP_INTO" value="no"/>
+
+      <!-- The driver reports SQL_TXN_CAPABLE = SQL_TC_NONE and SQLEndTran is a
+           no-op, so there is nothing to commit. -->
+      <customization name="CAP_ODBC_TRANSACTIONS_SUPPRESS_AUTO_COMMIT" value="yes"/>
+      <customization name="CAP_ODBC_TRANSACTIONS_SUPPRESS_EXPLICIT_COMMIT" value="yes"/>
+
+      <!-- SQLPrepare is client-side only (no server-side prepare on any Argus
+           backend), so metadata must not be read through a prepared query and
+           connection liveness must not be probed with one. -->
+      <customization name="CAP_ODBC_METADATA_SUPPRESS_PREPARED_QUERY" value="yes"/>
+      <customization name="CAP_ODBC_CONNECTION_STATE_VERIFY_PROBE_PREPARED_QUERY" value="no"/>
+
+      <!-- SQLForeignKeys has no backend hook and always returns an empty result
+           set; asking for it only costs a round trip. SQLPrimaryKeys and
+           SQLStatistics are left enabled — Trino is the one backend that
+           implements both. -->
+      <customization name="CAP_ODBC_METADATA_SUPPRESS_SQLFOREIGNKEYS_API" value="yes"/>
+
+      <!-- Keep information_schema out of the object picker. -->
+      <customization name="CAP_ODBC_SUPPRESS_INFO_SCHEMA_TABLES" value="yes"/>
+      <customization name="CAP_ODBC_SUPPRESS_INFO_SCHEMA_STORED_PROCS" value="yes"/>
+    </customizations>
+  </connection-customization>
+
+  <connection-fields file='connectionFields.xml'/>
+  <connection-metadata file='connectionMetadata.xml'/>
+  <connection-resolver file='connectionResolver.tdr'/>
+  <dialect file='dialect.tdd'/>
+</connector-plugin>

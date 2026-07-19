@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<connection-fields>
+
+  <field name="server" label="Server" value-type="string" category="endpoint">
+    <validation-rule reg-exp="^.+$"/>
+  </field>
+
+  <!-- HiveServer2's Thrift binary port. -->
+  <field name="port" label="Port" value-type="string" category="endpoint"
+         default-value="21050"/>
+
+  <!-- Hive has no catalog level: this is the Hive database (schema). -->
+  <field name="database" label="Database" value-type="string" category="general"
+         placeholder="default"/>
+
+  <field name="authentication" label="Authentication" value-type="selection"
+         category="authentication" default-value="auth-none">
+    <selection-group>
+      <option value="auth-none" label="No Authentication (NOSASL)"/>
+      <option value="auth-user" label="Username (SASL PLAIN)"/>
+      <option value="auth-user-pass" label="Username and Password (SASL PLAIN / LDAP)"/>
+      <option value="auth-integrated" label="Kerberos"/>
+    </selection-group>
+  </field>
+
+  <field name="username" label="Username" value-type="string" category="authentication">
+    <conditions>
+      <condition field="authentication" value="auth-user"/>
+      <condition field="authentication" value="auth-user-pass"/>
+    </conditions>
+  </field>
+
+  <field name="password" label="Password" value-type="string"
+         category="authentication" secure="true">
+    <conditions>
+      <condition field="authentication" value="auth-user-pass"/>
+    </conditions>
+  </field>
+
+  <!-- The SPN defaults to hive/<server>@<realm from krb5.conf>. Override when a
+       load balancer makes the SPN host differ from the connection host. -->
+  <field name="krbservicename" label="Kerberos service name" value-type="string"
+         category="authentication" optional="true" placeholder="hive">
+    <conditions>
+      <condition field="authentication" value="auth-integrated"/>
+    </conditions>
+  </field>
+
+  <field name="krbhostfqdn" label="Kerberos host FQDN" value-type="string"
+         category="authentication" optional="true">
+    <conditions>
+      <condition field="authentication" value="auth-integrated"/>
+    </conditions>
+  </field>
+
+  <field name="sslmode" label="Require SSL" value-type="boolean" category="general"
+         default-value="">
+    <boolean-options>
+      <false-value value=""/>
+      <true-value value="require"/>
+    </boolean-options>
+  </field>
+
+</connection-fields>

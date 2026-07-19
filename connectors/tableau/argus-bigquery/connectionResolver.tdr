@@ -1,0 +1,31 @@
+<?xml version='1.0' encoding='utf-8' ?>
+
+<tdr class='argus_bigquery'>
+  <connection-resolver>
+    <connection-builder>
+      <script file='connectionBuilder.js'/>
+    </connection-builder>
+    <connection-normalizer>
+      <!-- No server/port: BigQuery is a REST service and the driver ignores
+           both. -->
+      <required-attributes>
+        <attribute-list>
+          <attr>project</attr>
+          <attr>dbname</attr>
+          <attr>location</attr>
+          <attr>authentication</attr>
+          <attr>keyfile</attr>
+          <attr>accesstoken</attr>
+          <attr>endpoint</attr>
+          <attr>tokenendpoint</attr>
+        </attribute-list>
+      </required-attributes>
+    </connection-normalizer>
+  </connection-resolver>
+
+  <driver-resolver>
+    <driver-match>
+      <driver-name type='exact'>Argus ODBC Driver</driver-name>
+    </driver-match>
+  </driver-resolver>
+</tdr>

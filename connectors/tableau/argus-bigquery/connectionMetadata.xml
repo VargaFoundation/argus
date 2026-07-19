@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  BigQuery is project.dataset.table. The project is fixed by the connection, so
+  the dataset is the one level Tableau navigates — surfaced as its "database".
+-->
+<connection-metadata>
+  <database enabled='true'/>
+  <schema enabled='false'/>
+</connection-metadata>

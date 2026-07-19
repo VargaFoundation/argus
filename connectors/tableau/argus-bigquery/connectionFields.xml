@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  BigQuery has no server or port — the driver ignores both — so the endpoint
+  category holds the project instead. That is unusual for Tableau's odbc
+  superclass and is the part of this connector most likely to need adjusting
+  once tried in Desktop.
+-->
+<connection-fields>
+
+  <!-- Required by the driver: it has no default project. -->
+  <field name="project" label="Project ID" value-type="string" category="endpoint"
+         placeholder="my-gcp-project">
+    <validation-rule reg-exp="^[a-z][a-z0-9\-]{4,28}[a-z0-9]$"/>
+  </field>
+
+  <!-- BigQuery's dataset is what Tableau calls the database. -->
+  <field name="database" label="Dataset" value-type="string" category="general"
+         optional="true"/>
+
+  <!-- Job location, e.g. EU or us-central1. Optional; BigQuery infers it. -->
+  <field name="location" label="Location" value-type="string" category="general"
+         optional="true" placeholder="EU"/>
+
+  <field name="authentication" label="Authentication" value-type="selection"
+         category="authentication" default-value="auth-key-file">
+    <selection-group>
+      <option value="auth-key-file" label="Service Account JSON Key"/>
+      <option value="auth-access-token" label="Access Token"/>
+    </selection-group>
+  </field>
+
+  <!-- Path to the service-account JSON key; the driver signs an RS256 JWT with
+       it (needs a driver built with OpenSSL). -->
+  <field name="keyfile" label="Key File" value-type="file" category="authentication">
+    <conditions>
+      <condition field="authentication" value="auth-key-file"/>
+    </conditions>
+  </field>
+
+  <field name="accesstoken" label="Access Token" value-type="string"
+         category="authentication" secure="true">
+    <conditions>
+      <condition field="authentication" value="auth-access-token"/>
+    </conditions>
+  </field>
+
+  <!-- Every Google endpoint is overridable so the driver works against
+       sovereign clouds (S3NS) and the emulator. Leave blank for public GCP. -->
+  <field name="endpoint" label="API endpoint" value-type="string" category="advanced"
+         optional="true" placeholder="https://bigquery.googleapis.com"/>
+
+  <field name="tokenendpoint" label="OAuth2 token endpoint" value-type="string"
+         category="advanced" optional="true"
+         placeholder="https://oauth2.googleapis.com/token"/>
+
+</connection-fields>

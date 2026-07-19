@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<connection-fields>
+
+  <field name="server" label="Server" value-type="string" category="endpoint">
+    <validation-rule reg-exp="^.+$"/>
+  </field>
+
+  <!-- StarRocks and Doris expose the MySQL protocol on 9030; MySQL and MariaDB
+       use 3306. -->
+  <field name="port" label="Port" value-type="string" category="endpoint"
+         default-value="9030"/>
+
+  <!-- MySQL-wire engines are database.table: no catalog level. -->
+  <field name="database" label="Database" value-type="string" category="general"/>
+
+  <field name="authentication" label="Authentication" value-type="selection"
+         category="authentication" default-value="auth-user-pass">
+    <selection-group>
+      <option value="auth-user-pass" label="Username and Password"/>
+      <option value="auth-user" label="Username"/>
+    </selection-group>
+  </field>
+
+  <field name="username" label="Username" value-type="string" category="authentication"/>
+
+  <field name="password" label="Password" value-type="string"
+         category="authentication" secure="true">
+    <conditions>
+      <condition field="authentication" value="auth-user-pass"/>
+    </conditions>
+  </field>
+
+  <field name="sslmode" label="Require SSL" value-type="boolean" category="general"
+         default-value="">
+    <boolean-options>
+      <false-value value=""/>
+      <true-value value="require"/>
+    </boolean-options>
+  </field>
+
+</connection-fields>

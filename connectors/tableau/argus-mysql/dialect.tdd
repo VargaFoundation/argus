@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Inherits Tableau's MySQL8Dialect: with base set, every function and property
+  defaults to the base dialect's implementation. StarRocks and Doris are
+  MySQL-syntax-compatible, which is what makes this base the right one — and
+  what makes it the wrong one for ClickHouse (see manifest.xml).
+
+  See connectors/tableau/README.md for why a base dialect is preferred here over
+  a ~1300-line complete definition, and run TDVT after a Tableau upgrade — the
+  SDK warns that base dialects can change between versions. Override individual
+  functions below only where StarRocks/Doris genuinely differ from MySQL; never
+  to work around the driver, which generates no SQL of its own.
+-->
+<dialect name='ArgusMySQLDialect'
+         class='argus_mysql'
+         base='MySQL8Dialect'
+         version='18.1'>
+</dialect>

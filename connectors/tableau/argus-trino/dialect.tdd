@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Trino's SQL is Presto's, so this inherits Tableau's PrestoDialect wholesale:
+  with base set, every function and property defaults to the base dialect's
+  implementation.
+
+  The SDK notes that a base dialect can change behaviour between Tableau
+  versions and suggests a complete definition for most connectors. That trade
+  is taken deliberately: a full definition is ~1300 lines of function mappings
+  that cannot be trusted until TDVT has exercised them, whereas PrestoDialect
+  is exactly the engine Argus talks to here and is maintained by Tableau. Run
+  TDVT (connectors/tableau/README.md) after a Tableau upgrade; if it regresses,
+  override the individual functions below rather than forking the whole file.
+
+  The overrides below were driven by a live TDVT expression run (769 tests,
+  90.0% at baseline before any override). Each one closes a case where
+  Tableau's PrestoDialect emits SQL that Trino rejects or evaluates wrong; all
+  are rendered as native Trino SQL (never an ODBC {fn} escape) so the connector
+  never depends on driver-side escape translation. They are facts about Trino,
+  not workarounds for the driver, which generates no SQL of its own.
+-->
+<dialect name='ArgusTrinoDialect'
+         class='argus_trino'
+         base='PrestoDialect'
+         version='18.1'>
+
+  <function-map>
+
+  <!-- Trino's round(double, n) requires the precision as INTEGER; PrestoDialect
+       hands it a BIGINT and Trino errors "Unexpected parameters (double,
+       bigint) for function round". The base defines ROUND with a real second
+       argument, so the override has to match that signature to replace it.
+       (TDVT: math.round.extended) -->
+  <function group='numeric' name='ROUND' return-type='real'>
+    <formula>ROUND(%1, CAST(%2 AS INTEGER))</formula>
+    <argument type='real' />
+    <argument type='real' />
+  </function>
+
+  <!-- PrestoDialect has no ATAN2 mapping for this connector, so Tableau fails
+       with "ATAN2 unknown function". Trino spells it atan2(y, x).
+       (TDVT: math.atan2) -->
+  <function group='numeric' name='ATAN2' return-type='real'>
+    <formula>ATAN2(%1, %2)</formula>
+    <argument type='real' />
+    <argument type='real' />
+  </function>
+
+  <!-- Trino has no ASCII(); it exposes codepoint(varchar(1)). Take the first
+       character, and match Tableau's ASCII('') = NULL. (TDVT: string.ascii) -->
+  <function group='string' name='ASCII' return-type='int'>
+    <formula>(CASE WHEN LENGTH(%1) = 0 THEN NULL ELSE CODEPOINT(CAST(SUBSTR(%1, 1, 1) AS VARCHAR(1))) END)</formula>
+    <argument type='str' />
+  </function>
+
+  <!-- Trino has no SPACE(); build it with repeat()+array_join (repeat returns
+       an array). Negative counts yield NULL, as Tableau expects.
+       (TDVT: string.space) -->
+  <function group='string' name='SPACE' return-type='str'>
+    <formula>(CASE WHEN CAST(%1 AS INTEGER) &gt;= 0 THEN ARRAY_JOIN(REPEAT(' ', CAST(%1 AS INTEGER)), '') ELSE NULL END)</formula>
+    <argument type='int' />
+  </function>
+
+  </function-map>
+
+</dialect>

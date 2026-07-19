@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Trino is catalog.schema.table, so both levels are real and both are enabled.
+  The driver backs this with get_catalogs/get_schemas on the Trino backend.
+-->
+<connection-metadata>
+  <database enabled='true'/>
+  <schema enabled='true'/>
+</connection-metadata>

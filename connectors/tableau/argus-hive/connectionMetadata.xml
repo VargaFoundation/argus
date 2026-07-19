@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Hive is database.table — there is no catalog level above it. What the driver
+  calls DATABASE= is the Hive database, which Tableau surfaces as its
+  "database", so the schema level is off.
+-->
+<connection-metadata>
+  <database enabled='true'/>
+  <schema enabled='false'/>
+</connection-metadata>

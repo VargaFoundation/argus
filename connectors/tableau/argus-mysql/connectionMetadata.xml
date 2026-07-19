@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  MySQL-wire engines are database.table — no catalog level above the database.
+-->
+<connection-metadata>
+  <database enabled='true'/>
+  <schema enabled='false'/>
+</connection-metadata>

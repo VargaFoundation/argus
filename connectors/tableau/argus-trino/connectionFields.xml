@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Fields shown in Tableau's connection dialog. The names on the left are
+  Tableau's standard attributes (connectionHelper.attribute* in
+  connectionBuilder.js); the mapping to the driver's own keywords happens there.
+-->
+<connection-fields>
+
+  <field name="server" label="Server" value-type="string" category="endpoint">
+    <validation-rule reg-exp="^.+$"/>
+  </field>
+
+  <field name="port" label="Port" value-type="string" category="endpoint"
+         default-value="8080"/>
+
+  <!-- Trino addresses tables as catalog.schema.table. Tableau's "database" is
+       the catalog; the schema is chosen in the object picker afterwards (see
+       connectionMetadata.xml). -->
+  <field name="database" label="Catalog" value-type="string" category="general"
+         placeholder="e.g. hive"/>
+
+  <field name="authentication" label="Authentication" value-type="selection"
+         category="authentication" default-value="auth-none">
+    <selection-group>
+      <option value="auth-none" label="No Authentication"/>
+      <option value="auth-user" label="Username"/>
+      <option value="auth-user-pass" label="Username and Password"/>
+    </selection-group>
+  </field>
+
+  <field name="username" label="Username" value-type="string" category="authentication">
+    <conditions>
+      <condition field="authentication" value="auth-user"/>
+      <condition field="authentication" value="auth-user-pass"/>
+    </conditions>
+  </field>
+
+  <!-- Trino rejects password authentication over plaintext HTTP, so this pairs
+       with Require SSL below. -->
+  <field name="password" label="Password" value-type="string"
+         category="authentication" secure="true">
+    <conditions>
+      <condition field="authentication" value="auth-user-pass"/>
+    </conditions>
+  </field>
+
+  <field name="sslmode" label="Require SSL" value-type="boolean" category="general"
+         default-value="">
+    <boolean-options>
+      <false-value value=""/>
+      <true-value value="require"/>
+    </boolean-options>
+  </field>
+
+</connection-fields>
