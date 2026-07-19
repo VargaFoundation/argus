@@ -54,9 +54,33 @@ sécurisés et sur la BI cloud. C'est la priorité absolue de la roadmap.
   (Databricks Cloud Fetch) font du fetch colonnaire Arrow (~12× le débit). (L'array fetch
   ODBC `SQL_ATTR_ROW_ARRAY_SIZE` est désormais honoré côté application ; le parsing
   backend, lui, reste ligne à ligne.)
-- **Conformité ODBC incomplète** : `SQLSetPos`, `SQLBulkOperations`, bookmarks → HYC00 ;
-  async partiel ; `SQLDescribeParam` stub ; curseurs forward-only (+ cache scroll).
-  `get_primary_keys`/`get_statistics` absents pour Hive et Impala.
+  **Mesuré** (`tests/bench`, Trino sf1.orders 1,5 M lignes × 9 col) : ~330–350 k lignes/s,
+  ~3,0–3,2 M cellules/s, coût **dominé par la cellule** (les cellules/s sont constantes
+  que la ligne fasse 1 ou 9 colonnes → allocation + string handling par cellule, ~350 ns).
+  Une micro-optimisation sûre (copie en un passage au lieu de `strdup`+`strlen` dans
+  `trino_parse_data`) a rendu ~5,5 %. Le vrai levier — décodage colonnaire évitant
+  l'allocation par cellule — reste un chantier d'architecture du row-cache (risque de
+  régression sur le chemin de fetch), scopé à part. Le **spooling Trino** (le
+  différenciateur perf de Starburst V3, +400 % annoncés) est **déjà présent**
+  (`trino_spooling.c`) ; son plein gain exige un Trino configuré avec un object-store.
+- **Conformité ODBC incomplète** : `SQLBulkOperations` et les bookmarks → HYC00 ;
+  `SQLSetPos` partiel (`SQL_POSITION`/`SQL_REFRESH` seulement) ; async partiel ;
+  `SQLDescribeParam` stub (et `SQL_DESCRIBE_PARAMETER` répond désormais `"N"`) ;
+  `SQL_DBMS_VER` codé en dur faute de hook backend pour interroger la version
+  serveur ; `SQLForeignKeys`/`SQLProcedures`/`SQL*Privileges`/`SQLSpecialColumns`
+  renvoient toujours un result set vide (aucun hook dans la vtable).
+  `get_statistics` n'existe que pour Trino ; `get_primary_keys` couvre Hive,
+  Impala, Trino, Phoenix, Kudu, MySQL-wire et Flight SQL.
+  **Corrigé depuis** : le driver traduit les escape sequences ODBC
+  (`src/odbc/escape.c`) — il annonçait 48 fonctions scalaires sans en traduire
+  aucune, ce qui cassait Tableau/Excel/Qlik ; les bitmaps `SQLGetInfo` dérivent
+  maintenant de la table de dialecte par backend (`src/odbc/dialect.c`). Le
+  curseur statique, réellement implémenté, est enfin annoncé comme tel.
+  Voir `docs/BI_TOOLS.md`.
+- **`SQL_ATTR_ROW_BIND_TYPE` accepté puis ignoré** (`attr.c`) : une application qui
+  demande du row-wise binding reçoit `SQL_SUCCESS` puis des données écrites en
+  column-wise → corruption mémoire silencieuse. Sans impact sur les outils BI
+  (tous bindent par colonne), mais c'est le défaut le plus dangereux du driver.
 - **HTTP/Knox : exposé depuis.** `TransportMode=HTTP` + `HttpPath` sont supportés pour
   Hive (avec SPNEGO/Kerberos et Bearer/JWT), couvrant Knox et Databricks ; reste à
   faire pour Impala.
@@ -75,9 +99,17 @@ sécurisés et sur la BI cloud. C'est la priorité absolue de la roadmap.
 - **Databricks** propose désormais un driver JDBC open-source (Apache-2.0, v3.x) avec
   OAuth + Cloud Fetch — signal que l'OSS + Arrow + OAuth devient la norme.
 - **Apache Arrow ADBC / Flight SQL** : momentum réel mais positionné comme **supplément,
-  pas remplacement** d'ODBC. Signal fort : **Power BI/Fabric bascule vers ADBC par défaut
-  et retirera les drivers ODBC embarqués (service fin 2026, Desktop printemps 2027)** —
-  recouvre les backends d'Argus. ⇒ garder les internals colonnaires/Arrow-friendly ; un
+  pas remplacement** d'ODBC. Power BI/Fabric bascule vers ADBC et retirera les drivers
+  ODBC **embarqués** (service fin 2026, Desktop printemps 2027) — mais **cela ne
+  concerne pas Argus** : la doc Microsoft précise que la transition *« doesn't change
+  behavior for the ODBC connector when you use a separately installed ODBC driver »*,
+  et ne vise que les drivers Simba livrés dans la boîte
+  ([transition-to-adbc](https://learn.microsoft.com/en-us/power-query/transition-to-adbc)).
+  Le connecteur `.mez` d'Argus n'est donc pas menacé. Au contraire, c'est une
+  ouverture : le connecteur **Hive** natif de Power BI passe *Deprecated* **sans
+  remplacement**, et Impala bascule sur un driver ADBC HiveServer2 — `BACKEND=hive`
+  couvre HiveServer2 (plus Spark et Flink). ⇒ garder les internals
+  colonnaires/Arrow-friendly ; un
   chemin Flight SQL/ADBC est un item roadmap crédible à moyen terme.
 - **Auth = plancher entreprise** : OAuth2 auth-code + SSO navigateur, client-credentials
   (M2M), device-code (headless), OIDC discovery, JWT/bearer + refresh, key-pair JWT,
@@ -193,8 +225,9 @@ Spark/Flink en conditions réelles.
    (GCC 14 + C++20) ; **validé end-to-end contre InfluxDB 3 Core** — SELECT (avec
    timestamps), SQLColumns, SQLTables, SQLPrimaryKeys, SQLGetTypeInfo. Reste :
    Dremio/Doris + auth runtime. Voir `docs/FLIGHTSQL_DESIGN.md`)*
-   Doris, StarRocks ; fondations d'une future surface **ADBC** (anticipe la bascule
-   Power BI 2026-2027).
+   Doris, StarRocks ; fondations d'une future surface **ADBC** (supplément à ODBC,
+   pas un remplacement : la bascule Power BI 2026-2027 ne vise que les drivers
+   embarqués, cf. plus haut).
 4. **Kudu : déprécié** (décidé). Kudu se requête normalement via Impala, et le
    client C++ natif (`libkudu_client`) n'est **packagé pour aucune Ubuntu plus
    récente que 16.04** (le dépôt apt Cloudera s'arrête à `xenial` ; absent de

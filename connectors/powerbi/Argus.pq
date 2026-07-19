@@ -18,6 +18,13 @@ DriverName = "Argus ODBC Driver";
 
 // Backends whose dialect uses ANSI OFFSET…FETCH for top-N; everything else uses
 // LIMIT … OFFSET. This is the single most important folding decision.
+//
+// flightsql is deliberately absent even though it is a judgement call: the
+// backend is multi-engine (Dremio, Doris, InfluxDB 3), so no single answer is
+// right for all of them. LIMIT…OFFSET is what Dremio and Doris accept, which
+// covers the common case; an InfluxDB 3 user who needs OFFSET…FETCH has to edit
+// this list. Splitting flightsql into per-engine kinds needs the driver to
+// report which engine it actually reached.
 AnsiOffsetBackends = {"trino"};
 
 BackendList = {
@@ -44,6 +51,14 @@ ArgusType = type function (
     optional Database as (type text meta [
         Documentation.FieldCaption = "Database / catalog",
         Documentation.SampleValues = {"default"}
+    ]),
+    // Without this there is no way to reach a TLS endpoint from Get Data at
+    // all, even though the driver has supported SSL all along. Certificate
+    // paths (SSLCertFile / SSLCAFile / SSLVerify, see docs/CONFIGURATION.md)
+    // stay out of the dialog: they are per-machine and belong in the DSN.
+    optional UseSSL as (type logical meta [
+        Documentation.FieldCaption = "Use SSL/TLS",
+        Documentation.SampleValues = {true}
     ])
 ) as table meta [
     Documentation.Name = "Argus",
@@ -52,19 +67,27 @@ ArgusType = type function (
         & "BigQuery, Pinot, Druid, Phoenix, …) through the Argus ODBC driver."
 ];
 
-ArgusImpl = (Host as text, Port as number, Backend as text, optional Database as text) as table =>
+ArgusImpl = (Host as text, Port as number, Backend as text,
+             optional Database as text, optional UseSSL as logical) as table =>
     let
         db = if Database <> null and Database <> "" then Database else "default",
 
         // Non-secret parts of the connection string. Credentials (UID/PWD) are
         // supplied by Power BI through CredentialConnectionString, never here.
-        ConnectionString = [
+        BaseConnectionString = [
             DRIVER   = DriverName,
             HOST     = Host,
             PORT     = Number.ToText(Port),
             BACKEND  = Backend,
             DATABASE = db
         ],
+
+        // The driver reads SSL=1 (src/odbc/dsn.c). Only add the key when TLS is
+        // wanted, so an unset checkbox leaves the string exactly as before.
+        ConnectionString =
+            if UseSSL = true
+            then Record.AddField(BaseConnectionString, "SSL", "1")
+            else BaseConnectionString,
 
         Credential = Extension.CurrentCredential(),
         // Map Power BI's auth kinds onto the driver's connection parameters.
@@ -122,15 +145,19 @@ ArgusImpl = (Host as text, Port as number, Backend as text, optional Database as
 // ── Data source kind ────────────────────────────────────────────
 Argus = [
     // Identify a distinct data source by server + backend (not by credentials).
+    // Must pass every parameter Argus.Database takes: the service replays this
+    // for scheduled refresh, so an argument dropped here silently reverts to
+    // its default — UseSSL omitted would refresh in cleartext.
     TestConnection = (dataSourcePath) =>
         let
             json = Json.Document(dataSourcePath),
             Host = json[Host],
             Port = json[Port],
             Backend = json[Backend],
-            Database = json[Database]?
+            Database = json[Database]?,
+            UseSSL = json[UseSSL]?
         in
-            { "Argus.Database", Host, Port, Backend, Database },
+            { "Argus.Database", Host, Port, Backend, Database, UseSSL },
 
     Authentication = [
         // Trino/Presto without auth, and other open backends.

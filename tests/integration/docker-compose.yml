@@ -66,21 +66,28 @@ services:
       retries: 30
       start_period: 60s
 
+  # apache/phoenix:5.2.0 does not exist on Docker Hub ("object not found"), and
+  # Apache publishes no official Phoenix Query Server image. This community
+  # all-in-one (HBase + Phoenix 5.0 + Query Server on 8765) is the viable one.
+  #
+  # NOTE: its PQS defaults to Avatica PROTOBUF serialization, but the Argus
+  # phoenix backend speaks Avatica JSON. Point it at JSON before the driver can
+  # connect — set phoenix.queryserver.serialization=JSON in the server's
+  # hbase-site.xml (or start queryserver.py with
+  # -Dphoenix.queryserver.serialization=JSON). Until a JSON-configured PQS is
+  # wired up here, the phoenix dialect stays on the conservative ansi_fns table
+  # (src/odbc/dialect.c) rather than a live-probed one.
   phoenix:
-    image: apache/phoenix:5.2.0
+    image: boostport/hbase-phoenix-all-in-one:2.0-5.0
     container_name: argus-phoenix
     ports:
-      - "8765:8765"     # Phoenix Query Server
-      - "2181:2181"     # ZooKeeper
-      - "16010:16010"   # HBase Master UI
-    environment:
-      START_HBASE: "true"
+      - "8765:8765"     # Phoenix Query Server (Avatica)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8765/"]
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:8765/ || exit 1"]
       interval: 10s
       timeout: 10s
-      retries: 20
-      start_period: 60s
+      retries: 30
+      start_period: 90s
 
   kudu-master:
     image: apache/kudu:latest

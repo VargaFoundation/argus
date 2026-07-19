@@ -11,7 +11,13 @@ This layer implements the ODBC specification. It handles:
 - **Execution** (`execute.c`): Statement preparation and execution dispatch
 - **Fetching** (`fetch.c`): Batch row cache, column binding, and type conversion
 - **Catalog** (`catalog.c`): SQLTables, SQLColumns, SQLGetTypeInfo dispatch to backend
-- **Info** (`info.c`): 50+ SQLGetInfo types for BI tool compatibility (PowerBI, Tableau)
+- **Info** (`info.c`): ~150 SQLGetInfo types for BI tool compatibility (PowerBI, Tableau)
+- **Dialect** (`dialect.c`): per-backend SQL dialect table — identifier quote char and
+  the ODBC scalar functions each backend can render. `SQLGetInfo`'s function bitmaps are
+  *derived* from it, so the driver cannot advertise what it cannot translate
+- **Escapes** (`escape.c`): translates ODBC escape sequences (`{fn}`, `{d/t/ts}`,
+  `{escape}`, `{oj}`, `{interval}`) into each backend's grammar. Required by every
+  generic-ODBC BI tool (Tableau, Excel, Qlik, Alteryx); see `docs/BI_TOOLS.md`
 - **Diagnostics** (`diag.c`): SQLSTATE error reporting and diagnostic records
 - **Attributes** (`attr.c`): Environment, connection, and statement attributes
 

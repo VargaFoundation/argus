@@ -2,6 +2,13 @@
 build/
 cmake-build-*/
 
+# BI connector build output (connectors/*/build.ps1)
+connector-dist/
+*.mez
+*.pqx
+*.taco
+connectors/tableau/.xsd-cache/
+
 # IDE
 .idea/
 .vscode/

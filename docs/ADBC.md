@@ -6,9 +6,14 @@ result is returned as an Arrow **C Data Interface** stream of typed columns, so
 Arrow-native consumers (Power BI/Fabric's ADBC path, the Python/R ADBC bindings,
 DuckDB, etc.) get columnar data directly.
 
-This anticipates the industry shift to ADBC — Power BI/Fabric is moving to ADBC
-by default and retiring its embedded ODBC drivers (service end of 2026, Desktop
-spring 2027), which covers Argus's backends.
+This anticipates the industry shift to ADBC. Note what that shift is and is not:
+Power BI/Fabric is moving to ADBC by default and retiring the ODBC drivers it
+**embeds** (service end of 2026, Desktop spring 2027), but Microsoft
+[states](https://learn.microsoft.com/en-us/power-query/transition-to-adbc) that
+the transition "doesn't change behavior for the ODBC connector when you use a
+separately installed ODBC driver". Argus is separately installed, so its ODBC
+path and its Power BI connector are not affected, and this ADBC surface is an
+addition rather than a migration. See [BI_TOOLS.md](BI_TOOLS.md).
 
 ## Design
 

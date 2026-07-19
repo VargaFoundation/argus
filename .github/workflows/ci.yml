@@ -296,6 +296,39 @@ jobs:
           name: argus-powerbi-connector
           path: connector-dist/Argus.mez
 
+  build-tableau-connector:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Schema-check the connector XML against Tableau's published XSDs. This is
+      # the cheap guard that catches an invented element or attribute; a .taco
+      # with bad XML simply never loads in Tableau, with no error to read.
+      - name: Validate connector XML
+        run: |
+          pip install xmlschema
+          python connectors/tableau/validate-xml.py
+
+      # Package with Tableau's own tool so a structurally broken connector fails
+      # CI. Unsigned: signing needs a public-CA code-signing keystore, which is
+      # a release-time concern (see connectors/tableau/README.md).
+      - name: Package the Tableau connectors (.taco)
+        shell: pwsh
+        run: connectors/tableau/build.ps1 -OutDir connector-dist
+
+      - name: Upload connectors (.taco)
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-tableau-connectors
+          path: connector-dist/*.taco
+
   integration-tests:
     runs-on: ubuntu-latest
 

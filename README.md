@@ -8,7 +8,7 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 ## Features
 
 ### Core ODBC Support
-- **99 ODBC entry points** (68 ANSI + 31 Unicode `W` variants) — ODBC 3.x API Level 1, plus ODBC 2.x compatibility (`SQLAllocConnect`, `SQLError`, `SQLExtendedFetch`, ...)
+- **99 ODBC entry points** (68 ANSI + 31 Unicode `W` variants) — ODBC 3.80, **Level 1 interface conformance** (`SQL_OIC_LEVEL1`, SQL-92 Entry), plus ODBC 2.x compatibility (`SQLAllocConnect`, `SQLError`, `SQLExtendedFetch`, ...). This matches the commercial Simba/Starburst drivers for these engines; stored procedures and transactions — the two OLTP features Level 1 also names — are reported absent (`SQL_PROCEDURES="N"`, `SQL_TXN_CAPABLE=SQL_TC_NONE`), as they are on Trino/BigQuery/Hive themselves.
 - **10 backends**, enabled by dependency auto-detection at configure time
 - **Cross-platform**: Linux, macOS and Windows x64
 - **Arrow ADBC driver** (`libargus_adbc`) exposing the same backends through the Arrow C Data Interface
@@ -136,6 +136,24 @@ HOST=localhost;PORT=10000;UID=myuser;PWD=mypass;DATABASE=default;BACKEND=hive
 | **FetchBufferSize** | Rows per fetch | `5000` | `1000` |
 
 The complete list (OAuth2 endpoints, HTTP transport, spooling, ...) is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md); ready-made strings per engine are in [CONNECTION_EXAMPLES.md](CONNECTION_EXAMPLES.md).
+
+## BI tools
+
+Most BI tools need nothing but the driver and a DSN — the driver translates the
+ODBC escape sequences (`{fn ...}`, `{ts ...}`, `{oj ...}`) that Tableau, Excel,
+Qlik and Alteryx generate, per backend dialect. Two tools get a packaged
+connector, attached to each [release](https://github.com/VargaFoundation/argus/releases):
+
+| Tool | Artifact | Why |
+|---|---|---|
+| Power BI Desktop / Service | [`Argus.mez` / `.pqx`](connectors/powerbi) | Generic ODBC cannot fold `LIMIT`/top-N in Power Query |
+| Tableau Desktop / Server | [`argus-*.taco`](connectors/tableau) | Named connector: fixed dialect, publishable, supported |
+
+Excel cannot load Power Query custom connectors (Power BI Desktop only) and uses
+a DSN. DBeaver, Superset, Metabase and Looker are JDBC/SQLAlchemy and out of
+scope for an ODBC driver.
+
+[docs/BI_TOOLS.md](docs/BI_TOOLS.md) has the full matrix and the per-tool setup.
 
 ## Windows
 
