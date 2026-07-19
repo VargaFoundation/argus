@@ -105,9 +105,17 @@ int trino_parse_data(JsonNode *data_node,
             GType vtype = json_node_get_value_type(val_node);
 
             if (vtype == G_TYPE_STRING) {
+                /* Copy in a single pass: strdup would walk the string to size
+                 * the allocation and then strlen walks it again. At millions of
+                 * string cells that second walk is pure waste. */
                 const char *s = json_node_get_string(val_node);
-                cell->data = strdup(s ? s : "");
-                cell->data_len = strlen(cell->data);
+                size_t len = s ? strlen(s) : 0;
+                cell->data = malloc(len + 1);
+                if (cell->data) {
+                    if (len) memcpy(cell->data, s, len);
+                    cell->data[len] = '\0';
+                    cell->data_len = len;
+                }
             } else if (vtype == G_TYPE_INT64) {
                 /* Native typed value: no text round-trip on SQLGetData. */
                 cell->native_kind = ARGUS_NATIVE_I64;

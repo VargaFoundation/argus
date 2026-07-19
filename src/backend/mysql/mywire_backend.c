@@ -325,6 +325,22 @@ static bool mywire_get_last_error(argus_backend_conn_t raw_conn,
     return true;
 }
 
+/* ── Server version ──────────────────────────────────────────────
+ * The wire protocol hands the server banner to the client at connect time, so
+ * this is a field read with no round trip — backs SQLGetInfo(SQL_DBMS_VER) for
+ * MariaDB/StarRocks/Doris/ClickHouse. */
+static bool mywire_get_server_version(argus_backend_conn_t raw_conn,
+                                      char *buf, size_t buflen)
+{
+    mywire_conn_t *conn = (mywire_conn_t *)raw_conn;
+    if (!conn || !conn->mysql || buflen == 0) return false;
+    const char *v = mysql_get_server_info(conn->mysql);
+    if (!v || !*v) return false;
+    strncpy(buf, v, buflen - 1);
+    buf[buflen - 1] = '\0';
+    return true;
+}
+
 /* ── Backend vtable ──────────────────────────────────────────── */
 
 static const argus_backend_t mywire_backend = {
@@ -345,6 +361,7 @@ static const argus_backend_t mywire_backend = {
     .get_catalogs          = mywire_get_catalogs,
     .get_primary_keys      = mywire_get_primary_keys,
     .get_last_error        = mywire_get_last_error,
+    .get_server_version    = mywire_get_server_version,
 };
 
 const argus_backend_t *argus_mysql_backend_get(void)

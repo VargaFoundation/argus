@@ -55,6 +55,14 @@ typedef struct trino_conn {
     /* Message of the most recent server query error (empty if none). Trino
      * runs queries asynchronously, so the error appears while polling. */
     char                last_error[512];
+
+    /* Server version from /v1/info, fetched on first use rather than at
+     * connect: SQLGetInfo(SQL_DBMS_VER) is rare, and most connections would
+     * pay the round trip for nothing. Empty means "not fetched yet";
+     * version_probed records that we tried, so a server that won't answer is
+     * asked once and not on every call. */
+    char                server_version[64];
+    bool                version_probed;
 } trino_conn_t;
 
 /* Trino operation state */

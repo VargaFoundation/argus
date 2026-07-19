@@ -1029,3 +1029,56 @@ bool trino_get_last_error(argus_backend_conn_t raw_conn, char *buf, size_t bufle
     buf[buflen - 1] = '\0';
     return true;
 }
+
+/* ── Server version ──────────────────────────────────────────────
+ * Backs SQLGetInfo(SQL_DBMS_VER). /v1/info answers
+ * {"nodeVersion":{"version":"467"}, ...} without authentication on an open
+ * cluster and with the session's headers otherwise, which is why it goes
+ * through trino_http_get rather than a bare curl call.
+ *
+ * Probed lazily and cached: BI tools ask once per connection at most, and
+ * fetching at connect time would add a round trip to every pooled connection. */
+bool trino_get_server_version(argus_backend_conn_t raw_conn, char *buf, size_t buflen)
+{
+    trino_conn_t *conn = (trino_conn_t *)raw_conn;
+    if (!conn || buflen == 0) return false;
+
+    if (!conn->version_probed) {
+        conn->version_probed = true;   /* one attempt per connection, pass or fail */
+
+        char url[512];
+        snprintf(url, sizeof(url), "%s/v1/info", conn->base_url);
+
+        trino_response_t resp = { NULL, 0 };
+        if (trino_http_get(conn, url, &resp) == 0 && resp.data) {
+            JsonParser *parser = json_parser_new();
+            if (json_parser_load_from_data(parser, resp.data, (gssize)resp.size, NULL)) {
+                JsonNode *root = json_parser_get_root(parser);
+                if (root && JSON_NODE_HOLDS_OBJECT(root)) {
+                    JsonObject *obj = json_node_get_object(root);
+                    if (json_object_has_member(obj, "nodeVersion")) {
+                        JsonObject *nv = json_object_get_object_member(obj, "nodeVersion");
+                        if (nv && json_object_has_member(nv, "version")) {
+                            const char *v = json_object_get_string_member(nv, "version");
+                            if (v && *v) {
+                                strncpy(conn->server_version, v,
+                                        sizeof(conn->server_version) - 1);
+                                conn->server_version[sizeof(conn->server_version) - 1] = '\0';
+                            }
+                        }
+                    }
+                }
+            }
+            g_object_unref(parser);
+        } else {
+            ARGUS_LOG_DEBUG("Trino /v1/info unavailable; SQL_DBMS_VER stays unknown");
+        }
+        free(resp.data);
+    }
+
+    if (!conn->server_version[0]) return false;
+
+    strncpy(buf, conn->server_version, buflen - 1);
+    buf[buflen - 1] = '\0';
+    return true;
+}
