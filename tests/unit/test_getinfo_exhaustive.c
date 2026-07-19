@@ -172,13 +172,12 @@ static void test_bi_critical_values(void **state)
     assert_true(agg & SQL_AF_COUNT);
     assert_true(agg & SQL_AF_SUM);
 
-    /* Async is reported NONE: the scaffolding exists but the backends'
-     * get_operation_status is passive and never advances the query, so async
-     * would hang (see test_async.c). NONE is the honest value until that is
-     * fixed. */
+    /* Statement-level async is real: the execute runs on a worker thread and
+     * SQLExecDirect returns SQL_STILL_EXECUTING immediately (see test_async.c),
+     * so the driver advertises SQL_AM_STATEMENT. */
     SQLUINTEGER async_mode = 0;
     SQLGetInfo((SQLHDBC)dbc, SQL_ASYNC_MODE, &async_mode, sizeof(async_mode), NULL);
-    assert_int_equal(async_mode, SQL_AM_NONE);
+    assert_int_equal(async_mode, SQL_AM_STATEMENT);
 
     free_test_dbc(dbc);
 }
