@@ -281,6 +281,131 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLColAttributeW(
     }
 }
 
+/* ── Descriptor field types ──────────────────────────────────── */
+
+/* Which SQLGetDescField/SQLSetDescField fields carry a character string
+ * (and therefore need UTF-16↔UTF-8 conversion in the W variants). Every
+ * other field is an integer/pointer and passes through untouched. */
+static int desc_field_is_string(SQLSMALLINT field)
+{
+    switch (field) {
+    case SQL_DESC_NAME:
+    case SQL_DESC_BASE_COLUMN_NAME:
+    case SQL_DESC_BASE_TABLE_NAME:
+    case SQL_DESC_CATALOG_NAME:
+    case SQL_DESC_LABEL:
+    case SQL_DESC_LITERAL_PREFIX:
+    case SQL_DESC_LITERAL_SUFFIX:
+    case SQL_DESC_LOCAL_TYPE_NAME:
+    case SQL_DESC_SCHEMA_NAME:
+    case SQL_DESC_TABLE_NAME:
+    case SQL_DESC_TYPE_NAME:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* ── SQLGetDescFieldW ────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetDescFieldW(
+    SQLHDESC    DescriptorHandle,
+    SQLSMALLINT RecNumber,
+    SQLSMALLINT FieldIdentifier,
+    SQLPOINTER  Value,
+    SQLINTEGER  BufferLength,
+    SQLINTEGER *StringLength)
+{
+    if (!desc_field_is_string(FieldIdentifier)) {
+        /* Numeric/pointer field: pass through directly */
+        return SQLGetDescField(DescriptorHandle, RecNumber, FieldIdentifier,
+                               Value, BufferLength, StringLength);
+    }
+
+    SQLCHAR ansi_buf[512];
+    SQLINTEGER ansi_len = 0;
+
+    SQLRETURN ret = SQLGetDescField(
+        DescriptorHandle, RecNumber, FieldIdentifier,
+        ansi_buf, (SQLINTEGER)sizeof(ansi_buf), &ansi_len);
+
+    if ((ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) &&
+        Value && BufferLength > 0) {
+        SQLSMALLINT wlen = utf8_to_wchar(
+            ansi_buf, (SQLSMALLINT)ansi_len,
+            (SQLWCHAR *)Value, (SQLSMALLINT)BufferLength);
+        if (StringLength)
+            *StringLength = (SQLINTEGER)wlen * (SQLINTEGER)sizeof(SQLWCHAR);
+    } else if (StringLength) {
+        *StringLength = ansi_len * (SQLINTEGER)sizeof(SQLWCHAR);
+    }
+    return ret;
+}
+
+/* ── SQLSetDescFieldW ────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetDescFieldW(
+    SQLHDESC    DescriptorHandle,
+    SQLSMALLINT RecNumber,
+    SQLSMALLINT FieldIdentifier,
+    SQLPOINTER  Value,
+    SQLINTEGER  BufferLength)
+{
+    if (!desc_field_is_string(FieldIdentifier) || !Value) {
+        /* Numeric/pointer field: pass through directly */
+        return SQLSetDescField(DescriptorHandle, RecNumber, FieldIdentifier,
+                               Value, BufferLength);
+    }
+
+    SQLSMALLINT len_chars = (BufferLength == SQL_NTS)
+        ? SQL_NTS
+        : (SQLSMALLINT)(BufferLength / (SQLINTEGER)sizeof(SQLWCHAR));
+    char *utf8 = wchar_to_utf8((const SQLWCHAR *)Value, len_chars);
+    if (!utf8) {
+        return SQLSetDescField(DescriptorHandle, RecNumber, FieldIdentifier,
+                               Value, BufferLength);
+    }
+
+    SQLRETURN ret = SQLSetDescField(
+        DescriptorHandle, RecNumber, FieldIdentifier,
+        (SQLPOINTER)utf8, SQL_NTS);
+    g_free(utf8);
+    return ret;
+}
+
+/* ── SQLGetDescRecW ──────────────────────────────────────────── */
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetDescRecW(
+    SQLHDESC     DescriptorHandle,
+    SQLSMALLINT  RecNumber,
+    SQLWCHAR    *Name,
+    SQLSMALLINT  BufferLength,
+    SQLSMALLINT *StringLengthPtr,
+    SQLSMALLINT *TypePtr,
+    SQLSMALLINT *SubTypePtr,
+    SQLLEN      *LengthPtr,
+    SQLSMALLINT *PrecisionPtr,
+    SQLSMALLINT *ScalePtr,
+    SQLSMALLINT *NullablePtr)
+{
+    SQLCHAR name_buf[ARGUS_MAX_COLUMN_NAME];
+    SQLSMALLINT name_len = 0;
+
+    SQLRETURN ret = SQLGetDescRec(
+        DescriptorHandle, RecNumber,
+        name_buf, sizeof(name_buf), &name_len,
+        TypePtr, SubTypePtr, LengthPtr, PrecisionPtr, ScalePtr, NullablePtr);
+
+    if ((ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) &&
+        Name && BufferLength > 0) {
+        SQLSMALLINT wlen = utf8_to_wchar(name_buf, name_len, Name, BufferLength);
+        if (StringLengthPtr) *StringLengthPtr = wlen;
+    } else if (StringLengthPtr) {
+        *StringLengthPtr = name_len;
+    }
+    return ret;
+}
+
 /* ── SQLDescribeColW ─────────────────────────────────────────── */
 
 ARGUS_EXPORT SQLRETURN SQL_API SQLDescribeColW(

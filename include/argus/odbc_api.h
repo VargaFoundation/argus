@@ -404,6 +404,35 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLSetDescRec(
     SQLLEN      *StringLengthPtr,
     SQLLEN      *IndicatorPtr);
 
+/* Descriptors (Unicode) */
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetDescFieldW(
+    SQLHDESC    DescriptorHandle,
+    SQLSMALLINT RecNumber,
+    SQLSMALLINT FieldIdentifier,
+    SQLPOINTER  Value,
+    SQLINTEGER  BufferLength,
+    SQLINTEGER *StringLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLSetDescFieldW(
+    SQLHDESC    DescriptorHandle,
+    SQLSMALLINT RecNumber,
+    SQLSMALLINT FieldIdentifier,
+    SQLPOINTER  Value,
+    SQLINTEGER  BufferLength);
+
+ARGUS_EXPORT SQLRETURN SQL_API SQLGetDescRecW(
+    SQLHDESC     DescriptorHandle,
+    SQLSMALLINT  RecNumber,
+    SQLWCHAR    *Name,
+    SQLSMALLINT  BufferLength,
+    SQLSMALLINT *StringLengthPtr,
+    SQLSMALLINT *TypePtr,
+    SQLSMALLINT *SubTypePtr,
+    SQLLEN      *LengthPtr,
+    SQLSMALLINT *PrecisionPtr,
+    SQLSMALLINT *ScalePtr,
+    SQLSMALLINT *NullablePtr);
+
 /* ODBC 2.x compatibility functions */
 ARGUS_EXPORT SQLRETURN SQL_API SQLAllocEnv(SQLHENV *EnvironmentHandle);
 ARGUS_EXPORT SQLRETURN SQL_API SQLFreeEnv(SQLHENV EnvironmentHandle);
