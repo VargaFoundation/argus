@@ -58,10 +58,13 @@ static long run_once(SQLHDBC dbc, const char *sql, int *ncols_out)
     long rows = 0;
     char buf[256];
     SQLLEN ind;
+    /* ARGUS_BENCH_NODECODE=1 fetches rows without materializing any cell, to
+     * isolate backend fetch+parse cost from the ODBC decode (SQLGetData). */
+    int decode = getenv("ARGUS_BENCH_NODECODE") == NULL;
     while (SQLFetch(stmt) == SQL_SUCCESS) {
-        /* Touch every column so the whole row is materialized. */
-        for (SQLSMALLINT c = 1; c <= ncols; c++)
-            SQLGetData(stmt, c, SQL_C_CHAR, buf, sizeof(buf), &ind);
+        if (decode)
+            for (SQLSMALLINT c = 1; c <= ncols; c++)
+                SQLGetData(stmt, c, SQL_C_CHAR, buf, sizeof(buf), &ind);
         rows++;
     }
 

@@ -43,10 +43,25 @@ confirming it is the shared SimbaEngine core, not a per-data-store surface.
 
 ## Remaining gaps, ranked
 
-1. **Columnar / Arrow decode** — the one substantive gap left. Simba decodes
-   results columnar (Arrow); Argus rebuilds row by row (`fetch.c`). Real cost on
-   large extracts. Argus already has an Arrow-native path in its ADBC layer; the
-   work is to wire a columnar decode into the ODBC block-cursor fetch.
+1. **Columnar / Arrow wire format** — the one substantive gap left, and it is in
+   the *wire format*, not the ODBC decode loop. Measured with `tests/bench`
+   against live Trino (`SELECT * FROM tpch.sf1.orders`, SQL_C_CHAR, drained):
+
+   | rows × cols | fetch + decode | fetch only (`ARGUS_BENCH_NODECODE=1`) | ODBC decode share |
+   |---|---|---|---|
+   | 300000 × 9 | 1007 ms | 868 ms | **138 ms — 14%** |
+   | 100000 × 9 | 435 ms  | 358 ms | 77 ms — 18% |
+
+   So ~86% of fetch time is the backend fetch + JSON parse (network +
+   `trino_fetch.c`), and only ~14% is the ODBC decode — which is already tight
+   (`convert_cell_to_target` has a typed fast path for numerics and cached
+   lengths, no per-cell `strlen`/allocation). The real win, matching Simba's
+   Arrow/Cloud Fetch, is a **columnar binary wire format**: decode Trino's
+   spooled Arrow segments (`trino_spooling.c` already carries the transport)
+   column-by-column instead of parsing row-oriented JSON. That is a scoped,
+   Trino-specific feature that needs an Arrow-encoded spooling endpoint to build
+   and verify — it is deliberately not hacked in unverified. Optimising the ODBC
+   decode loop instead would cap at the measured ~14%.
 2. **Client-side SQL engine** — only matters for *non-SQL* sources (Salesforce,
    Mongo). Argus's 10 backends are all full-SQL engines (Kudu, the exception,
    has a minimal parser), so this is not required for the current targets.
