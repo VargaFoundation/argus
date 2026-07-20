@@ -3,6 +3,7 @@
 #include "argus/backend.h"
 #include "argus/compat.h"
 #include "argus/log.h"
+#include "argus/obs_hooks.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -70,6 +71,7 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
             dbc->pooled = true;
             dbc->connect_time_ms = 0.0;
             ARGUS_LOG_INFO("Acquired pooled connection to %s:%d", host, port);
+            argus_obs_hook_connect(NULL, backend_name, host, 1, dbc->connect_time_ms);
             return SQL_SUCCESS;
         }
     }
@@ -101,6 +103,7 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
                            backend_name, host, port, attempt, max_attempts,
                            dbc->connect_time_ms);
             dbc->connected = true;
+            argus_obs_hook_connect(NULL, backend_name, host, 1, dbc->connect_time_ms);
             return SQL_SUCCESS;
         }
 

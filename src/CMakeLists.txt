@@ -5,6 +5,7 @@ set(ARGUS_SOURCES
     odbc/handle.c
     odbc/connect.c
     odbc/execute.c
+    odbc/obs_hooks.c
     odbc/fetch.c
     odbc/catalog.c
     odbc/info.c
