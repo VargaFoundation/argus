@@ -2,6 +2,42 @@
 
 All notable changes to the Argus ODBC Driver project.
 
+## [Unreleased]
+
+### BI-tool parity & connectors
+- **Tableau connectors** (`.taco`) for Trino, Hive, Impala, MySQL-wire and
+  BigQuery, plus a turnkey **TDVT** harness (`connectors/tableau/tdvt/`). The
+  Trino connector was run through Tableau's Datasource Verification Tool against
+  a live server: **91.4%** pass rate (703/769) with four native-Trino
+  `dialect.tdd` overrides.
+- **Per-backend SQL dialect + ODBC escape translation** (`{fn …}`, `{d}`, `{t}`,
+  `{ts}`, `{oj}`) with the `SQLGetInfo` scalar bitmaps derived from what the
+  driver can actually translate; **Level 1 interface conformance**
+  (`SQL_OIC_LEVEL1`). Power BI custom connector (`.mez`).
+
+### ODBC conformance
+- **Real statement-level asynchronous execution** on a worker thread:
+  `SQL_ASYNC_MODE = SQL_AM_STATEMENT`, `SQLExecDirect`/`SQLExecute` return
+  `SQL_STILL_EXECUTING`, plus `SQLCompleteAsync` and `SQLCancelHandle` (ODBC 3.8).
+  Verified against live Trino.
+- **Real ODBC descriptors** (ARD/APD/IRD/IPD via `SQLAllocHandle(SQL_HANDLE_DESC)`)
+  and row/column-wise binding; added the Unicode descriptor accessors
+  `SQLGetDescFieldW`, `SQLSetDescFieldW`, `SQLGetDescRecW`.
+- Real `SQL_DBMS_VER` from a per-backend `get_server_version` hook (Trino,
+  MySQL-wire).
+
+### Performance
+- **DOM-free Trino result decode**: result pages are scanned straight into cells
+  instead of building a json-glib DOM (~half of fetch time). ~65% faster fetch on
+  large extracts, proven byte-identical to the reference path; kill-switch
+  `ARGUS_TRINO_NOFASTJSON`. `tests/bench` gains `ARGUS_BENCH_NODECODE` and
+  `ARGUS_BENCH_CKSUM`.
+
+### Documentation
+- `docs/SIMBA_PARITY.md` — an evidence-based comparison against Simba/Starburst
+  (black-box ABI inspection of real Simba binaries, published docs, source
+  audit), and a "How Argus compares" section in the README.
+
 ## [0.2.0] - 2025-02-13
 
 ### Added - Production Features

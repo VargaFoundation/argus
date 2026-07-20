@@ -8,7 +8,8 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 ## Features
 
 ### Core ODBC Support
-- **99 ODBC entry points** (68 ANSI + 31 Unicode `W` variants) — ODBC 3.80, **Level 1 interface conformance** (`SQL_OIC_LEVEL1`, SQL-92 Entry), plus ODBC 2.x compatibility (`SQLAllocConnect`, `SQLError`, `SQLExtendedFetch`, ...). This matches the commercial Simba/Starburst drivers for these engines; stored procedures and transactions — the two OLTP features Level 1 also names — are reported absent (`SQL_PROCEDURES="N"`, `SQL_TXN_CAPABLE=SQL_TC_NONE`), as they are on Trino/BigQuery/Hive themselves.
+- **103 ODBC entry points** (69 ANSI + 34 Unicode `W` variants) — ODBC 3.80, **Level 1 interface conformance** (`SQL_OIC_LEVEL1`, SQL-92 Entry), plus ODBC 2.x compatibility (`SQLAllocConnect`, `SQLError`, `SQLExtendedFetch`, ...). This matches the commercial Simba/Starburst drivers for these engines; stored procedures and transactions — the two OLTP features Level 1 also names — are reported absent (`SQL_PROCEDURES="N"`, `SQL_TXN_CAPABLE=SQL_TC_NONE`), as they are on Trino/BigQuery/Hive themselves.
+- **Statement-level asynchronous execution** (`SQL_ASYNC_MODE = SQL_AM_STATEMENT`): async `SQLExecDirect`/`SQLExecute` on a worker thread, with `SQLCompleteAsync` and `SQLCancelHandle` (ODBC 3.8).
 - **10 backends**, enabled by dependency auto-detection at configure time
 - **Cross-platform**: Linux, macOS and Windows x64
 - **Arrow ADBC driver** (`libargus_adbc`) exposing the same backends through the Arrow C Data Interface
@@ -66,6 +67,60 @@ The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery
 - **Configurable Buffer Size**: `FetchBufferSize=5000`
 - **Block fetch**: `SQL_ATTR_ROW_ARRAY_SIZE` rowsets and `SQL_ATTR_PARAMSET_SIZE` parameter arrays
 - **Static scrollable cursors** (`SQLFetchScroll` NEXT/PRIOR/FIRST/LAST/ABSOLUTE/RELATIVE)
+- **DOM-free Trino decode**: result pages are scanned straight into cells instead of building a json-glib DOM — ~65% faster fetch on large extracts (proven byte-identical; kill-switch `ARGUS_TRINO_NOFASTJSON`). Trino spooling and a numeric fast-path (no text round-trip) are used where available.
+
+## How Argus compares
+
+Argus is measured against the commercial baseline — Simba/Magnitude's SimbaEngine
+drivers (OEM'd as the Databricks/Spark, Impala, Hive, Athena and BigQuery ODBC
+drivers) and Starburst's Trino driver. The full evidence, including a black-box
+inspection of real Simba binaries and a live Tableau TDVT run, is in
+[docs/SIMBA_PARITY.md](docs/SIMBA_PARITY.md).
+
+| | **Argus** | Simba / Starburst (per engine) | Generic *Other Databases (ODBC)* |
+|---|---|---|---|
+| Engines per driver | **10 in one binary** | one driver per engine | any, but dialect-blind |
+| Licensing | **open** (Varga Foundation) | proprietary, per-seat | bundled |
+| ODBC level | 3.8, Level 1, SQL-92 Entry | 3.8, Level 1/2 | depends on driver |
+| Exported ODBC entry points | **107** | 89 (SimbaEngine core) | n/a |
+| Unicode (`W`) | full | full | varies |
+| Async execution | **yes** (`SQL_AM_STATEMENT`) | yes | usually no |
+| Auth | Kerberos (GSSAPI+SSPI), OAuth2 (M2M + device flow), JWT, LDAP, TLS | yes | varies |
+| Connection pooling | yes | yes | driver-manager only |
+| Tableau TDVT | **91.4%** measured | certified (>90%) | not applicable |
+| Large-result decode | DOM-free JSON (~65% faster), spooling, Arrow via ADBC | Arrow / Cloud Fetch | row-wise |
+| Dialect correctness | per-backend dialect + ODBC escape translation | per-engine | **none** — SQL passed through |
+| Arrow surface | ADBC driver + Flight SQL backend | JDBC/ODBC | no |
+
+### Why Argus
+
+- **One driver, ten engines.** Commercial connectivity means a separate licensed
+  driver per engine — Simba Spark *and* Simba Impala *and* Starburst Trino, each
+  with its own installer, DSN scheme and support contract. Argus is a single
+  binary with one connection-string grammar and a per-backend dialect layer, so
+  a BI deployment installs and governs **one** driver.
+- **At parity on the contract that matters, open.** Parity is measured on the
+  observable ODBC contract, not marketing: ODBC 3.8, full Unicode, Level 1
+  conformance, real async, pooling, the full auth matrix, a **broader raw ODBC
+  surface (107 vs 89 entry points)**, and a **91.4% Tableau TDVT** pass rate on
+  the same tests certified connectors run — with no per-seat licence.
+- **Honest capabilities.** Argus advertises only what it can do. Where an engine
+  has no foreign keys, stored procedures or row-version columns, the catalog
+  functions return empty — exactly as Simba's drivers for those engines do —
+  rather than inventing metadata a BI tool would then trust.
+- **Fast where it counts.** The Trino fetch path decodes result pages without a
+  JSON DOM (~65% faster on large extracts, proven byte-identical to the
+  reference path), on top of Trino spooling and a numeric fast-path.
+- **Dialect-correct, unlike the generic ODBC entry.** Tableau itself warns that
+  with *Other Databases (ODBC)* "compatibility is not guaranteed"; Argus ships a
+  per-backend SQL dialect and translates ODBC escape sequences (`{fn …}`, `{d}`,
+  `{ts}`, `{oj}`) into each engine's own grammar, so `{fn}`-generating tools
+  (Tableau, Excel, Qlik) get correct SQL.
+- **Sovereign and configurable.** Every Google endpoint is configurable for
+  BigQuery, including S3NS sovereign clouds — connectivity that closed vendor
+  drivers do not expose.
+- **Arrow-native.** The same backends are exposed through an Arrow ADBC driver,
+  and Arrow Flight SQL is a first-class backend.
 
 ## Building
 

@@ -6,6 +6,12 @@ quatre axes — authentification entreprise, performance/Arrow, nouveaux backend
 conformité ODBC — et l'ensemble des moteurs cibles envisagés (Spark, Flink, MySQL-wire,
 Druid, Pinot, TDengine, Arrow Flight SQL).
 
+> **Livré depuis (voir [SIMBA_PARITY.md](SIMBA_PARITY.md)) :** conformité Level 1
+> + dialectes/escapes ODBC ; **async statement réel** (`SQL_AM_STATEMENT`,
+> `SQLCompleteAsync`) ; descripteurs réels + accesseurs Unicode ; **décodage
+> Trino sans DOM (~65% plus rapide)** ; connecteurs Tableau + **TDVT 91,4%**.
+> Reste ouvert : format filaire Arrow natif (Cloud Fetch), `SQLBulkOperations`.
+
 ## Résumé exécutif
 
 Argus est un driver ODBC open-source en C11 (~26 000 LOC + ~8 800 LOC de tests)
