@@ -117,6 +117,10 @@ struct argus_dbc {
     /* Metrics */
     double       connect_time_ms;       /* last connect duration */
     unsigned long errors_total;         /* total error count */
+
+    /* Observability taps (argus/obs_hooks.h): redacted copy of the connection
+     * string (secret-bearing values masked), captured at SQLDriverConnect. */
+    char        *obs_connstr;
 };
 
 /* Async execution states */

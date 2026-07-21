@@ -2,6 +2,7 @@
 #include "argus/odbc_api.h"
 #include "argus/compat.h"
 #include "argus/log.h"
+#include "argus/obs_hooks.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -188,6 +189,7 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     free(dbc->krb_realm);
     free(dbc->backend_name);
     free(dbc->current_catalog);
+    free(dbc->obs_connstr);
 
     /* Free SSL/TLS fields */
     free(dbc->ssl_cert_file);
@@ -311,6 +313,19 @@ SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
                        stmt->execute_time_ms,
                        stmt->rows_fetched_total,
                        stmt->errors_total);
+        /* Observability tap: one aggregate event per statement handle.
+         * Only the SQLSTATE is reported for errors, never the message text. */
+        argus_obs_hook_statement(
+            stmt->dbc,
+            stmt->dbc->backend ? stmt->dbc->backend->name
+                               : stmt->dbc->backend_name,
+            stmt->query,
+            stmt->execute_time_ms,
+            stmt->rows_fetched_total,
+            0,
+            stmt->errors_total > 0 && stmt->diag.count > 0
+                ? (const char *)stmt->diag.records[0].sqlstate
+                : "00000");
     }
 
     argus_stmt_reset(stmt);

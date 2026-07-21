@@ -24,6 +24,42 @@ extern char *argus_str_dup(const SQLCHAR *str, SQLINTEGER len);
 extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
 extern bool argus_resolve_dsn(argus_dbc_t *dbc, const char *dsn_name);
 
+/* ── Internal: redacted connection string for the observability taps ──
+ * Copy of "k=v;k=v" with the value of any secret-bearing key (its name
+ * contains PWD, PASSWORD, SECRET or TOKEN — deliberately over-broad, so an
+ * endpoint URL may be masked but a secret never survives) replaced by "***".
+ * The taps (argus/obs_hooks.h) only ever see this copy, never the raw string. */
+static char *obs_redact_connstr(const char *s)
+{
+    if (!s) return NULL;
+    GString *out = g_string_sized_new(strlen(s));
+    const char *p = s;
+    while (*p) {
+        const char *pair_end = strchr(p, ';');
+        if (!pair_end) pair_end = p + strlen(p);
+        const char *eq = memchr(p, '=', (size_t)(pair_end - p));
+        if (eq) {
+            char key[64];
+            size_t klen = (size_t)(eq - p) < sizeof(key) - 1
+                              ? (size_t)(eq - p) : sizeof(key) - 1;
+            for (size_t i = 0; i < klen; i++)
+                key[i] = (char)g_ascii_toupper(p[i]);
+            key[klen] = '\0';
+            g_string_append_len(out, p, eq - p + 1);
+            if (strstr(key, "PWD") || strstr(key, "PASSWORD") ||
+                strstr(key, "SECRET") || strstr(key, "TOKEN"))
+                g_string_append(out, "***");
+            else
+                g_string_append_len(out, eq + 1, pair_end - eq - 1);
+        } else {
+            g_string_append_len(out, p, pair_end - p);
+        }
+        if (*pair_end) g_string_append_c(out, ';');
+        p = *pair_end ? pair_end + 1 : pair_end;
+    }
+    return g_string_free(out, FALSE);
+}
+
 /* ── Internal: perform the actual connection ─────────────────── */
 
 static SQLRETURN do_connect(argus_dbc_t *dbc)
@@ -71,7 +107,8 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
             dbc->pooled = true;
             dbc->connect_time_ms = 0.0;
             ARGUS_LOG_INFO("Acquired pooled connection to %s:%d", host, port);
-            argus_obs_hook_connect(NULL, backend_name, host, 1, dbc->connect_time_ms);
+            argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, host,
+                                   1, dbc->connect_time_ms);
             return SQL_SUCCESS;
         }
     }
@@ -103,7 +140,8 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
                            backend_name, host, port, attempt, max_attempts,
                            dbc->connect_time_ms);
             dbc->connected = true;
-            argus_obs_hook_connect(NULL, backend_name, host, 1, dbc->connect_time_ms);
+            argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, host,
+                                   1, dbc->connect_time_ms);
             return SQL_SUCCESS;
         }
 
@@ -119,6 +157,7 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
         argus_set_error(&dbc->diag, "08001",
                         "[Argus] Failed to connect to backend", 0);
     }
+    argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, host, 0, 0.0);
     dbc->backend = NULL;
     return SQL_ERROR;
 }
@@ -381,6 +420,10 @@ SQLRETURN SQL_API SQLDriverConnect(
 
     argus_conn_params_free(&params);
 
+    /* The observability taps get a redacted copy — never the raw string. */
+    free(dbc->obs_connstr);
+    dbc->obs_connstr = obs_redact_connstr(conn_str);
+
     /* For SQL_DRIVER_COMPLETE[_REQUIRED], verify HOST is present */
     if ((DriverCompletion == SQL_DRIVER_COMPLETE ||
          DriverCompletion == SQL_DRIVER_COMPLETE_REQUIRED) && !dbc->host) {
@@ -484,6 +527,8 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC ConnectionHandle)
 
     ARGUS_LOG_INFO("Disconnecting from %s backend",
                    dbc->backend ? dbc->backend->name : "unknown");
+
+    argus_obs_hook_disconnect(dbc);
 
     if (dbc->backend && dbc->backend_conn) {
         /* Return to pool if pooling is enabled */
