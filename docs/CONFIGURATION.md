@@ -76,7 +76,11 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | KRBSERVICENAME | SERVICEPRINCIPALNAME | hive/impala | Kerberos SPN service name |
 | KRBHOSTFQDN | KRBHOST | (HOST) | Kerberos SPN host, if it differs from HOST |
 | KRBREALM | REALM | (from krb5.conf) | Explicit Kerberos realm |
-| BACKEND | DRIVER_TYPE | hive | Backend type: hive, impala, or trino |
+| BACKEND | DRIVER_TYPE | hive | Backend type: hive, impala, trino, phoenix, pinot, druid, bigquery, mysql, flightsql, kudu |
+| APPLICATIONNAME | APPNAME | (none) | Client application name reported to the backend |
+| FETCHBUFFERSIZE | | (backend default) | Rows fetched per backend round-trip |
+| SOCKETTIMEOUT | | 0 (none) | Socket I/O timeout in seconds |
+| MAXSCROLLROWS | | (driver default) | Cap on rows a static (scrollable) cursor will materialize in memory |
 
 ### Default Ports by Backend
 

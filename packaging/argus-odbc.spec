@@ -2,8 +2,8 @@ Name:           argus-odbc
 Version:        %{version}
 Release:        1%{?dist}
 Summary:        Argus ODBC Driver for Data Warehouses
-License:        Proprietary
-URL:            https://github.com/varga/argus
+License:        Apache-2.0
+URL:            https://github.com/VargaFoundation/argus
 
 Source0:        argus-odbc-%{version}.tar.gz
 
@@ -13,8 +13,9 @@ Requires:       libcurl
 Requires:       json-glib
 
 %description
-Argus is a universal ODBC driver supporting Hive, Impala,
-Trino, Phoenix, and Kudu backends.
+Argus is a universal ODBC driver for analytics engines: Hive, Impala,
+Trino, Phoenix, Pinot, Druid, BigQuery, MySQL-wire (StarRocks/Doris/
+ClickHouse), Arrow Flight SQL (Dremio/InfluxDB 3) and Kudu.
 
 %prep
 %setup -q -n argus-odbc-%{version}
