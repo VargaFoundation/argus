@@ -25,8 +25,9 @@ if(ENABLE_ASAN)
     message(STATUS "Sanitizers: ENABLED (ASan + UBSan)")
 endif()
 
-# Append our cmake module path
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+# Append our cmake module path. PROJECT_SOURCE_DIR (not CMAKE_SOURCE_DIR) so
+# the driver also builds when embedded via add_subdirectory in a super-project.
+list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 # Find dependencies
 find_package(PkgConfig REQUIRED)

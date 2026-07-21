@@ -330,7 +330,7 @@ add_library(argus_odbc ${ARGUS_SOURCES})
 
 target_include_directories(argus_odbc
     PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${ARGUS_PRIVATE_INCLUDE_DIRS}
@@ -376,7 +376,7 @@ if(BUILD_TESTING)
     add_library(argus_odbc_static STATIC ${ARGUS_SOURCES})
     target_include_directories(argus_odbc_static
         PUBLIC
-            $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
         PRIVATE
             ${ARGUS_PRIVATE_INCLUDE_DIRS}
     )
@@ -398,7 +398,7 @@ endif()
 if(BUILD_ADBC)
     add_library(argus_adbc SHARED adbc/argus_adbc.c)
     target_include_directories(argus_adbc
-        PUBLIC  $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+        PUBLIC  $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
         PRIVATE ${ODBC_INCLUDE_DIRS})
     target_link_libraries(argus_adbc PRIVATE argus_odbc)
     set_target_properties(argus_adbc PROPERTIES
@@ -414,6 +414,6 @@ install(TARGETS argus_odbc
     ARCHIVE DESTINATION lib
 )
 
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/argus
+install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/argus
     DESTINATION include
 )

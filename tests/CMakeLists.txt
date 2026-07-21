@@ -7,7 +7,7 @@ pkg_check_modules(CMOCKA REQUIRED cmocka>=1.1)
 function(argus_add_unit_test name source)
     add_executable(${name} ${source})
     target_include_directories(${name} PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/include
         ${ODBC_INCLUDE_DIRS}
         ${CMOCKA_INCLUDE_DIRS}
         ${GLIB2_INCLUDE_DIRS}
@@ -60,7 +60,7 @@ endif()
 if(ARGUS_BUILD_BIGQUERY)
     argus_add_unit_test(test_bigquery_types unit/test_bigquery_types.c)
     target_include_directories(test_bigquery_types PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/backend/bigquery
+        ${PROJECT_SOURCE_DIR}/src/backend/bigquery
         ${LIBCURL_INCLUDE_DIRS}
         ${JSON_GLIB_INCLUDE_DIRS}
     )
@@ -77,8 +77,8 @@ if(ARGUS_BUILD_FLIGHTSQL)
     set_target_properties(test_flightsql_convert PROPERTIES
         CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_include_directories(test_flightsql_convert PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/src/backend/flightsql
+        ${PROJECT_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/src/backend/flightsql
         ${ARROW_FLIGHT_SQL_INCLUDE_DIRS}
     )
     target_link_libraries(test_flightsql_convert PRIVATE
@@ -98,7 +98,7 @@ if(BUILD_INTEGRATION_TESTS)
     function(argus_add_integration_test name source)
         add_executable(${name} ${source})
         target_include_directories(${name} PRIVATE
-            ${CMAKE_SOURCE_DIR}/include
+            ${PROJECT_SOURCE_DIR}/include
             ${ODBC_INCLUDE_DIRS}
             ${CMOCKA_INCLUDE_DIRS}
         )
@@ -177,7 +177,7 @@ if(BUILD_INTEGRATION_TESTS)
     if(BUILD_ADBC AND ARGUS_BUILD_FLIGHTSQL)
         add_executable(test_adbc integration/test_adbc.cpp)
         target_include_directories(test_adbc PRIVATE
-            ${CMAKE_SOURCE_DIR}/include ${ODBC_INCLUDE_DIRS}
+            ${PROJECT_SOURCE_DIR}/include ${ODBC_INCLUDE_DIRS}
             ${ARROW_FLIGHT_SQL_INCLUDE_DIRS})
         target_link_libraries(test_adbc PRIVATE argus_adbc ${ARROW_FLIGHT_SQL_LIBRARIES})
         target_link_directories(test_adbc PRIVATE ${ARROW_FLIGHT_SQL_LIBRARY_DIRS})
@@ -189,6 +189,6 @@ if(BUILD_INTEGRATION_TESTS)
     # Fetch-path micro-benchmark tool (manual; needs a live backend)
     add_executable(argus_bench bench/bench.c)
     target_include_directories(argus_bench PRIVATE
-        ${CMAKE_SOURCE_DIR}/include ${ODBC_INCLUDE_DIRS})
+        ${PROJECT_SOURCE_DIR}/include ${ODBC_INCLUDE_DIRS})
     target_link_libraries(argus_bench PRIVATE argus_odbc)
 endif()
