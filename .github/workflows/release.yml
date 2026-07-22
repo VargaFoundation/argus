@@ -84,6 +84,13 @@ jobs:
   build-macos:
     runs-on: macos-latest
 
+    # Signing + notarization run only when the Apple secrets are configured;
+    # like the Windows Azure signing, the steps are continue-on-error so a
+    # missing/expired credential degrades to an unsigned .pkg instead of
+    # blocking the release.
+    env:
+      NOTARIZE_ENABLED: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -128,8 +135,56 @@ jobs:
           name: release-macos
           path: argus-odbc-*-macos-*.tar.gz
 
+      # Import the Developer ID Application + Installer certs into a throwaway
+      # keychain so codesign/productsign can find them.
+      - name: Import Apple signing identity
+        if: env.NOTARIZE_ENABLED != ''
+        continue-on-error: true
+        env:
+          APPLE_DEVELOPER_ID_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/argus.keychain-db"
+          security create-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          echo "$APPLE_DEVELOPER_ID_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$APPLE_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      # Sign the dylib before packaging so the .pkg contains a signed binary.
+      - name: Codesign the driver
+        if: env.NOTARIZE_ENABLED != ''
+        continue-on-error: true
+        env:
+          APPLE_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
+        run: |
+          codesign --force --timestamp --options runtime \
+            --sign "$APPLE_SIGN_IDENTITY" build/src/libargus_odbc.dylib
+
       - name: Package .pkg
         run: bash packaging/build-macos-pkg.sh "${GITHUB_REF_NAME#v}"
+
+      # Sign the installer, submit to Apple notary, staple the ticket. The
+      # stapled .pkg installs without a Gatekeeper prompt on end-user Macs.
+      - name: Sign + notarize + staple the .pkg
+        if: env.NOTARIZE_ENABLED != ''
+        continue-on-error: true
+        env:
+          APPLE_INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          PKG=$(ls argus-odbc-*.pkg | head -1)
+          productsign --sign "$APPLE_INSTALLER_IDENTITY" "$PKG" "signed-$PKG"
+          mv "signed-$PKG" "$PKG"
+          xcrun notarytool submit "$PKG" --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$PKG"
 
       - name: Upload .pkg
         uses: actions/upload-artifact@v4

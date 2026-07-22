@@ -102,6 +102,19 @@ $env:TACO_ALIAS    = 'varga'
 pwsh connectors/tableau/build.ps1 -OutDir dist
 ```
 
+In CI, the `build-tableau-connector` job signs automatically when these
+repository secrets are set (otherwise it emits an unsigned `.taco`):
+
+| Secret | Meaning |
+|---|---|
+| `TABLEAU_SIGN_KEYSTORE` | base64 of the PKCS#12 keystore holding the public-CA code-signing cert |
+| `TABLEAU_SIGN_KEYSTORE_PASSWORD` | keystore password |
+| `TABLEAU_SIGN_ALIAS` | key alias to sign with |
+
+The step uses `jarsigner -tsa http://timestamp.digicert.com` and then
+`jarsigner -verify -strict`, so an untimestamped or broken signature fails
+the job rather than shipping a `.taco` Tableau would reject.
+
 ### Signing is the hard constraint
 
 A `.taco` is functionally a JAR. Tableau

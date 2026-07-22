@@ -299,6 +299,12 @@ jobs:
   build-tableau-connector:
     runs-on: ubuntu-latest
 
+    # A .taco is a jar; Tableau verifies its signature. Signing runs only when
+    # the code-signing keystore secret is present and is continue-on-error, so
+    # PRs and unsigned-key builds still produce a loadable (unsigned) .taco.
+    env:
+      TACO_SIGN_ENABLED: ${{ secrets.TABLEAU_SIGN_KEYSTORE }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -307,6 +313,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Set up JDK (jarsigner)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
       # Schema-check the connector XML against Tableau's published XSDs. This is
       # the cheap guard that catches an invented element or attribute; a .taco
@@ -322,6 +334,26 @@ jobs:
       - name: Package the Tableau connectors (.taco)
         shell: pwsh
         run: connectors/tableau/build.ps1 -OutDir connector-dist
+
+      # Sign each .taco with a public-CA code-signing cert + RFC-3161 timestamp
+      # so Tableau accepts it without lowering its signature-verification level.
+      - name: Sign the .taco connectors
+        if: env.TACO_SIGN_ENABLED != ''
+        continue-on-error: true
+        env:
+          TABLEAU_SIGN_KEYSTORE: ${{ secrets.TABLEAU_SIGN_KEYSTORE }}
+          TABLEAU_SIGN_KEYSTORE_PASSWORD: ${{ secrets.TABLEAU_SIGN_KEYSTORE_PASSWORD }}
+          TABLEAU_SIGN_ALIAS: ${{ secrets.TABLEAU_SIGN_ALIAS }}
+        run: |
+          echo "$TABLEAU_SIGN_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/ks.p12"
+          for taco in connector-dist/*.taco; do
+            jarsigner -tsa http://timestamp.digicert.com \
+              -keystore "$RUNNER_TEMP/ks.p12" -storetype PKCS12 \
+              -storepass "$TABLEAU_SIGN_KEYSTORE_PASSWORD" \
+              "$taco" "$TABLEAU_SIGN_ALIAS"
+            jarsigner -verify -strict "$taco"
+          done
+          rm -f "$RUNNER_TEMP/ks.p12"
 
       - name: Upload connectors (.taco)
         uses: actions/upload-artifact@v4
