@@ -140,6 +140,7 @@ if(BUILD_INTEGRATION_TESTS)
         argus_add_integration_test(test_trino_query integration/test_trino_query.c)
         argus_add_integration_test(test_trino_ssl integration/test_trino_ssl.c)
         argus_add_integration_test(test_failover integration/test_failover.c)
+        argus_add_integration_test(test_scroll_cap integration/test_scroll_cap.c)
     endif()
 
     if(ARGUS_BUILD_PHOENIX)
