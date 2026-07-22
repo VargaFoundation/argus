@@ -8,6 +8,7 @@
 
 extern SQLSMALLINT argus_copy_string(const char *src,
                                       SQLCHAR *dst, SQLSMALLINT dst_len);
+extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
 
 /* ── ODBC API: SQLSetEnvAttr ─────────────────────────────────── */
 
@@ -597,8 +598,9 @@ SQLRETURN SQL_API SQLGetCursorName(
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
-    SQLSMALLINT len = argus_copy_string("ARGUS_CURSOR",
-                                         CursorName, BufferLength);
+    SQLSMALLINT len = argus_copy_string(
+        stmt->cursor_name ? stmt->cursor_name : "ARGUS_CURSOR",
+        CursorName, BufferLength);
     if (NameLengthPtr) *NameLengthPtr = len;
     return SQL_SUCCESS;
 }
@@ -610,13 +612,24 @@ SQLRETURN SQL_API SQLSetCursorName(
     SQLCHAR   *CursorName,
     SQLSMALLINT NameLength)
 {
-    (void)CursorName;
-    (void)NameLength;
-
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
-    /* Accept but ignore - we use forward-only cursors */
+    /* ODBC: a cursor name may only be set while no cursor is open. */
+    if (stmt->executed) {
+        return argus_set_error(&stmt->diag, "24000",
+                               "[Argus] Cursor name cannot change while a "
+                               "cursor is open", 0);
+    }
+
+    char *name = argus_str_dup_short(CursorName, NameLength);
+    if (!name || !*name) {
+        free(name);
+        return argus_set_error(&stmt->diag, "34000",
+                               "[Argus] Invalid cursor name", 0);
+    }
+    free(stmt->cursor_name);
+    stmt->cursor_name = name;
     return SQL_SUCCESS;
 }
 
