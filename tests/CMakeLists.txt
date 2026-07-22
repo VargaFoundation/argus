@@ -59,6 +59,14 @@ if(ARGUS_BUILD_PHOENIX)
     argus_add_unit_test(test_phoenix_types unit/test_phoenix_types.c)
 endif()
 
+if(ARGUS_BUILD_PINOT)
+    argus_add_unit_test(test_pinot_types unit/test_pinot_types.c)
+endif()
+
+if(ARGUS_BUILD_DRUID)
+    argus_add_unit_test(test_druid_types unit/test_druid_types.c)
+endif()
+
 if(ARGUS_BUILD_BIGQUERY)
     argus_add_unit_test(test_bigquery_types unit/test_bigquery_types.c)
     target_include_directories(test_bigquery_types PRIVATE
