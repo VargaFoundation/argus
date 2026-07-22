@@ -94,6 +94,11 @@ static void apply_dsn_param(argus_dbc_t *dbc, const char *key, const char *val)
     } else if (strcasecmp(key, "LOGFILE") == 0) {
         free(dbc->log_file);
         dbc->log_file = strdup(val);
+    } else if (strcasecmp(key, "TELEMETRY") == 0 ||
+               strcasecmp(key, "ENABLETELEMETRY") == 0) {
+        dbc->telemetry_enabled = (strcmp(val, "1") == 0 ||
+                                  strcasecmp(val, "true") == 0 ||
+                                  strcasecmp(val, "yes") == 0);
     } else if (strcasecmp(key, "PROJECT") == 0 ||
                strcasecmp(key, "BQPROJECT") == 0 ||
                strcasecmp(key, "PROJECTID") == 0) {

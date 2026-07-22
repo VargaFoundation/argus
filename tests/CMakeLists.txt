@@ -46,6 +46,12 @@ argus_add_unit_test(test_bi_connect_sequence unit/test_bi_connect_sequence.c)
 argus_add_unit_test(test_p2_features unit/test_p2_features.c)
 argus_add_unit_test(test_dsn unit/test_dsn.c)
 argus_add_unit_test(test_wide_api unit/test_wide_api.c)
+if(ARGUS_BUILD_TELEMETRY)
+    argus_add_unit_test(test_telemetry unit/test_telemetry.c)
+    # The header only exposes the real emitters when this is defined; without
+    # it the no-op stubs would make the assertions vacuous.
+    target_compile_definitions(test_telemetry PRIVATE ARGUS_HAS_TELEMETRY)
+endif()
 if(ARGUS_BUILD_THRIFT_BACKENDS)
     argus_add_unit_test(test_type_convert unit/test_type_convert.c)
     argus_add_unit_test(test_impala_types unit/test_impala_types.c)

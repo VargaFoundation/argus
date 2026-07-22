@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(argus VERSION 0.5.9 LANGUAGES C)
+project(argus VERSION 0.6.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -17,6 +17,9 @@ option(BUILD_INTEGRATION_TESTS "Build integration tests" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(BUILD_ADBC "Build the Arrow ADBC driver (over the ODBC stack)" ON)
 option(ENABLE_ASAN "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+option(ARGUS_ENABLE_TELEMETRY "Compile in anonymous opt-in usage telemetry (off at runtime by default)" ON)
+set(ARGUS_TELEMETRY_ENDPOINT "https://telemetry.vargafoundation.org/v1/events"
+    CACHE STRING "Default telemetry collector endpoint (overridable at runtime via ARGUS_TELEMETRY_ENDPOINT)")
 
 if(ENABLE_ASAN)
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer
@@ -162,6 +165,18 @@ endif()
 
 if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO AND NOT ARGUS_BUILD_PHOENIX AND NOT ARGUS_BUILD_KUDU AND NOT ARGUS_BUILD_MYSQL AND NOT ARGUS_BUILD_FLIGHTSQL AND NOT ARGUS_BUILD_PINOT AND NOT ARGUS_BUILD_DRUID AND NOT ARGUS_BUILD_BIGQUERY)
     message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino/Phoenix) or libkudu_client (for Kudu) or libmariadb-dev (for MySQL-wire: StarRocks/Doris/ClickHouse) or libarrow-flight-sql-dev (for Arrow Flight SQL: Dremio/InfluxDB 3).")
+endif()
+
+# Anonymous opt-in telemetry (requires libcurl for the HTTPS transport)
+if(ARGUS_ENABLE_TELEMETRY AND LIBCURL_FOUND)
+    set(ARGUS_BUILD_TELEMETRY ON)
+    message(STATUS "Telemetry: ENABLED at build (opt-in; off by default at runtime)")
+elseif(ARGUS_ENABLE_TELEMETRY)
+    set(ARGUS_BUILD_TELEMETRY OFF)
+    message(STATUS "Telemetry: DISABLED (requires libcurl-dev)")
+else()
+    set(ARGUS_BUILD_TELEMETRY OFF)
+    message(STATUS "Telemetry: DISABLED (ARGUS_ENABLE_TELEMETRY=OFF)")
 endif()
 
 # Kudu and Flight SQL are C++ backends. Enable CXX here at the top-level scope:

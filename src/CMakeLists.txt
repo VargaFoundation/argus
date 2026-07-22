@@ -316,6 +316,45 @@ if(ARGUS_BUILD_FLIGHTSQL)
     list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_FLIGHTSQL)
 endif()
 
+# Anonymous opt-in telemetry (decided in the top-level CMakeLists; needs libcurl)
+if(ARGUS_BUILD_TELEMETRY)
+    # Capture the short git SHA (best-effort) for the telemetry build id.
+    execute_process(
+        COMMAND git -C "${CMAKE_SOURCE_DIR}" rev-parse --short HEAD
+        OUTPUT_VARIABLE ARGUS_GIT_SHA
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(NOT ARGUS_GIT_SHA)
+        set(ARGUS_GIT_SHA "unknown")
+    endif()
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/argus_build_id.h.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/argus_build_id.h"
+        @ONLY
+    )
+
+    list(APPEND ARGUS_SOURCES
+        odbc/telemetry.c
+        backend/http_client.c
+    )
+    list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend
+        ${LIBCURL_INCLUDE_DIRS}
+    )
+    list(APPEND ARGUS_LINK_LIBS ${LIBCURL_LIBRARIES})
+    list(APPEND ARGUS_LINK_DIRS ${LIBCURL_LIBRARY_DIRS})
+    # ARGUS_HAS_CURL may already be set by the Hive HTTP block; a duplicate
+    # identical -D is harmless. Telemetry always needs curl, so guarantee it.
+    list(APPEND ARGUS_COMPILE_DEFS
+        ARGUS_HAS_TELEMETRY
+        ARGUS_HAS_CURL
+        ARGUS_TELEMETRY_ENDPOINT="${ARGUS_TELEMETRY_ENDPOINT}"
+    )
+    list(REMOVE_DUPLICATES ARGUS_COMPILE_DEFS)
+endif()
+
 # Windows version resource (embeds version/company info in the DLL)
 if(WIN32)
     configure_file(

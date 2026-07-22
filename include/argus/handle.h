@@ -126,6 +126,9 @@ struct argus_dbc {
      * list; the pool key and the taps need the concrete choice. */
     char        *connected_host;
     int          connected_port;
+
+    /* Anonymous usage telemetry — opt-in, off by default (see telemetry.h) */
+    bool         telemetry_enabled;
 };
 
 /* Async execution states */

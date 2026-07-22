@@ -93,7 +93,10 @@ sécurisés et sur la BI cloud. C'est la priorité absolue de la roadmap.
 - **Backend Kudu discutable.** Kudu se requête normalement via Impala. Le parser SQL
   maison (`kudu_sql_parser.c`, 461 lignes) est une dette de maintenance fragile et
   introduit du C++ dans une base C. À reconsidérer.
-- **Pas de suite de benchmarks** ni de tracing distribué (OpenTelemetry).
+- **Pas de suite de benchmarks** ni de tracing distribué (OpenTelemetry). À noter :
+  une **télémétrie d'usage anonyme et opt-in** (off par défaut) a été ajoutée
+  (`src/odbc/telemetry.c`, voir `docs/TELEMETRY.md`) — elle couvre backends,
+  latences, OS et codes SQLSTATE, mais ne remplace pas un tracing OTel côté client.
 
 ---
 

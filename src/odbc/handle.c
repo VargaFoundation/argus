@@ -3,6 +3,7 @@
 #include "argus/compat.h"
 #include "argus/log.h"
 #include "argus/obs_hooks.h"
+#include "argus/telemetry.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -51,6 +52,7 @@ SQLRETURN argus_alloc_dbc(argus_env_t *env, argus_dbc_t **out)
     dbc->connect_timeout_sec = 0;
     dbc->query_timeout_sec  = 0;
     dbc->log_level          = -1;    /* -1 means not set (use global) */
+    dbc->telemetry_enabled  = false; /* opt-in; off unless TELEMETRY=1 */
 
     *out = dbc;
     return SQL_SUCCESS;
@@ -339,6 +341,8 @@ SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
             stmt->errors_total > 0 && stmt->diag.count > 0
                 ? (const char *)stmt->diag.records[0].sqlstate
                 : "00000");
+        argus_telemetry_statement(stmt->dbc, stmt->execute_time_ms,
+                                  stmt->rows_fetched_total, stmt->errors_total);
     }
 
     argus_stmt_reset(stmt);

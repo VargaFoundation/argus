@@ -4,6 +4,21 @@ All notable changes to the Argus ODBC Driver project.
 
 ## [Unreleased]
 
+### Telemetry (opt-in, off by default)
+- **Anonymous usage telemetry**, disabled by default and gated behind explicit
+  opt-in (`TELEMETRY=1` per connection, `ARGUS_TELEMETRY=1` machine-wide;
+  `ARGUS_TELEMETRY=0` is a hard kill switch; `-DARGUS_ENABLE_TELEMETRY=OFF`
+  removes it at build time). Reports only a strict whitelist — backend name,
+  connect/statement latencies, bucketed row counts, OS/arch/version, and
+  **SQLSTATE codes only** — and never hostnames, credentials, database/table
+  names, query text, or backend error messages. Delivery is asynchronous,
+  bounded, and best-effort (a background sender that can never block or fail an
+  ODBC call). New: `src/odbc/telemetry.c`, a shared `src/backend/http_client.c`,
+  a first-run notice, a resettable random install id, `docs/TELEMETRY.md`,
+  `PRIVACY.md`, and a reference collector in `tests/tools/`. Also adds the
+  previously-missing `curl_global_init()` at library load (benefits all curl
+  backends).
+
 ### BI-tool parity & connectors
 - **Tableau connectors** (`.taco`) for Trino, Hive, Impala, MySQL-wire and
   BigQuery, plus a turnkey **TDVT** harness (`connectors/tableau/tdvt/`). The

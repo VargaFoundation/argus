@@ -2,6 +2,7 @@
 #include "argus/odbc_api.h"
 #include "argus/log.h"
 #include "argus/dialect.h"
+#include "argus/telemetry.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -591,6 +592,14 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
                                 "[Argus] Backend execution failed", 0);
             }
         }
+        /* Report only the SQLSTATE + native code, never the message text
+         * (which carries table/column names and query fragments). */
+        argus_telemetry_error(dbc,
+                              stmt->diag.count > 0
+                                  ? (const char *)stmt->diag.records[0].sqlstate
+                                  : "HY000",
+                              stmt->diag.count > 0
+                                  ? (long)stmt->diag.records[0].native_error : 0);
         return SQL_ERROR;
     }
 

@@ -275,6 +275,16 @@ export ARGUS_LOG_FILE=/tmp/argus-debug.log
 
 Log levels: 0=OFF, 1=FATAL, 2=ERROR, 3=WARN, 4=INFO, 5=DEBUG, 6=TRACE
 
+## Telemetry & privacy
+
+Argus supports **opt-in, anonymous** usage telemetry — it is **off by default**
+and never phones home unless you enable it (`TELEMETRY=1` per connection or
+`ARGUS_TELEMETRY=1` machine-wide; `ARGUS_TELEMETRY=0` disables it hard, and
+`-DARGUS_ENABLE_TELEMETRY=OFF` compiles it out). Only non-identifying signals are
+sent (backend, latencies, OS, SQLSTATE codes) — never hostnames, credentials,
+database/table names, or query text. See [docs/TELEMETRY.md](docs/TELEMETRY.md)
+and [PRIVACY.md](PRIVACY.md).
+
 ## Troubleshooting
 
 ### Connection Fails

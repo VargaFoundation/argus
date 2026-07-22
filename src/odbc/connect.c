@@ -4,6 +4,7 @@
 #include "argus/compat.h"
 #include "argus/log.h"
 #include "argus/obs_hooks.h"
+#include "argus/telemetry.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -177,6 +178,7 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
             ARGUS_LOG_INFO("Acquired pooled connection to %s:%d", phost, pport);
             argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, phost,
                                    user, 1, dbc->connect_time_ms);
+            argus_telemetry_connect(dbc, true, 1);
             g_strfreev(hosts);
             return SQL_SUCCESS;
         }
@@ -223,6 +225,7 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
             if (rc == 0) {
                 g_strlcpy(chosen, hbuf, sizeof(chosen));
                 chosen_port = hport;
+                argus_telemetry_connect(dbc, true, attempt);
             } else {
                 ARGUS_LOG_WARN("Connection failed: backend=%s, host=%s:%d, rc=%d (attempt %d/%d)",
                                backend_name, hbuf, hport, rc, attempt, max_attempts);
@@ -255,6 +258,7 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
     }
     argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, host_csv,
                            user, 0, 0.0);
+    argus_telemetry_connect(dbc, false, max_attempts);
     dbc->backend = NULL;
     return SQL_ERROR;
 }
@@ -386,6 +390,15 @@ SQLRETURN SQL_API SQLDriverConnect(
 
     v = argus_conn_params_get(&params, "LOGFILE");
     if (v) { free(dbc->log_file); dbc->log_file = strdup(v); }
+
+    /* Anonymous usage telemetry — opt-in, off by default (see telemetry.h) */
+    v = argus_conn_params_get(&params, "TELEMETRY");
+    if (!v) v = argus_conn_params_get(&params, "ENABLETELEMETRY");
+    if (v) {
+        dbc->telemetry_enabled = (strcmp(v, "1") == 0 ||
+                                  strcasecmp(v, "true") == 0 ||
+                                  strcasecmp(v, "yes") == 0);
+    }
 
     /* Additional connection parameters */
     v = argus_conn_params_get(&params, "APPLICATIONNAME");
@@ -626,6 +639,7 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC ConnectionHandle)
                    dbc->backend ? dbc->backend->name : "unknown");
 
     argus_obs_hook_disconnect(dbc);
+    argus_telemetry_session_end(dbc);
 
     if (dbc->backend && dbc->backend_conn) {
         /* Return to pool if pooling is enabled */

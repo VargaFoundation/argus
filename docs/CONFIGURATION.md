@@ -446,3 +446,27 @@ isql -v ArgusHive
 # +---------------------------------------+
 # SQL> SELECT 1;
 ```
+
+## Telemetry (opt-in, off by default)
+
+Argus can send anonymous, aggregate usage telemetry to the Varga Foundation. It
+is **disabled by default** and never phones home unless you opt in. Full detail:
+[TELEMETRY.md](TELEMETRY.md) and [PRIVACY.md](../PRIVACY.md).
+
+Controls (precedence high → low):
+
+| Control | Effect |
+|---------|--------|
+| `ARGUS_TELEMETRY=0` (env) | Hard off — overrides every opt-in |
+| `ARGUS_TELEMETRY=1` (env) | Machine-wide opt-in |
+| `TELEMETRY=1` (DSN / connection string; alias `ENABLETELEMETRY`) | Per-connection opt-in |
+| _unset_ | Off |
+
+| Env var | Purpose |
+|---------|---------|
+| `ARGUS_TELEMETRY` | `1`/`0` machine-wide opt-in / kill switch |
+| `ARGUS_TELEMETRY_ENDPOINT` | Override the collector URL (send to your own) |
+
+Only non-identifying fields are ever sent (backend name, latencies, OS, SQLSTATE
+codes; **never** hostnames, credentials, database/table names, or query text).
+Build without the feature entirely: `cmake -DARGUS_ENABLE_TELEMETRY=OFF`.
