@@ -80,6 +80,18 @@ SQLRETURN argus_alloc_stmt(argus_dbc_t *dbc, argus_stmt_t **out)
     argus_diag_clear(&stmt->diag);
     argus_row_cache_init(&stmt->row_cache);
 
+    /* Guardrail taps: cap rows / duration when the application has not set
+     * stricter limits itself (the open build is a no-op). */
+    {
+        unsigned long g_rows = 0, g_timeout_ms = 0;
+        if (argus_obs_hook_guards(dbc, &g_rows, &g_timeout_ms)) {
+            if (g_rows > 0 && stmt->max_rows == 0)
+                stmt->max_rows = (SQLULEN)g_rows;
+            if (g_timeout_ms > 0 && stmt->query_timeout == 0)
+                stmt->query_timeout = (SQLULEN)((g_timeout_ms + 999) / 1000);
+        }
+    }
+
     /* The four implicit descriptors are distinct handles that view this
      * statement's data. active_ard starts as the implicit ARD; associating an
      * explicit one later re-points it (and stmt->bindings) at that. */
@@ -190,6 +202,7 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     free(dbc->backend_name);
     free(dbc->current_catalog);
     free(dbc->obs_connstr);
+    free(dbc->connected_host);
 
     /* Free SSL/TLS fields */
     free(dbc->ssl_cert_file);
@@ -330,6 +343,7 @@ SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
 
     argus_stmt_reset(stmt);
     g_mutex_clear(&stmt->mutex);
+    free(stmt->cursor_name);
     free(stmt->columns);
     /* Free the statement's own array, not stmt->bindings, which may currently
      * point at an explicitly-associated descriptor the application still owns

@@ -60,6 +60,41 @@ static char *obs_redact_connstr(const char *s)
     return g_string_free(out, FALSE);
 }
 
+/* ── Internal: multi-host + secret helpers for do_connect ────── */
+
+/* Hosts a HOST=h1,h2,h3 failover list may carry (bare IPv6 addresses are not
+ * supported in the list form — use a single HOST for IPv6). */
+#define ARGUS_MAX_HOSTS 16
+
+/* Split "host[:port]" into host_out; *port_inout only changes when a numeric
+ * :port suffix is present. */
+static void split_host_port(const char *entry, char *host_out, size_t out_size,
+                            int *port_inout)
+{
+    g_strlcpy(host_out, entry, out_size);
+    char *colon = strrchr(host_out, ':');
+    if (colon && colon[1] &&
+        strspn(colon + 1, "0123456789") == strlen(colon + 1)) {
+        *colon = '\0';
+        *port_inout = atoi(colon + 1);
+    }
+}
+
+/* Resolve a ${scheme:ref} secret reference in place via the tap. The resolved
+ * value replaces the field in process memory only — it is never written back
+ * to a DSN or config file. No-op when there is no reference or no resolver. */
+static void obs_resolve_secret_field(char **field)
+{
+    if (!field || !*field || !strstr(*field, "${")) return;
+    char *resolved = argus_obs_hook_resolve_secret(*field);
+    if (resolved && strcmp(resolved, *field) != 0) {
+        argus_secure_free(*field);
+        *field = resolved;
+    } else {
+        free(resolved);
+    }
+}
+
 /* ── Internal: perform the actual connection ─────────────────── */
 
 static SQLRETURN do_connect(argus_dbc_t *dbc)
@@ -88,37 +123,75 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
 
     dbc->backend = backend;
 
-    const char *host = dbc->host ? dbc->host : "localhost";
+    /* Resolve ${scheme:ref} secret references at connect time (tap; the open
+     * build is a no-op). */
+    obs_resolve_secret_field(&dbc->password);
+    obs_resolve_secret_field(&dbc->oauth_client_secret);
+
+    const char *host_csv = dbc->host ? dbc->host : "localhost";
     int port = dbc->port > 0 ? dbc->port : default_port;
     const char *user = dbc->username ? dbc->username : "";
     const char *pass = dbc->password ? dbc->password : "";
     const char *db   = dbc->database ? dbc->database : "default";
     const char *auth = dbc->auth_mechanism ? dbc->auth_mechanism : "NOSASL";
 
-    /* Try pool first if connection pooling is enabled */
+    /* Per-BI-tool fetch preset when neither the DSN nor the app set one (tap). */
+    if (dbc->fetch_buffer_size == 0 && dbc->app_name) {
+        long preset = argus_obs_hook_fetch_preset(dbc->app_name);
+        if (preset > 0) {
+            dbc->fetch_buffer_size = (int)preset;
+            ARGUS_LOG_DEBUG("Fetch preset for '%s': %ld rows",
+                            dbc->app_name, preset);
+        }
+    }
+
+    /* HOST may be a comma-separated failover list: "h1[:p1],h2[:p2],...".
+     * One host is the common case and behaves exactly as before. */
+    char **hosts = g_strsplit(host_csv, ",", -1);
+    int nhosts = 0;
+    while (hosts[nhosts]) { g_strstrip(hosts[nhosts]); nhosts++; }
+    if (nhosts > ARGUS_MAX_HOSTS) nhosts = ARGUS_MAX_HOSTS;
+    if (nhosts == 0 || !*hosts[0]) {
+        g_strfreev(hosts);
+        hosts = g_strsplit("localhost", ",", -1);
+        nhosts = 1;
+    }
+
+    /* Try pool first if connection pooling is enabled (first host's key) */
     if (dbc->env && dbc->env->connection_pooling != SQL_CP_OFF) {
+        char phost[256];
+        int pport = port;
+        split_host_port(hosts[0], phost, sizeof(phost), &pport);
         const argus_backend_t *pooled_backend = NULL;
         argus_backend_conn_t pooled_conn = argus_pool_acquire(
-            host, port, backend_name, user, &pooled_backend);
+            phost, pport, backend_name, user, &pooled_backend);
         if (pooled_conn) {
             dbc->backend_conn = pooled_conn;
             dbc->backend = pooled_backend;
             dbc->connected = true;
             dbc->pooled = true;
             dbc->connect_time_ms = 0.0;
-            ARGUS_LOG_INFO("Acquired pooled connection to %s:%d", host, port);
-            argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, host,
-                                   1, dbc->connect_time_ms);
+            free(dbc->connected_host);
+            dbc->connected_host = strdup(phost);
+            dbc->connected_port = pport;
+            ARGUS_LOG_INFO("Acquired pooled connection to %s:%d", phost, pport);
+            argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, phost,
+                                   user, 1, dbc->connect_time_ms);
+            g_strfreev(hosts);
             return SQL_SUCCESS;
         }
     }
 
-    /* Retry logic: try up to (1 + retry_count) times */
+    /* Retry logic: up to (1 + retry_count) rounds; within a round, fail over
+     * across every host (a tap may reorder; the driver guarantees each host
+     * is tried at most once per round). */
     int max_attempts = 1 + (dbc->retry_count > 0 ? dbc->retry_count : 0);
     int rc = -1;
     gint64 connect_start = g_get_monotonic_time();
+    char chosen[256] = "";
+    int chosen_port = port;
 
-    for (int attempt = 1; attempt <= max_attempts; attempt++) {
+    for (int attempt = 1; attempt <= max_attempts && rc != 0; attempt++) {
         if (attempt > 1) {
             ARGUS_LOG_INFO("Retry attempt %d/%d after %d second(s)",
                            attempt, max_attempts, dbc->retry_delay_sec);
@@ -126,38 +199,62 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
             sleep_seconds(dbc->retry_delay_sec);
         }
 
-        ARGUS_LOG_INFO("Connecting to %s backend at %s:%d (user=%s, db=%s, auth=%s) [attempt %d/%d]",
-                       backend_name, host, port, user, db, auth, attempt, max_attempts);
+        gboolean tried[ARGUS_MAX_HOSTS] = { FALSE };
+        for (int h = 0; h < nhosts && rc != 0; h++) {
+            int idx = argus_obs_hook_pick_host(dbc, host_csv, nhosts);
+            if (idx < 0 || idx >= nhosts || tried[idx]) {
+                idx = -1;
+                for (int k = 0; k < nhosts; k++)
+                    if (!tried[k]) { idx = k; break; }
+                if (idx < 0) break;
+            }
+            tried[idx] = TRUE;
 
-        rc = backend->connect(dbc, host, port, user, pass, db, auth,
-                              &dbc->backend_conn);
-        if (rc == 0) {
-            /* Success */
-            gint64 connect_end = g_get_monotonic_time();
-            dbc->connect_time_ms = (double)(connect_end - connect_start) / 1000.0;
-            ARGUS_LOG_INFO("Connected successfully to %s backend at %s:%d "
-                           "(attempt %d/%d, %.1f ms)",
-                           backend_name, host, port, attempt, max_attempts,
-                           dbc->connect_time_ms);
-            dbc->connected = true;
-            argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, host,
-                                   1, dbc->connect_time_ms);
-            return SQL_SUCCESS;
+            char hbuf[256];
+            int hport = port;
+            split_host_port(hosts[idx], hbuf, sizeof(hbuf), &hport);
+
+            ARGUS_LOG_INFO("Connecting to %s backend at %s:%d (user=%s, db=%s, auth=%s) [attempt %d/%d]",
+                           backend_name, hbuf, hport, user, db, auth, attempt, max_attempts);
+
+            rc = backend->connect(dbc, hbuf, hport, user, pass, db, auth,
+                                  &dbc->backend_conn);
+            argus_obs_hook_host_result(dbc, host_csv, idx, rc == 0);
+            if (rc == 0) {
+                g_strlcpy(chosen, hbuf, sizeof(chosen));
+                chosen_port = hport;
+            } else {
+                ARGUS_LOG_WARN("Connection failed: backend=%s, host=%s:%d, rc=%d (attempt %d/%d)",
+                               backend_name, hbuf, hport, rc, attempt, max_attempts);
+            }
         }
+    }
+    g_strfreev(hosts);
 
-        /* Connection failed */
-        ARGUS_LOG_WARN("Connection failed: backend=%s, host=%s:%d, rc=%d (attempt %d/%d)",
-                       backend_name, host, port, rc, attempt, max_attempts);
+    if (rc == 0) {
+        /* Success */
+        gint64 connect_end = g_get_monotonic_time();
+        dbc->connect_time_ms = (double)(connect_end - connect_start) / 1000.0;
+        ARGUS_LOG_INFO("Connected successfully to %s backend at %s:%d (%.1f ms)",
+                       backend_name, chosen, chosen_port, dbc->connect_time_ms);
+        dbc->connected = true;
+        free(dbc->connected_host);
+        dbc->connected_host = strdup(chosen);
+        dbc->connected_port = chosen_port;
+        argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, chosen,
+                               user, 1, dbc->connect_time_ms);
+        return SQL_SUCCESS;
     }
 
     /* All retry attempts exhausted */
-    ARGUS_LOG_ERROR("Connection failed after %d attempt(s): backend=%s, host=%s:%d, rc=%d",
-                    max_attempts, backend_name, host, port, rc);
+    ARGUS_LOG_ERROR("Connection failed after %d attempt(s): backend=%s, host=%s, rc=%d",
+                    max_attempts, backend_name, host_csv, rc);
     if (dbc->diag.count == 0) {
         argus_set_error(&dbc->diag, "08001",
                         "[Argus] Failed to connect to backend", 0);
     }
-    argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, host, 0, 0.0);
+    argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, host_csv,
+                           user, 0, 0.0);
     dbc->backend = NULL;
     return SQL_ERROR;
 }
@@ -533,10 +630,15 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC ConnectionHandle)
     if (dbc->backend && dbc->backend_conn) {
         /* Return to pool if pooling is enabled */
         if (dbc->env && dbc->env->connection_pooling != SQL_CP_OFF) {
-            const char *host = dbc->host ? dbc->host : "localhost";
+            /* Release under the key the connection was acquired with: HOST
+             * may be a failover list, so use the concrete connected host. */
+            const char *host = dbc->connected_host ? dbc->connected_host
+                               : (dbc->host ? dbc->host : "localhost");
+            int port = dbc->connected_port > 0 ? dbc->connected_port
+                                               : dbc->port;
             const char *user = dbc->username ? dbc->username : "";
             const char *bname = dbc->backend_name ? dbc->backend_name : "";
-            argus_pool_release(host, dbc->port, bname, user,
+            argus_pool_release(host, port, bname, user,
                                dbc->backend, dbc->backend_conn);
         } else {
             dbc->backend->disconnect(dbc->backend_conn);

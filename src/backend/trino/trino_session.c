@@ -2,6 +2,7 @@
 #include "argus/handle.h"
 #include "argus/error.h"
 #include "argus/log.h"
+#include "argus/obs_hooks.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -225,9 +226,12 @@ int trino_http_delete(trino_conn_t *conn, const char *url)
 
 /* ── OAuth2 client-credentials: fetch an access token from the IdP ─── */
 
-static int trino_fetch_oauth_token(trino_conn_t *conn, char **out_token)
+static int trino_fetch_oauth_token_uncached(trino_conn_t *conn,
+                                            char **out_token,
+                                            long *expires_in_out)
 {
     *out_token = NULL;
+    *expires_in_out = 0;
     if (!conn->oauth_token_url || !conn->oauth_client_id ||
         !conn->oauth_client_secret)
         return -1;
@@ -287,6 +291,9 @@ static int trino_fetch_oauth_token(trino_conn_t *conn, char **out_token)
                     const char *tok = json_object_get_string_member(obj, "access_token");
                     if (tok && *tok) { *out_token = strdup(tok); ret = 0; }
                 }
+                if (json_object_has_member(obj, "expires_in"))
+                    *expires_in_out =
+                        (long)json_object_get_int_member(obj, "expires_in");
             }
         }
         g_object_unref(parser);
@@ -298,6 +305,32 @@ static int trino_fetch_oauth_token(trino_conn_t *conn, char **out_token)
     free(resp.data);
     curl_easy_cleanup(c);
     return ret;
+}
+
+/* Cache-aware wrapper (taps): reuse a still-fresh access token across
+ * connections — the OAuth round-trip otherwise dominates connect latency for
+ * BI tools that open many close-together connections. On a fresh fetch the
+ * token is published with its absolute expiry. The open build is a no-op. */
+static int trino_fetch_oauth_token(trino_conn_t *conn, char **out_token)
+{
+    *out_token = NULL;
+    const char *scope = conn->oauth_scope ? conn->oauth_scope : "";
+    char *cached = argus_obs_hook_token_get(conn->oauth_token_url,
+                                            conn->oauth_client_id, scope,
+                                            "m2m");
+    if (cached) {
+        ARGUS_LOG_DEBUG("Trino: OAuth2 access token served from cache");
+        *out_token = cached;
+        return 0;
+    }
+    long expires_in = 0;
+    int rc = trino_fetch_oauth_token_uncached(conn, out_token, &expires_in);
+    if (rc == 0 && expires_in > 0)
+        argus_obs_hook_token_put(conn->oauth_token_url, conn->oauth_client_id,
+                                 scope, "m2m", *out_token,
+                                 (long long)(g_get_real_time() / 1000) +
+                                     (long long)expires_in * 1000);
+    return rc;
 }
 
 /* POST an x-www-form-urlencoded body to an IdP endpoint, return parsed JSON. */
@@ -728,9 +761,18 @@ static int trino_refresh_oauth_token(trino_conn_t *conn)
 {
     if (!conn->oauth_m2m) return -1;
 
+    /* The old token just got a 401: bypass the cache and publish the fresh
+     * one, so every waiting connection converges on it. */
     char *tok = NULL;
-    if (trino_fetch_oauth_token(conn, &tok) != 0 || !tok)
+    long expires_in = 0;
+    if (trino_fetch_oauth_token_uncached(conn, &tok, &expires_in) != 0 || !tok)
         return -1;
+    if (expires_in > 0)
+        argus_obs_hook_token_put(conn->oauth_token_url, conn->oauth_client_id,
+                                 conn->oauth_scope ? conn->oauth_scope : "",
+                                 "m2m", tok,
+                                 (long long)(g_get_real_time() / 1000) +
+                                     (long long)expires_in * 1000);
 
     free(conn->password);
     conn->password = tok;

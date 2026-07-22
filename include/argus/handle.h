@@ -121,6 +121,11 @@ struct argus_dbc {
     /* Observability taps (argus/obs_hooks.h): redacted copy of the connection
      * string (secret-bearing values masked), captured at SQLDriverConnect. */
     char        *obs_connstr;
+
+    /* The host actually connected to. HOST may be a comma-separated failover
+     * list; the pool key and the taps need the concrete choice. */
+    char        *connected_host;
+    int          connected_port;
 };
 
 /* Async execution states */
@@ -251,6 +256,9 @@ struct argus_stmt {
     argus_dae_state_t       dae_state;
     int                     dae_current_param;  /* 0-based index */
     GByteArray             *dae_buffer;         /* accumulated PutData bytes */
+
+    /* Application-set cursor name (SQLSetCursorName); NULL = default */
+    char                   *cursor_name;
 
     /* Cursor type for scrollable cursors */
     SQLULEN                 cursor_type;        /* SQL_CURSOR_FORWARD_ONLY or SQL_CURSOR_STATIC */
