@@ -20,6 +20,18 @@ connectors/tableau/.xsd-cache/
 # Generated thrift code
 thrift/gen-*/
 
+# Generated license dev keys / tokens / fixtures (tests/tools/gen_test_license.py)
+# The private signing key must never be committed — production signs offline/HSM.
+tests/tools/devkeys/
+tests/tools/license_fixtures/
+argus_license_dev.key
+argus_license_dev.pub
+*.tok
+
+# Python bytecode (tests/tools helpers)
+__pycache__/
+*.pyc
+
 # Generated TLS test material (tests/integration/certs/generate.sh)
 tests/integration/certs/*.pem
 tests/integration/certs/*.csr
