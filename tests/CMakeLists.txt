@@ -46,6 +46,7 @@ argus_add_unit_test(test_bi_connect_sequence unit/test_bi_connect_sequence.c)
 argus_add_unit_test(test_p2_features unit/test_p2_features.c)
 argus_add_unit_test(test_dsn unit/test_dsn.c)
 argus_add_unit_test(test_wide_api unit/test_wide_api.c)
+argus_add_unit_test(test_license_seam unit/test_license_seam.c)
 if(ARGUS_BUILD_TELEMETRY)
     argus_add_unit_test(test_telemetry unit/test_telemetry.c)
     # The header only exposes the real emitters when this is defined; without

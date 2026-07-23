@@ -205,6 +205,7 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     free(dbc->current_catalog);
     free(dbc->obs_connstr);
     free(dbc->connected_host);
+    argus_secure_free(dbc->license);
 
     /* Free SSL/TLS fields */
     free(dbc->ssl_cert_file);

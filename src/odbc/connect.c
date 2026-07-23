@@ -48,7 +48,8 @@ static char *obs_redact_connstr(const char *s)
             key[klen] = '\0';
             g_string_append_len(out, p, eq - p + 1);
             if (strstr(key, "PWD") || strstr(key, "PASSWORD") ||
-                strstr(key, "SECRET") || strstr(key, "TOKEN"))
+                strstr(key, "SECRET") || strstr(key, "TOKEN") ||
+                strstr(key, "LICENSE"))
                 g_string_append(out, "***");
             else
                 g_string_append_len(out, eq + 1, pair_end - eq - 1);
@@ -123,6 +124,29 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
     }
 
     dbc->backend = backend;
+
+    /* ── Enterprise license gate (tap; the open build's weak stub returns 1) ──
+     * Placed right after backend resolution so per-backend entitlements apply,
+     * and before the pool fast-path below so a pooled handle can never bypass
+     * it. The enterprise addon supplies the strong, enforcing definition; the
+     * open, Apache-2.0 driver leaves the weak no-op and connects unchanged. */
+    {
+        char *lic_reason = NULL;
+        if (!argus_obs_hook_check_license(dbc, backend_name,
+                                          dbc->license, &lic_reason)) {
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                     "[Argus] Enterprise license required: %s",
+                     lic_reason ? lic_reason
+                                : "no valid license found for this connection");
+            ARGUS_LOG_ERROR("License check denied the connection: %s",
+                            lic_reason ? lic_reason : "(no reason given)");
+            free(lic_reason);
+            dbc->backend = NULL;
+            return argus_set_error(&dbc->diag, "08004", msg, 0);
+        }
+        free(lic_reason);
+    }
 
     /* Resolve ${scheme:ref} secret references at connect time (tap; the open
      * build is a no-op). */
@@ -399,6 +423,13 @@ SQLRETURN SQL_API SQLDriverConnect(
                                   strcasecmp(v, "true") == 0 ||
                                   strcasecmp(v, "yes") == 0);
     }
+
+    /* Enterprise license token (per-DSN / per-connection override). Consumed by
+     * the enterprise addon's argus_obs_hook_check_license(); the open build's
+     * weak stub ignores it. Machine-wide/env tokens are read by the addon. */
+    v = argus_conn_params_get(&params, "LICENSE");
+    if (!v) v = argus_conn_params_get(&params, "LICENSEKEY");
+    if (v) { argus_secure_free(dbc->license); dbc->license = strdup(v); }
 
     /* Additional connection parameters */
     v = argus_conn_params_get(&params, "APPLICATIONNAME");

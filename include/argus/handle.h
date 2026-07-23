@@ -129,6 +129,12 @@ struct argus_dbc {
 
     /* Anonymous usage telemetry — opt-in, off by default (see telemetry.h) */
     bool         telemetry_enabled;
+
+    /* Enterprise license token from the DSN/connstr License= key, or NULL. The
+     * enterprise addon's argus_obs_hook_check_license() consumes it; the open
+     * build's weak stub ignores it. Machine-wide/env tokens are read by the
+     * addon, not here. */
+    char        *license;
 };
 
 /* Async execution states */

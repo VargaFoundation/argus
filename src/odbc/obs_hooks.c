@@ -88,3 +88,12 @@ void argus_obs_hook_host_result(const void *dbc, const char *hosts_csv,
 {
     (void)dbc; (void)hosts_csv; (void)idx; (void)ok;
 }
+
+__attribute__((weak))
+int argus_obs_hook_check_license(const void *dbc, const char *backend,
+                                 const char *dsn_license, char **reason)
+{
+    (void)dbc; (void)backend; (void)dsn_license;
+    if (reason) *reason = NULL;
+    return 1;   /* Apache-2.0 community build imposes no license gate */
+}

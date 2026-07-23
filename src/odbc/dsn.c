@@ -99,6 +99,10 @@ static void apply_dsn_param(argus_dbc_t *dbc, const char *key, const char *val)
         dbc->telemetry_enabled = (strcmp(val, "1") == 0 ||
                                   strcasecmp(val, "true") == 0 ||
                                   strcasecmp(val, "yes") == 0);
+    } else if (strcasecmp(key, "LICENSE") == 0 ||
+               strcasecmp(key, "LICENSEKEY") == 0) {
+        argus_secure_free(dbc->license);
+        dbc->license = strdup(val);
     } else if (strcasecmp(key, "PROJECT") == 0 ||
                strcasecmp(key, "BQPROJECT") == 0 ||
                strcasecmp(key, "PROJECTID") == 0) {

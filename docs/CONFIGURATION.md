@@ -81,6 +81,7 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | FETCHBUFFERSIZE | | (backend default) | Rows fetched per backend round-trip |
 | SOCKETTIMEOUT | | 0 (none) | Socket I/O timeout in seconds |
 | MAXSCROLLROWS | | (driver default) | Cap on rows a static (scrollable) cursor will materialize in memory |
+| LICENSE | LICENSEKEY | (none) | Enterprise license token. Enforced only by the enterprise edition; the open-source driver ignores it. Usually delivered machine-wide by MDM rather than per-DSN — see [LICENSING.md](LICENSING.md). |
 
 ### Default Ports by Backend
 
