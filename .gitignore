@@ -2,6 +2,9 @@
 build/
 cmake-build-*/
 
+# Proprietary enterprise add-on tree (out-of-tree; never committed to the open repo)
+argus_ee/
+
 # BI connector build output (connectors/*/build.ps1)
 connector-dist/
 *.mez

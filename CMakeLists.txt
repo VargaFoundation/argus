@@ -18,6 +18,7 @@ option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(BUILD_ADBC "Build the Arrow ADBC driver (over the ODBC stack)" ON)
 option(ENABLE_ASAN "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
 option(ARGUS_ENABLE_TELEMETRY "Compile in anonymous opt-in usage telemetry (off at runtime by default)" ON)
+option(ARGUS_ENTERPRISE "Build and link the proprietary argus_ee enterprise add-on (expects the add-on tree at argus_ee/; OFF for the open build)" OFF)
 set(ARGUS_TELEMETRY_ENDPOINT "https://telemetry.vargafoundation.org/v1/events"
     CACHE STRING "Default telemetry collector endpoint (overridable at runtime via ARGUS_TELEMETRY_ENDPOINT)")
 
@@ -233,6 +234,21 @@ endif()
 
 # Main library
 add_subdirectory(src)
+
+# Proprietary enterprise add-on (out-of-tree; NOT part of the Apache-2.0 driver).
+# When present and enabled it provides the STRONG obs_hooks definitions — e.g. the
+# license gate argus_obs_hook_check_license() — that override the open build's weak
+# no-ops at link time. See include/argus/obs_hooks.h. The open build never needs it.
+if(ARGUS_ENTERPRISE)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/argus_ee/CMakeLists.txt")
+        add_subdirectory(argus_ee)
+        message(STATUS "Enterprise add-on: ENABLED (argus_ee linked)")
+    else()
+        message(FATAL_ERROR
+            "ARGUS_ENTERPRISE=ON but the argus_ee/ add-on tree is not present "
+            "at ${CMAKE_CURRENT_SOURCE_DIR}/argus_ee/")
+    endif()
+endif()
 
 # Tests
 if(BUILD_TESTING)
