@@ -67,17 +67,16 @@ long argus_obs_hook_fetch_preset(const char *app_name);
 int argus_obs_hook_guards(const void *dbc, unsigned long *max_rows,
                           unsigned long *timeout_ms);
 
-/* ── Enterprise license gate ───────────────────────────────────────
- * Fires once per connection in do_connect(), AFTER the backend is resolved
- * and BEFORE any pool fast-path, so every connection path is gated exactly
- * once. `backend` is the resolved backend name (per-backend entitlement);
- * `dsn_license` is the per-DSN/connstr License= value or NULL — the provider
- * also consults process- and machine-wide sources itself. On deny it MAY set
- * *reason to a malloc'd string (the driver free()s it). Returns 1 to ALLOW,
- * 0 to DENY. The weak open-build definition always returns 1, so the open,
- * Apache-2.0 driver imposes no gate. */
-int argus_obs_hook_check_license(const void *dbc, const char *backend,
-                                 const char *dsn_license, char **reason);
+/* ── Connection admission gate ─────────────────────────────────────
+ * Fires once per connection in do_connect(), AFTER the backend is resolved and
+ * BEFORE any pool fast-path, so a tap provider may veto any connection exactly
+ * once. `connstr` is the redacted connection string (or NULL). On deny it MAY
+ * set *reason to a malloc'd string (the driver free()s it and surfaces it in
+ * the diagnostic). Returns 1 to ALLOW, 0 to DENY. The weak open-build
+ * definition always returns 1, so the open, Apache-2.0 driver admits every
+ * connection. */
+int argus_obs_hook_connect_gate(const void *dbc, const char *backend,
+                                const char *connstr, char **reason);
 
 /* ── Multi-host selection (HOST=h1,h2,h3 failover) ─────────────────
  * pick: index of the host to try next given the original comma-separated
