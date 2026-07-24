@@ -1,12 +1,12 @@
 /*
  * argus/obs_hooks.h — generic capability tap points (open driver).
  *
- * These are the only additions the open, Apache-2.0 driver needs to become
- * enterprise-extensible. They are declared here and defined as WEAK no-ops in
- * obs_hooks.c, so the open driver alone changes nothing. A build that links
- * the enterprise addon provides STRONG definitions (see argus_ee/integration.h)
- * and the taps light up. Signatures are primitives only, so the open driver
- * never depends on any external type.
+ * A small, optional extension seam: each tap is declared here and defined as a
+ * WEAK no-op in obs_hooks.c, so the open, Apache-2.0 driver links and runs with
+ * zero behaviour change on its own. A build that links an object providing
+ * STRONG definitions of the same symbols overrides the no-ops and the taps light
+ * up. Signatures are primitives only, so the open driver never depends on any
+ * external type.
  *
  * Conventions:
  *  - `dbc` is the connection handle as an OPAQUE identity token: consumers may

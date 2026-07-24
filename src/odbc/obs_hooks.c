@@ -2,8 +2,8 @@
  * obs_hooks.c — weak, no-op capability tap points (open driver).
  *
  * These weak definitions make the open driver link and run with zero behaviour
- * change. When the enterprise addon is linked in, its strong definitions of
- * the same symbols win, and the taps light up. `__attribute__((weak))` is
+ * change. When an object providing strong definitions of the same symbols is
+ * linked in, those win and the taps light up. `__attribute__((weak))` is
  * supported by GCC and Clang — the only compilers the driver targets (Linux
  * GCC, macOS Clang, Windows MinGW-GCC).
  */
