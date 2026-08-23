@@ -308,6 +308,14 @@ static void test_gp7_remarks(void **state)
 
 /* ── The SQLTables filter parses and selects the right relations ── */
 
+/*
+ * Count the seeded tables the filter leaves visible.
+ *
+ * Restricted to the names the seed creates rather than to the whole schema:
+ * anything else that ends up in argus_test — a benchmark table, a scratch
+ * table from another test — would otherwise change the expected count and
+ * make this fail for a reason that has nothing to do with the filter.
+ */
 static long count_with_filter(const char *filter)
 {
     char *retargeted = retarget(filter ? filter : "");
@@ -316,7 +324,10 @@ static long count_with_filter(const char *filter)
     snprintf(sql, sizeof(sql),
              "SELECT count(*) FROM pg_catalog.pg_class c "
              "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
-             "WHERE n.nspname = 'argus_test' AND c.relkind IN ('r','p') %s",
+             "WHERE n.nspname = 'argus_test' AND c.relkind IN ('r','p') "
+             "AND (c.relname IN ('all_types','customers','orders','events',"
+                                "'nation','region') "
+                  "OR c.relname LIKE 'events\\_2%%') %s",
              retargeted);
     g_free(retargeted);
 
@@ -336,10 +347,10 @@ static void test_tables_filter_parses_and_excludes(void **state)
 {
     (void)state;
 
-    /* The seed schema has all_types, customers, orders, events (+24 children),
-     * nation and region: 6 parents and 24 partition children. */
+    /* The seed schema has all_types, customers, orders, events (+24 monthly
+     * children), nation and region: 6 parents and 24 partition children. */
     long unfiltered = count_with_filter(NULL);
-    assert_true(unfiltered >= 30);
+    assert_int_equal(unfiltered, 30);
 
     pg_conn_t gp7 = make_gp7_conn();
     long filtered7 = count_with_filter(pg_mpp_tables_filter(&gp7));

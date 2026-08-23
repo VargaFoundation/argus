@@ -93,6 +93,7 @@ inspection of real Simba binaries and a live Tableau TDVT run, is in
 | Tableau TDVT | **91.4%** measured | certified (>90%) | not applicable |
 | Large-result decode | DOM-free JSON (~65% faster), spooling, Arrow via ADBC | Arrow / Cloud Fetch | row-wise |
 | Dialect correctness | per-backend dialect + ODBC escape translation | per-engine | **none** — SQL passed through |
+| Transactions | **real where the engine has them** (PostgreSQL family) | per-engine | driver-dependent |
 | Arrow surface | ADBC driver + Flight SQL backend | JDBC/ODBC | no |
 
 ### Why Argus
@@ -113,7 +114,12 @@ inspection of real Simba binaries and a live Tableau TDVT run, is in
   rather than inventing metadata a BI tool would then trust.
 - **Fast where it counts.** The Trino fetch path decodes result pages without a
   JSON DOM (~65% faster on large extracts, proven byte-identical to the
-  reference path), on top of Trino spooling and a numeric fast-path.
+  reference path), on top of Trino spooling and a numeric fast-path. On
+  PostgreSQL, measured head-to-head against psqlODBC on the same server and
+  query: **~1.9× the throughput** (727 k vs 391 k rows/s on 1.5 M × 9 columns)
+  with **memory flat in the size of the result** — 50 MB where psqlODBC's
+  default configuration peaks at 629 MB. Numbers and method in
+  [tests/bench/README.md](tests/bench/README.md).
 - **Dialect-correct, unlike the generic ODBC entry.** Tableau itself warns that
   with *Other Databases (ODBC)* "compatibility is not guaranteed"; Argus ships a
   per-backend SQL dialect and translates ODBC escape sequences (`{fn …}`, `{d}`,

@@ -4,6 +4,22 @@ All notable changes to the Argus ODBC Driver project.
 
 ## [Unreleased]
 
+### Performance, measured
+- **PostgreSQL fetch measured against psqlODBC** on the same server, query and
+  client loop: **727 k rows/s vs 391 k** (1.5 M rows × 9 columns), with peak RSS
+  **50 MB vs 629 MB**. psqlODBC reaches bounded memory only with
+  `UseDeclareFetch=1`, which is off by default; there it is 352–378 k rows/s.
+- **A planned `COPY … (FORMAT binary)` fetch path was measured and then not
+  built.** Against raw libpq it is 9% faster than the single-row mode already in
+  use (1 289 k vs 1 179 k rows/s) and 33% *larger* on the wire for a typical
+  schema, while the driver's own gap to that ceiling — the row cache and ODBC
+  conversion — is untouched by it. Nine percent of the protocol half of the cost
+  does not justify NBASE numeric decoding and non-tuple-aligned COPY buffers.
+  The numbers, the method and the conditions under which it becomes worth
+  revisiting are in `tests/bench/README.md`.
+- `FetchBufferSize` swept 100/1 000/10 000/50 000: the default 1 000 is already
+  the best, so there is no tuning advice to give.
+
 ### ODBC-layer extensions (per-backend capabilities, transactions, catalog)
 - **`argus_backend_caps_t`** (`include/argus/caps.h`): SQLGetInfo answers that
   are properties of the engine — transaction support, what a schema is called,

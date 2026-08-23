@@ -111,6 +111,31 @@ a pooled connection is rolled back and `DISCARD ALL`-ed before it is reused.
 syntax: it silently gives READ COMMITTED, so claiming it would be a promise the
 server does not keep.
 
+## PostgreSQL: measured against psqlODBC
+
+The PostgreSQL-family backends have a directly comparable incumbent, so they
+were measured against it rather than argued about. Same server, same query,
+same client loop, same driver manager; 1.5 M rows × 9 columns; best of three.
+
+| | rows/s | peak RSS |
+|---|---|---|
+| **Argus** | **727 000** | **50 MB** |
+| psqlODBC, defaults | 391 000 | 629 MB |
+| psqlODBC, `UseDeclareFetch=1` | 352 000–378 000 | 12–15 MB |
+
+~1.9× the throughput in every psqlODBC configuration, with memory flat in the
+size of the result. psqlODBC reaches bounded memory only with
+`UseDeclareFetch=1`, which is off by default.
+
+The same exercise killed a planned feature. A `COPY … (FORMAT binary)` fetch
+path was measured before being built: against raw libpq it is 9% faster than
+the single-row mode the driver already uses (1 289 k vs 1 179 k rows/s) and
+33% *larger* on the wire for a typical schema, while the driver's own gap to
+that ceiling — the row cache and ODBC conversion — is untouched by it. Nine
+percent of the protocol half, in exchange for NBASE numeric decoding and
+non-tuple-aligned COPY buffers, is a bad trade. The numbers and the reasoning
+are in `tests/bench/README.md`.
+
 ## Bottom line
 
 On the axes a BI tool actually exercises — ODBC 3.8, Unicode, dialect/escape
