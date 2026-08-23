@@ -256,6 +256,13 @@ void argus_stmt_reset(argus_stmt_t *stmt)
     free(stmt->query);
     stmt->query           = NULL;
     stmt->prepared        = false;
+
+    /* Parameter metadata describes the SQL that is being discarded. */
+    free(stmt->param_descs);
+    stmt->param_descs      = NULL;
+    stmt->num_param_descs  = 0;
+    stmt->described_params = 0;
+
     stmt->executed        = false;
     stmt->num_cols        = 0;
     stmt->metadata_fetched = false;

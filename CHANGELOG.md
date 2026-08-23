@@ -4,6 +4,48 @@ All notable changes to the Argus ODBC Driver project.
 
 ## [Unreleased]
 
+### ODBC-layer extensions (per-backend capabilities, transactions, catalog)
+- **`argus_backend_caps_t`** (`include/argus/caps.h`): SQLGetInfo answers that
+  are properties of the engine — transaction support, what a schema is called,
+  identifier length, SQL conformance — become per-backend instead of constants.
+  Every zero or NULL field means the value SQLGetInfo returned before, so a
+  backend that declares nothing is answered exactly as it was;
+  `tests/unit/test_backend_caps.c` walks every registered backend and asserts
+  it, field by field.
+- **Real transactions for the PostgreSQL family.** `SQL_TXN_CAPABLE` reports
+  `SQL_TC_ALL`, `SQL_ATTR_AUTOCOMMIT` and `SQLEndTran` do real work, and
+  `SQL_ATTR_TXN_ISOLATION` is honoured. `BEGIN` is issued lazily with the first
+  statement, so the driver never manufactures an idle-in-transaction session.
+  The other ten backends keep `SQL_TC_NONE` and a no-op `SQLEndTran`.
+- **Pooled connections are reset before reuse** (new `reset_session` hook):
+  rollback plus `DISCARD ALL`, and a connection that cannot be cleaned is
+  discarded rather than parked. Without this a connection returned
+  mid-transaction poisons the next borrower with held locks and an aborted
+  transaction — the failure mode that makes transaction support dangerous
+  rather than merely incomplete.
+- **`SQLForeignKeys`, `SQLProcedures`, `SQLProcedureColumns`,
+  `SQLTablePrivileges`, `SQLColumnPrivileges` and `SQLSpecialColumns` are real**
+  for PostgreSQL/Greenplum/Cloudberry, via six new optional vtable hooks. A
+  NULL hook still returns the correctly-shaped empty result set, which stays the
+  right answer for engines that have no such objects. `SQL_BEST_ROWID` uses the
+  primary key or a fully-NOT-NULL unique index and deliberately does **not**
+  fall back to `ctid`, which UPDATE and VACUUM FULL invalidate.
+- **Fixed: `SQLFetch` after an empty catalog call failed on a connected
+  statement.** `SQLForeignKeys`, `SQLProcedures`, `SQLProcedureColumns` and the
+  two privilege calls never set `fetch_started`, so the fetch path went to the
+  backend with a NULL operation handle and returned SQL_ERROR instead of
+  SQL_NO_DATA. Any BI tool that called one of them and then fetched hit it.
+- **Real `SQLDescribeParam`** for the PostgreSQL family (new `describe_params`
+  hook): a server-side Parse and Describe reports the parameter types
+  PostgreSQL inferred. Metadata only — execution still renders parameters as
+  literals. `SQLNumParams` prefers the server's count. `SQL_DESCRIBE_PARAMETER`
+  is `"Y"` only where the hook exists.
+- **Server SQLSTATEs at statement level** (new `get_last_error_ex` hook):
+  `SELECT * FROM missing` now reports `42P01`, a unique violation `23505`, a
+  cancelled statement `HY008`. Backends without the hook keep reporting HY000.
+- `SQLDriverConnect` returns **`SQL_SUCCESS_WITH_INFO`** when a successful
+  connect left diagnostics, instead of dropping them.
+
 ### Greenplum and Apache Cloudberry backends (`BACKEND=greenplum` / `cloudberry`)
 - **Two MPP backends over the same libpq core**, with their own vtables,
   dialect entries and `SQL_DBMS_NAME` so a BI tool can name the engine it is

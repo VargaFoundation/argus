@@ -1,6 +1,7 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
 #include "argus/dialect.h"
+#include "argus/caps.h"
 #include "argus/log.h"
 #include <string.h>
 #include <stdio.h>
@@ -118,20 +119,13 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_DATABASE_NAME:
         return set_string_info(dbc->database ? dbc->database : "default",
                                InfoValue, BufferLength, StringLength);
+    /* The engine's display name, from its capability descriptor. A backend
+     * that declares none falls back to its own name, which is what the
+     * strcmp chain this replaced did for everything but hive/impala/trino. */
     case SQL_DBMS_NAME: {
-        /* Return backend-specific name */
-        const char *dbms_name = "Unknown";
-        if (dbc->backend) {
-            if (strcmp(dbc->backend->name, "hive") == 0) {
-                dbms_name = "Apache Hive";
-            } else if (strcmp(dbc->backend->name, "impala") == 0) {
-                dbms_name = "Apache Impala";
-            } else if (strcmp(dbc->backend->name, "trino") == 0) {
-                dbms_name = "Trino";
-            } else {
-                dbms_name = dbc->backend->name;
-            }
-        }
+        const char *dbms_name =
+            argus_caps_str(argus_caps_for(dbc)->dbms_name,
+                           dbc->backend ? dbc->backend->name : "Unknown");
         return set_string_info(dbms_name, InfoValue, BufferLength, StringLength);
     }
     /*
@@ -165,7 +159,9 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_ODBC_API_CONFORMANCE:
         return set_usmallint_info(SQL_OAC_LEVEL1, InfoValue, StringLength);
     case SQL_ODBC_SQL_CONFORMANCE:
-        return set_usmallint_info(SQL_OSC_MINIMUM, InfoValue, StringLength);
+        /* SQL_OSC_MINIMUM is 0, so an unset descriptor answers as before. */
+        return set_usmallint_info(argus_caps_for(dbc)->odbc_sql_conformance,
+                                  InfoValue, StringLength);
 
     /* ── Supported features ──────────────────────────────────── */
     case SQL_GETDATA_EXTENSIONS:
@@ -181,14 +177,24 @@ SQLRETURN SQL_API SQLGetInfo(
                                BufferLength, StringLength);
     case SQL_CATALOG_NAME_SEPARATOR:
         return set_string_info(".", InfoValue, BufferLength, StringLength);
+    /* What the engine calls each level. "database" for SQL_SCHEMA_TERM is
+     * right for the analytics engines, which have no schema below the
+     * database, and wrong for PostgreSQL, which has both — a BI tool labels
+     * its navigator from these. */
     case SQL_CATALOG_TERM:
-        return set_string_info("catalog", InfoValue, BufferLength, StringLength);
+        return set_string_info(
+            argus_caps_str(argus_caps_for(dbc)->catalog_term, "catalog"),
+            InfoValue, BufferLength, StringLength);
     case SQL_SCHEMA_TERM:
-        return set_string_info("database", InfoValue, BufferLength, StringLength);
+        return set_string_info(
+            argus_caps_str(argus_caps_for(dbc)->schema_term, "database"),
+            InfoValue, BufferLength, StringLength);
     case SQL_TABLE_TERM:
         return set_string_info("table", InfoValue, BufferLength, StringLength);
     case SQL_PROCEDURE_TERM:
-        return set_string_info("procedure", InfoValue, BufferLength, StringLength);
+        return set_string_info(
+            argus_caps_str(argus_caps_for(dbc)->procedure_term, "procedure"),
+            InfoValue, BufferLength, StringLength);
     case SQL_CATALOG_LOCATION:
         return set_usmallint_info(SQL_CL_START, InfoValue, StringLength);
 
@@ -226,7 +232,9 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_SPECIAL_CHARACTERS:
         return set_string_info("_%", InfoValue, BufferLength, StringLength);
     case SQL_MAX_IDENTIFIER_LEN:
-        return set_usmallint_info(128, InfoValue, StringLength);
+        return set_usmallint_info(
+            argus_caps_u16(argus_caps_for(dbc)->max_identifier_len, 128),
+            InfoValue, StringLength);
     case SQL_MAX_TABLE_NAME_LEN:
     case SQL_MAX_SCHEMA_NAME_LEN:
     case SQL_MAX_CATALOG_NAME_LEN:
@@ -270,12 +278,19 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_CURSOR_SENSITIVITY:
         return set_uinteger_info(SQL_UNSPECIFIED, InfoValue, StringLength);
 
-    /* ── Transaction support ─────────────────────────────────── */
+    /* ── Transaction support ─────────────────────────────────────
+     * SQL_TC_NONE is 0, so a backend with no capability descriptor keeps
+     * reporting no transaction support, which is the truth for every
+     * analytics engine here. */
     case SQL_TXN_CAPABLE:
-        return set_usmallint_info(SQL_TC_NONE, InfoValue, StringLength);
+        return set_usmallint_info(argus_caps_for(dbc)->txn_capable,
+                                  InfoValue, StringLength);
     case SQL_TXN_ISOLATION_OPTION:
+        return set_uinteger_info(argus_caps_for(dbc)->txn_isolation_options,
+                                 InfoValue, StringLength);
     case SQL_DEFAULT_TXN_ISOLATION:
-        return set_uinteger_info(0, InfoValue, StringLength);
+        return set_uinteger_info(argus_caps_for(dbc)->default_txn_isolation,
+                                 InfoValue, StringLength);
 
     /* ── Supported conversions ───────────────────────────────── */
     case SQL_CONVERT_FUNCTIONS:
@@ -475,11 +490,14 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_BOOKMARK_PERSISTENCE:
         return set_uinteger_info(0, InfoValue, StringLength);
 
-    /* SQLDescribeParam can only guess (SQL_VARCHAR/255): none of these engines
-     * is asked to prepare server-side, so there is no parameter metadata to
-     * report. Saying "Y" here made applications trust that guess. */
+    /* "Y" only where the backend can actually describe parameters — where it
+     * cannot, SQLDescribeParam can only guess SQL_VARCHAR/255, and saying "Y"
+     * makes applications trust the guess. The PostgreSQL family answers from
+     * a server-side Describe; the analytics engines have nothing to ask. */
     case SQL_DESCRIBE_PARAMETER:
-        return set_string_info("N", InfoValue, BufferLength, StringLength);
+        return set_string_info(
+            argus_caps_for(dbc)->describe_parameter ? "Y" : "N",
+            InfoValue, BufferLength, StringLength);
 
     case SQL_INTEGRITY:
         return set_string_info("N", InfoValue, BufferLength, StringLength);
@@ -557,7 +575,8 @@ SQLRETURN SQL_API SQLGetInfo(
 
     /* ── Additional info types for BI tool compatibility ─────── */
     case SQL_PROCEDURES:
-        return set_string_info("N", InfoValue, BufferLength, StringLength);
+        return set_string_info(argus_caps_for(dbc)->procedures ? "Y" : "N",
+                               InfoValue, BufferLength, StringLength);
 
     case SQL_MAX_BINARY_LITERAL_LEN:
         return set_uinteger_info(0, InfoValue, StringLength);

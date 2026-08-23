@@ -86,6 +86,11 @@ static int pg_run(pg_conn_t *conn, const char *query, bool streaming,
     if (PQtransactionStatus(conn->pg) == PQTRANS_ACTIVE)
         drain_connection(conn);
 
+    /* Autocommit off means this statement belongs in a transaction; open one
+     * now if none is running, so the BEGIN costs a round trip only when a
+     * statement actually follows it. */
+    if (pg_txn_begin_if_needed(conn) != 0) return -1;
+
     pg_op_t *op = calloc(1, sizeof(*op));
     if (!op) return -1;
     op->conn = conn;

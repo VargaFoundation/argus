@@ -92,6 +92,12 @@ typedef struct pg_conn {
     bool         has_relispartition; /* pg_class.relispartition (PG10+/GP7)  */
     bool         has_relam;          /* pg_class.relam (PG12+/GP7/CBDB)      */
 
+    /* Transaction state (pg_txn.c). ODBC has no BEGIN: autocommit off means
+     * every statement runs in a transaction, which is opened lazily so the
+     * driver never manufactures an idle-in-transaction session. */
+    bool         autocommit;
+    char         isolation_sql[24];  /* "" until SQL_ATTR_TXN_ISOLATION is set */
+
     char        *database;
     int          fetch_batch;    /* rows per streaming chunk (FetchBufferSize) */
     bool         show_partitions;/* SHOWPARTITIONS=1: stop hiding child partitions */
@@ -138,6 +144,10 @@ int  pg_fail(pg_conn_t *conn, PGresult *res, const char *fallback_sqlstate);
 /* Push the recorded error onto a DBC diag with PostgreSQL's own SQLSTATE. */
 void pg_push_diag(argus_dbc_t *dbc, pg_conn_t *conn, const char *fallback_sqlstate);
 bool pg_get_last_error(argus_backend_conn_t conn, char *buf, size_t buflen);
+/* Same, plus PostgreSQL's own SQLSTATE, so the ODBC layer can report 42P01
+ * rather than collapsing everything to HY000. */
+bool pg_get_last_error_ex(argus_backend_conn_t conn, char sqlstate[6],
+                          char *buf, size_t buflen);
 
 /* ── pg_probe.c ──────────────────────────────────────────────── */
 
@@ -225,6 +235,23 @@ uint8_t     pg_native_kind(Oid oid);
 int         pg_get_type_info(argus_backend_conn_t conn, SQLSMALLINT sql_type,
                              argus_backend_op_t *out_op);
 
+/* ── pg_prepare.c ────────────────────────────────────────────────
+ * Server-side Parse + Describe for SQLDescribeParam. Metadata only: execution
+ * still renders parameters as literals, exactly as for every other backend. */
+
+int pg_describe_params(argus_backend_conn_t conn, const char *query,
+                       argus_column_desc_t *params, int *num_params);
+
+/* ── pg_txn.c ────────────────────────────────────────────────── */
+
+int  pg_set_autocommit(argus_backend_conn_t conn, bool on);
+int  pg_end_transaction(argus_backend_conn_t conn, bool commit);
+int  pg_set_isolation(argus_backend_conn_t conn, SQLUINTEGER odbc_isolation);
+bool pg_reset_session(argus_backend_conn_t conn);
+/* Open a transaction if autocommit is off and none is open. Called from the
+ * execute path so the BEGIN travels with the statement that needs it. */
+int  pg_txn_begin_if_needed(pg_conn_t *conn);
+
 /* ── pg_mpp.c ────────────────────────────────────────────────────
  * The catalog fragments Greenplum and Cloudberry share. Both are MPP forks of
  * PostgreSQL with the same three questions to answer — which relations are
@@ -259,6 +286,34 @@ int pg_get_statistics(argus_backend_conn_t conn, const char *catalog,
                       const char *schema, const char *table_name,
                       unsigned short unique, unsigned short reserved,
                       argus_backend_op_t *out_op);
+
+/* ── pg_metadata_ext.c ───────────────────────────────────────────
+ * The catalog functions the ODBC layer used to answer with an empty result
+ * set on every backend. PostgreSQL has all of them for real. */
+
+int pg_get_foreign_keys(argus_backend_conn_t conn,
+                        const char *pk_catalog, const char *pk_schema,
+                        const char *pk_table,
+                        const char *fk_catalog, const char *fk_schema,
+                        const char *fk_table, argus_backend_op_t *out_op);
+int pg_get_special_columns(argus_backend_conn_t conn,
+                           SQLUSMALLINT identifier_type,
+                           const char *catalog, const char *schema,
+                           const char *table,
+                           SQLUSMALLINT scope, SQLUSMALLINT nullable,
+                           argus_backend_op_t *out_op);
+int pg_get_procedures(argus_backend_conn_t conn, const char *catalog,
+                      const char *schema, const char *proc,
+                      argus_backend_op_t *out_op);
+int pg_get_procedure_columns(argus_backend_conn_t conn, const char *catalog,
+                             const char *schema, const char *proc,
+                             const char *column, argus_backend_op_t *out_op);
+int pg_get_table_privileges(argus_backend_conn_t conn, const char *catalog,
+                            const char *schema, const char *table,
+                            argus_backend_op_t *out_op);
+int pg_get_column_privileges(argus_backend_conn_t conn, const char *catalog,
+                             const char *schema, const char *table,
+                             const char *column, argus_backend_op_t *out_op);
 
 /* ── pg_meta_util.c ──────────────────────────────────────────── */
 

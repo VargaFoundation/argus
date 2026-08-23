@@ -81,21 +81,41 @@ confirming it is the shared SimbaEngine core, not a per-data-store surface.
 
 ## Note on catalog "completeness"
 
-The empty `SQLForeignKeys`, `SQLProcedures`, `SQLColumnPrivileges`,
-`SQLTablePrivileges`, and `SQLSpecialColumns` results are **correct** for Argus's
-target engines, not a deficiency: Trino, Hive, Impala, Spark, Pinot, Druid and
-BigQuery have no foreign keys, stored procedures, per-column privileges in the
-ODBC sense, or row-version/rowid columns. Simba's own ODBC drivers for these
-same engines return empty here too. A driver must not invent metadata the engine
-does not have, so these stay empty by design; `SQLTables`, `SQLColumns`,
-`SQLGetTypeInfo` and `SQLPrimaryKeys` (where the engine has keys) carry the real
-data.
+`SQLForeignKeys`, `SQLProcedures`, `SQLProcedureColumns`, `SQLColumnPrivileges`,
+`SQLTablePrivileges` and `SQLSpecialColumns` are **answered where the engine has
+the objects and empty where it does not** — the driver reports what is there
+rather than a fixed answer either way.
+
+Empty is the correct result for Trino, Hive, Impala, Spark, Pinot, Druid and
+BigQuery: they have no foreign keys, no stored procedures, no per-column
+privileges in the ODBC sense and no row-version or rowid columns. Simba's own
+drivers for those engines return empty here too, and a driver must not invent
+metadata a BI tool would then trust.
+
+The PostgreSQL family has all of them, and reports them from `pg_catalog`:
+foreign keys with their update and delete rules and deferrability, functions and
+their argument modes and types, table and column privileges expanded through
+role membership, and a best-row-id drawn from the primary key or a
+fully-NOT-NULL unique index. Two deliberate omissions there, for the same reason
+the empty results are deliberate elsewhere: `ctid` is **not** offered as a
+`SQL_BEST_ROWID` fallback (it is invalidated by UPDATE and VACUUM FULL, so it
+does not identify a row for any scope ODBC defines), and `SQL_PROCEDURES` still
+answers `"N"` because that info type also promises the driver accepts ODBC's
+`{call ...}` syntax, which `escape.c` does not yet translate.
+
+Transactions moved the same way. `SQL_TXN_CAPABLE` is per-backend: `SQL_TC_NONE`
+for the analytics engines, which have no transactions, and `SQL_TC_ALL` for the
+PostgreSQL family, where `SQL_ATTR_AUTOCOMMIT` and `SQLEndTran` do real work and
+a pooled connection is rolled back and `DISCARD ALL`-ed before it is reused.
+`SQL_TXN_READ_UNCOMMITTED` is not advertised even though PostgreSQL accepts the
+syntax: it silently gives READ COMMITTED, so claiming it would be a promise the
+server does not keep.
 
 ## Bottom line
 
 On the axes a BI tool actually exercises — ODBC 3.8, Unicode, dialect/escape
 correctness, auth, pooling, platform coverage, and the Tableau TDVT bar — Argus
 is at parity with SimbaEngine, with a **broader raw ODBC surface (107 vs 89
-entry points) and more backends (10)**. Simba stays ahead on three things worth
+entry points) and more backends (13)**. Simba stays ahead on three things worth
 a roadmap: async execution, a couple of catalog functions, and columnar/Arrow
 result decoding for large extracts.

@@ -178,6 +178,25 @@ argus_backend_conn_t argus_pool_acquire(
 
 /* ── Public: release a connection back to the pool ───────────── */
 
+/* Drop any entry holding `conn` from the registry, so a connection that is
+ * about to be closed is never handed out again. Takes the mutex itself. */
+static void pool_forget(argus_backend_conn_t conn)
+{
+    g_mutex_lock(&g_pool.mutex);
+    for (int i = 0; i < g_pool.count; i++) {
+        if (g_pool.entries[i].conn != conn) continue;
+        free(g_pool.entries[i].host);
+        free(g_pool.entries[i].backend_name);
+        free(g_pool.entries[i].username);
+        g_pool.entries[i] = g_pool.entries[g_pool.count - 1];
+        memset(&g_pool.entries[g_pool.count - 1], 0,
+               sizeof(g_pool.entries[0]));
+        g_pool.count--;
+        break;
+    }
+    g_mutex_unlock(&g_pool.mutex);
+}
+
 void argus_pool_release(
     const char *host, int port,
     const char *backend_name,
@@ -186,6 +205,28 @@ void argus_pool_release(
     argus_backend_conn_t conn)
 {
     pool_ensure_init();
+
+    /*
+     * Return the connection to a clean state before anyone else can borrow it.
+     *
+     * This is the failure mode that makes transaction support dangerous rather
+     * than merely incomplete: a connection parked mid-transaction holds locks
+     * and an open snapshot, and the next borrower inherits both — on
+     * PostgreSQL, an aborted transaction in which every statement fails with
+     * 25P02. Leftover session state (search_path, SET, temp tables) is the
+     * same problem more quietly. A connection that cannot be cleaned is
+     * discarded rather than parked; backends with no reset hook are unaffected
+     * and park exactly as before.
+     */
+    if (backend && backend->reset_session && conn) {
+        if (!backend->reset_session(conn)) {
+            ARGUS_LOG_WARN("Pool: connection to %s:%d could not be reset; "
+                           "discarding it instead of reusing it", host, port);
+            pool_forget(conn);
+            if (backend->disconnect) backend->disconnect(conn);
+            return;
+        }
+    }
 
     g_mutex_lock(&g_pool.mutex);
 

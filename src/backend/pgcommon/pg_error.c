@@ -106,6 +106,30 @@ void pg_push_diag(argus_dbc_t *dbc, pg_conn_t *conn, const char *fallback_sqlsta
     argus_set_error(&dbc->diag, state, msg, 0);
 }
 
+/*
+ * The same message, plus the SQLSTATE PostgreSQL itself produced.
+ *
+ * The ODBC layer's older path can only report HY000, which throws away the one
+ * piece of a diagnostic an application can branch on: a BI tool distinguishing
+ * "relation does not exist" (42P01) from "permission denied" (42501) from
+ * "serialization failure" (40001) has to read the SQLSTATE, because the
+ * message text is localised and not a contract.
+ */
+bool pg_get_last_error_ex(argus_backend_conn_t raw_conn, char sqlstate[6],
+                          char *buf, size_t buflen)
+{
+    pg_conn_t *conn = (pg_conn_t *)raw_conn;
+    if (!conn) return false;
+
+    if (!pg_get_last_error(raw_conn, buf, buflen)) return false;
+
+    if (sqlstate) {
+        snprintf(sqlstate, 6, "%s",
+                 conn->last_sqlstate[0] ? conn->last_sqlstate : "HY000");
+    }
+    return true;
+}
+
 bool pg_get_last_error(argus_backend_conn_t raw_conn, char *buf, size_t buflen)
 {
     pg_conn_t *conn = (pg_conn_t *)raw_conn;

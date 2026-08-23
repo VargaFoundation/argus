@@ -7,6 +7,7 @@
 #include <sql.h>
 #include <sqlext.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "argus/types.h"
 
 /* Forward declarations */
@@ -124,6 +125,81 @@ typedef struct argus_backend {
      * the ODBC layer report "unknown". Cache it at connect time rather than
      * paying a round trip per call. */
     bool (*get_server_version)(argus_backend_conn_t conn, char *buf, size_t buflen);
+
+    /*
+     * ── Everything below is optional and appended, never inserted ──
+     *
+     * Existing backends use designated initialisers, so a NULL hook here means
+     * "behave exactly as before": the ODBC layer keeps its current answer for
+     * every one of these. That is the whole contract — an engine that has
+     * foreign keys or transactions opts in, and the ten that do not are
+     * untouched.
+     */
+
+    /* Extended catalog. NULL → src/odbc/catalog.c returns the correctly-shaped
+     * empty result set it returns today, which is the right answer for an
+     * engine that genuinely has no such objects. */
+    int (*get_foreign_keys)(argus_backend_conn_t conn,
+                            const char *pk_catalog, const char *pk_schema,
+                            const char *pk_table,
+                            const char *fk_catalog, const char *fk_schema,
+                            const char *fk_table,
+                            argus_backend_op_t *out_op);
+
+    int (*get_special_columns)(argus_backend_conn_t conn,
+                               SQLUSMALLINT identifier_type,
+                               const char *catalog, const char *schema,
+                               const char *table,
+                               SQLUSMALLINT scope, SQLUSMALLINT nullable,
+                               argus_backend_op_t *out_op);
+
+    int (*get_procedures)(argus_backend_conn_t conn,
+                          const char *catalog, const char *schema,
+                          const char *proc, argus_backend_op_t *out_op);
+
+    int (*get_procedure_columns)(argus_backend_conn_t conn,
+                                 const char *catalog, const char *schema,
+                                 const char *proc, const char *column,
+                                 argus_backend_op_t *out_op);
+
+    int (*get_table_privileges)(argus_backend_conn_t conn,
+                                const char *catalog, const char *schema,
+                                const char *table, argus_backend_op_t *out_op);
+
+    int (*get_column_privileges)(argus_backend_conn_t conn,
+                                 const char *catalog, const char *schema,
+                                 const char *table, const char *column,
+                                 argus_backend_op_t *out_op);
+
+    /* Transactions. Treat as one group: a backend either implements all three
+     * or none. NULL → SQL_ATTR_AUTOCOMMIT is stored and SQLEndTran succeeds
+     * without doing anything, which is correct for an engine with no
+     * transactions and is what happens today. */
+    int (*set_autocommit)(argus_backend_conn_t conn, bool on);
+    int (*end_transaction)(argus_backend_conn_t conn, bool commit);
+    int (*set_isolation)(argus_backend_conn_t conn, SQLUINTEGER odbc_isolation);
+
+    /* Return a pooled connection to a clean state before it is parked.
+     * Returns false when it cannot be cleaned and must be discarded instead.
+     * NULL → the connection is parked as-is, as today. */
+    bool (*reset_session)(argus_backend_conn_t conn);
+
+    /* Real parameter metadata for SQLDescribeParam. Pure metadata: it does not
+     * change how parameters are executed (they are still rendered as literals
+     * by src/odbc/execute.c). NULL → the generic SQL_VARCHAR answer. */
+    int (*describe_params)(argus_backend_conn_t conn, const char *query,
+                           argus_column_desc_t *params, int *num_params);
+
+    /* The last error together with the server's own SQLSTATE. NULL → the ODBC
+     * layer uses get_last_error and reports HY000, as today. PostgreSQL hands
+     * back a real five-character SQLSTATE, and collapsing 42P01 to HY000
+     * throws away the one thing an application can branch on. */
+    bool (*get_last_error_ex)(argus_backend_conn_t conn,
+                              char sqlstate[6], char *buf, size_t buflen);
+
+    /* Static capability descriptor for SQLGetInfo (argus/caps.h).
+     * NULL → the pre-capabilities answers. */
+    const struct argus_backend_caps *caps;
 } argus_backend_t;
 
 /* Backend registry. The array is a handful of pointers, so the bound exists
@@ -134,5 +210,10 @@ typedef struct argus_backend {
 void argus_backend_register(const argus_backend_t *backend);
 const argus_backend_t *argus_backend_find(const char *name);
 void argus_backends_init(void);
+
+/* Iteration over the registry, for diagnostics and for the tests that assert
+ * no backend's SQLGetInfo answers moved. */
+size_t argus_backend_count(void);
+const argus_backend_t *argus_backend_at(size_t index);
 
 #endif /* ARGUS_BACKEND_H */

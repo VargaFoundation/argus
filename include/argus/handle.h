@@ -228,6 +228,14 @@ struct argus_stmt {
     argus_param_binding_t   param_bindings[ARGUS_MAX_PARAMS];
     int                     num_param_bindings;
 
+    /* Parameter metadata from the backend's describe_params hook, cached for
+     * the statement's current SQL: SQLDescribeParam is called once per
+     * parameter and each call would otherwise cost a server round trip.
+     * described_params < 0 means "asked and the backend declined". */
+    argus_column_desc_t    *param_descs;
+    int                     num_param_descs;
+    int                     described_params;
+
     /* SQLGetData multi-call state */
     SQLUSMALLINT            getdata_col;     /* 1-based column of last GetData, 0=none */
     size_t                  getdata_offset;  /* byte offset for next GetData call */

@@ -1,4 +1,5 @@
 #include "pg_common.h"
+#include "argus/caps.h"
 #include <string.h>
 
 /*
@@ -58,6 +59,36 @@ static int greenplum_connect(argus_dbc_t *dbc,
                       database, auth_mechanism, out_conn);
 }
 
+/*
+ * Capabilities. This is where the PostgreSQL family stops under-declaring:
+ * real transactions, a schema level that is a schema, PostgreSQL's own
+ * 63-byte identifier limit, and a SQLDescribeParam that answers from a
+ * server-side Describe instead of guessing.
+ *
+ * SQL_TXN_READ_UNCOMMITTED is deliberately absent. PostgreSQL accepts the
+ * syntax and silently gives READ COMMITTED, so advertising it would be exactly
+ * the over-claiming the dialect layer's own rules argue against: an
+ * application that asks for it would believe it got it.
+ */
+static const argus_backend_caps_t greenplum_caps = {
+    .dbms_name             = "Greenplum Database",
+    .catalog_term          = "database",
+    .schema_term           = "schema",
+    .procedure_term        = "function",
+    .max_identifier_len    = 63,
+    .txn_capable           = SQL_TC_ALL,
+    .txn_isolation_options = SQL_TXN_READ_COMMITTED |
+                             SQL_TXN_REPEATABLE_READ |
+                             SQL_TXN_SERIALIZABLE,
+    .default_txn_isolation = SQL_TXN_READ_COMMITTED,
+    .odbc_sql_conformance  = SQL_OSC_CORE,
+    .describe_parameter    = true,
+    /* .procedures stays false: SQL_PROCEDURES also promises the driver
+     * accepts ODBC's {call ...} invocation syntax, and escape.c still
+     * rejects it. SQLProcedures itself is implemented and useful; claiming
+     * "Y" before {call} works would be a second kind of over-claim. */
+};
+
 static const argus_backend_t greenplum_backend = {
     .name                  = "greenplum",
     .connect               = greenplum_connect,
@@ -77,7 +108,20 @@ static const argus_backend_t greenplum_backend = {
     .get_primary_keys      = pg_get_primary_keys,
     .get_statistics        = pg_get_statistics,
     .get_last_error        = pg_get_last_error,
+    .get_last_error_ex     = pg_get_last_error_ex,
     .get_server_version    = pg_get_server_version,
+    .get_foreign_keys      = pg_get_foreign_keys,
+    .get_special_columns   = pg_get_special_columns,
+    .get_procedures        = pg_get_procedures,
+    .get_procedure_columns = pg_get_procedure_columns,
+    .get_table_privileges  = pg_get_table_privileges,
+    .get_column_privileges = pg_get_column_privileges,
+    .set_autocommit        = pg_set_autocommit,
+    .end_transaction       = pg_end_transaction,
+    .set_isolation         = pg_set_isolation,
+    .reset_session         = pg_reset_session,
+    .describe_params       = pg_describe_params,
+    .caps                  = &greenplum_caps,
 };
 
 const argus_backend_t *argus_greenplum_backend_get(void)

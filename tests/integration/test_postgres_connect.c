@@ -111,9 +111,9 @@ static void test_dbms_name_and_version(void **state)
     SQLSMALLINT len = 0;
     assert_int_equal(SQLGetInfo(dbc, SQL_DBMS_NAME, name, sizeof(name), &len),
                      SQL_SUCCESS);
-    /* Until the caps refactor lands this is the backend name; either way it
-     * must identify PostgreSQL and not some other engine. */
-    assert_non_null(strstr((char *)name, "postgres"));
+    /* The engine's display name from its capability descriptor, not the
+     * backend keyword — this is what a BI tool shows the user. */
+    assert_string_equal((char *)name, "PostgreSQL");
 
     SQLCHAR ver[128] = {0};
     assert_int_equal(SQLGetInfo(dbc, SQL_DBMS_VER, ver, sizeof(ver), &len),

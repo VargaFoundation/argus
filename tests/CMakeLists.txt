@@ -30,6 +30,7 @@ argus_add_unit_test(test_handle unit/test_handle.c)
 argus_add_unit_test(test_connect_string unit/test_connect_string.c)
 argus_add_unit_test(test_diag unit/test_diag.c)
 argus_add_unit_test(test_info unit/test_info.c)
+argus_add_unit_test(test_backend_caps unit/test_backend_caps.c)
 argus_add_unit_test(test_dialect unit/test_dialect.c)
 argus_add_unit_test(test_escape unit/test_escape.c)
 argus_add_unit_test(test_bind_parameter unit/test_bind_parameter.c)
@@ -193,6 +194,9 @@ if(BUILD_INTEGRATION_TESTS)
         argus_add_integration_test(test_postgres_connect integration/test_postgres_connect.c)
         argus_add_integration_test(test_postgres_query integration/test_postgres_query.c)
         argus_add_integration_test(test_postgres_escapes integration/test_postgres_escapes.c)
+        argus_add_integration_test(test_pg_transactions integration/test_pg_transactions.c)
+        argus_add_integration_test(test_pg_catalog_ext integration/test_pg_catalog_ext.c)
+        argus_add_integration_test(test_pg_describe_param integration/test_pg_describe_param.c)
 
         # The Greenplum/Cloudberry catalog SQL, exercised against a simulated
         # Greenplum catalog built on plain PostgreSQL. Links the static library

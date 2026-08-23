@@ -10,6 +10,7 @@ set(ARGUS_SOURCES
     odbc/catalog.c
     odbc/info.c
     odbc/dialect.c
+    odbc/caps.c
     odbc/escape.c
     odbc/diag.c
     odbc/attr.c
@@ -304,7 +305,10 @@ if(ARGUS_BUILD_POSTGRES)
         backend/pgcommon/pg_probe.c
         backend/pgcommon/pg_meta_util.c
         backend/pgcommon/pg_metadata_base.c
+        backend/pgcommon/pg_metadata_ext.c
         backend/pgcommon/pg_mpp.c
+        backend/pgcommon/pg_txn.c
+        backend/pgcommon/pg_prepare.c
         backend/postgres/pg_backend.c
         backend/greenplum/gp_backend.c
         backend/cloudberry/cb_backend.c

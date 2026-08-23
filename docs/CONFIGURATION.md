@@ -256,6 +256,32 @@ DRIVER=Argus;BACKEND=postgres;HOST=pg.example.com;SSL=1;SSLCAFile=/etc/ssl/certs
 - If `DATABASE` is omitted the driver connects to `postgres`. (The ODBC layer
   substitutes the literal `default` for an absent database, which is meaningful
   for Hive and is not a database any PostgreSQL has.)
+- **Real transactions.** `SQL_TXN_CAPABLE` reports `SQL_TC_ALL`;
+  `SQL_ATTR_AUTOCOMMIT=SQL_AUTOCOMMIT_OFF` puts every subsequent statement in a
+  transaction and `SQLEndTran` commits or rolls it back. The `BEGIN` is sent
+  lazily with the first statement rather than when the attribute is set, so the
+  driver never leaves a session idle-in-transaction. `SQL_ATTR_TXN_ISOLATION`
+  accepts READ COMMITTED, REPEATABLE READ and SERIALIZABLE;
+  `SQL_TXN_READ_UNCOMMITTED` is accepted but not advertised, because PostgreSQL
+  silently upgrades it to READ COMMITTED.
+- **Pooled connections are cleaned before reuse** — an open transaction is
+  rolled back and `DISCARD ALL` clears session state, so the next borrower
+  never inherits a search_path, a temp table or an aborted transaction. A
+  connection that cannot be cleaned is discarded rather than reused.
+- **Real `SQLDescribeParam`** (`SQL_DESCRIBE_PARAMETER` = `"Y"`): the statement
+  is parsed and described server-side, so parameter types come from
+  PostgreSQL's own inference rather than the SQL_VARCHAR/255 guess. Execution
+  is unchanged — parameters are still rendered as literals. PostgreSQL's jsonb
+  `?` operator is indistinguishable from a parameter marker; when the describe
+  fails the driver falls back to the generic answer, and `jsonb_exists(j, 'k')`
+  is the unambiguous spelling.
+- **`SQLForeignKeys`, `SQLProcedures`, `SQLProcedureColumns`,
+  `SQLTablePrivileges`, `SQLColumnPrivileges` and `SQLSpecialColumns` return
+  real data**, read from `pg_catalog`. `SQL_BEST_ROWID` reports the primary key
+  or a fully-NOT-NULL unique index; `ctid` is deliberately not offered as a
+  fallback, because UPDATE and VACUUM FULL invalidate it.
+  `SQL_ROWVER` reports `xmin` only under `ARGUS_PG_ROW_VERSIONING=1` — the
+  counter wraps.
 - Requires a build with libpq (`libpq-dev`); auto-detected at cmake time
 
 ### Greenplum and Apache Cloudberry (BACKEND=greenplum / BACKEND=cloudberry)

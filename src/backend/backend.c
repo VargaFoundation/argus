@@ -70,8 +70,22 @@ const argus_backend_t *argus_backend_find(const char *name)
     return NULL;
 }
 
+size_t argus_backend_count(void)
+{
+    return (size_t)registry_count;
+}
+
+const argus_backend_t *argus_backend_at(size_t index)
+{
+    return (index < (size_t)registry_count) ? registry[index] : NULL;
+}
+
 void argus_backends_init(void)
 {
+    /* Idempotent: several entry points call this, and registering twice would
+     * fill the registry with duplicates. */
+    if (registry_count > 0) return;
+
     /* Register all available backends */
 #ifdef ARGUS_HAS_THRIFT_BACKENDS
     argus_backend_register(argus_hive_backend_get());

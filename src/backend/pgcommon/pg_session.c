@@ -106,6 +106,8 @@ int pg_connect(const pg_profile_t *profile, argus_dbc_t *dbc,
     conn->fetch_batch = (dbc && dbc->fetch_buffer_size > 0)
                         ? dbc->fetch_buffer_size : ARGUS_DEFAULT_BATCH_SIZE;
     conn->use_copy = (g_getenv("ARGUS_PG_NOCOPY") == NULL);
+    /* PostgreSQL's own default, and ODBC's: SQL_AUTOCOMMIT_ON. */
+    conn->autocommit = true;
 
     pg_kv_t kv = {0};
 
