@@ -2,7 +2,36 @@
 
 All notable changes to the Argus ODBC Driver project.
 
-## [Unreleased]
+## [Unreleased] — targeting 0.6.0
+
+### Correctness
+- **Parameter escaping is now dialect-aware**: `\` is doubled only on engines
+  where it is a string-literal escape character (Hive, Impala, MySQL-wire,
+  BigQuery). On ANSI-literal engines (Trino, Phoenix, Pinot, Druid) a bound
+  value such as `C:\path` previously arrived server-side as `C:\\path`.
+- **`?` inside SQL comments** (`--`, `/* */`) is no longer counted or
+  substituted as a parameter marker.
+- **`SQLEndTran`/`SQLTransact` no longer fake rollbacks**: `SQL_COMMIT` remains
+  a vacuous success (the connection is auto-commit only,
+  `SQL_TXN_CAPABLE=SQL_TC_NONE`), but `SQL_ROLLBACK` now returns `SQL_ERROR`
+  (`HYC00`) instead of claiming work was undone that had already committed.
+- **Real liveness probes for Druid and Pinot** (`/status/health`, `/health`):
+  the connection pool no longer hands out connections to a dead broker on
+  these backends.
+- **Telemetry no longer writes a persistent `install_id` unless telemetry is
+  actually enabled** for a connection, and the first-run notice is now also
+  printed to stderr, not only the log file.
+
+### Documentation honesty
+- Entry-point count corrected to **104** (the previous "107" double-counted
+  the three W-descriptor functions).
+- `SIMBA_PARITY.md`: the DSN-dialog row no longer claims parity (Argus's
+  `ConfigDSN` is deliberately UI-less), the bottom line no longer contradicts
+  the table (async and catalog have closed), and the TDVT figure is labelled
+  self-measured rather than certified.
+- The three `*_PARAMETERS_COMPARISON.md` files carry status banners correcting
+  their stale Kerberos/OAuth2/async conclusions.
+- The `obs_hooks` tap seam is now disclosed in the README.
 
 ### Telemetry (opt-in, off by default)
 - **Anonymous usage telemetry**, disabled by default and gated behind explicit
