@@ -180,6 +180,70 @@ static void test_ssl_disabled_connects(void **state)
     disconnect(env, dbc);
 }
 
+/*
+ * BACKEND=greenplum against a plain PostgreSQL.
+ *
+ * People do this — a DSN copied between environments, a test cluster that is
+ * not really Greenplum. It must not fail: the connection is perfectly usable
+ * and only the engine-specific half of the catalog is missing. What it must do
+ * is say so, once, with SQL_SUCCESS_WITH_INFO and a 01000 record, and then
+ * behave like the PostgreSQL backend rather than emitting SQL against
+ * gp_distribution_policy and failing every SQLTables call.
+ */
+static void test_mpp_backend_against_plain_postgres(void **state)
+{
+    (void)state;
+
+    const char *backends[] = { "greenplum", "cloudberry" };
+    for (size_t i = 0; i < sizeof(backends) / sizeof(backends[0]); i++) {
+        SQLHENV env = SQL_NULL_HENV;
+        SQLHDBC dbc = SQL_NULL_HDBC;
+
+        assert_int_equal(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env),
+                         SQL_SUCCESS);
+        SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
+        assert_int_equal(SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc), SQL_SUCCESS);
+
+        char conn_str[512];
+        snprintf(conn_str, sizeof(conn_str),
+                 "HOST=%s;PORT=%s;UID=%s;PWD=%s;Backend=%s;Database=%s",
+                 env_or("PG_HOST", "127.0.0.1"), env_or("PG_PORT", "5432"),
+                 env_or("PG_USER", "argus"), env_or("PG_PASS", "argus"),
+                 backends[i], env_or("PG_DB", "argusdb"));
+
+        SQLCHAR out[1024];
+        SQLSMALLINT out_len;
+        SQLRETURN rc = SQLDriverConnect(dbc, NULL, (SQLCHAR *)conn_str, SQL_NTS,
+                                        out, sizeof(out), &out_len,
+                                        SQL_DRIVER_NOPROMPT);
+        assert_int_equal(rc, SQL_SUCCESS_WITH_INFO);
+
+        SQLCHAR state_buf[6] = {0}, msg[512] = {0};
+        SQLINTEGER native = 0;
+        SQLSMALLINT msg_len = 0;
+        assert_int_equal(SQLGetDiagRec(SQL_HANDLE_DBC, dbc, 1, state_buf,
+                                       &native, msg, sizeof(msg), &msg_len),
+                         SQL_SUCCESS);
+        assert_string_equal((char *)state_buf, "01000");
+        assert_non_null(strstr((char *)msg, "PostgreSQL"));
+
+        /* The catalog must still work, degraded to plain-PostgreSQL rules —
+         * still hiding the 24 partition children. */
+        SQLHSTMT stmt = SQL_NULL_HSTMT;
+        assert_int_equal(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt), SQL_SUCCESS);
+        assert_int_equal(SQLTables(stmt, NULL, 0,
+                                   (SQLCHAR *)"argus_test", SQL_NTS,
+                                   (SQLCHAR *)"events%", SQL_NTS,
+                                   NULL, 0), SQL_SUCCESS);
+        long n = 0;
+        while (SQLFetch(stmt) == SQL_SUCCESS) n++;
+        assert_int_equal(n, 1);
+
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        disconnect(env, dbc);
+    }
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -188,6 +252,7 @@ int main(void)
         cmocka_unit_test(test_dbms_name_and_version),
         cmocka_unit_test(test_bad_password_diagnostics),
         cmocka_unit_test(test_ssl_disabled_connects),
+        cmocka_unit_test(test_mpp_backend_against_plain_postgres),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

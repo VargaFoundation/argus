@@ -76,7 +76,7 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | KRBSERVICENAME | SERVICEPRINCIPALNAME | hive/impala | Kerberos SPN service name |
 | KRBHOSTFQDN | KRBHOST | (HOST) | Kerberos SPN host, if it differs from HOST |
 | KRBREALM | REALM | (from krb5.conf) | Explicit Kerberos realm |
-| BACKEND | DRIVER_TYPE | hive | Backend type: hive, impala, trino, phoenix, pinot, druid, bigquery, mysql, postgres, flightsql, kudu |
+| BACKEND | DRIVER_TYPE | hive | Backend type: hive, impala, trino, phoenix, pinot, druid, bigquery, mysql, postgres, greenplum, cloudberry, flightsql, kudu |
 | APPLICATIONNAME | APPNAME | (none) | Client application name reported to the backend |
 | FETCHBUFFERSIZE | | (backend default) | Rows fetched per backend round-trip |
 | SOCKETTIMEOUT | | 0 (none) | Socket I/O timeout in seconds |
@@ -91,6 +91,8 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | trino | 8080 |
 | mysql | 3306 |
 | postgres | 5432 |
+| greenplum | 5432 |
+| cloudberry | 5432 |
 | flightsql | 32010 |
 | pinot | 8000 |
 | druid | 8888 |
@@ -255,6 +257,57 @@ DRIVER=Argus;BACKEND=postgres;HOST=pg.example.com;SSL=1;SSLCAFile=/etc/ssl/certs
   substitutes the literal `default` for an absent database, which is meaningful
   for Hive and is not a database any PostgreSQL has.)
 - Requires a build with libpq (`libpq-dev`); auto-detected at cmake time
+
+### Greenplum and Apache Cloudberry (BACKEND=greenplum / BACKEND=cloudberry)
+
+Both are MPP forks of PostgreSQL and reuse the whole PostgreSQL backend above —
+same wire protocol, same streaming fetch, same type mapping, same dialect. They
+are separate backends because everything a BI tool keys on is the backend name:
+`SQL_DBMS_NAME`, the dialect entry, the Tableau connector, the Power BI backend
+list.
+
+```
+DRIVER=Argus;BACKEND=greenplum;HOST=gp-coordinator;PORT=5432;UID=analyst;PWD={secret};DATABASE=warehouse
+DRIVER=Argus;BACKEND=cloudberry;HOST=cbdb-coordinator;PORT=5432;UID=analyst;PWD={secret};DATABASE=warehouse
+```
+
+What they add over `BACKEND=postgres`:
+
+- **Partition children are hidden from `SQLTables` and `SQLColumns`,** whichever
+  way the server records them — Greenplum 6 partitions are inheritance children
+  recorded in `pg_partition_rule`, Greenplum 7 and Cloudberry use PostgreSQL's
+  declarative partitioning. This is the difference between a connection dialog
+  that opens and one that enumerates tens of thousands of child relations: a
+  fact table partitioned monthly over ten years, times two hundred tables, is
+  ~24,000 relations a driver filtering on `relkind` alone will list.
+  `ARGUS_PG_SHOW_PARTITIONS=1` turns the filter off.
+- **`REMARKS` carries the facts that explain query cost** — the distribution
+  policy (`[DISTRIBUTED BY (customer_id)]`, `[DISTRIBUTED RANDOMLY]`,
+  `[DISTRIBUTED REPLICATED]`), append-optimized and column-oriented storage
+  (`[AO row]`, `[AO column]`), and external-table locations
+  (`[external: gpfdist]`). Tableau and Power BI both show `REMARKS` as the table
+  description, so an analyst can see why a join shuffles.
+- External tables (gpfdist, PXF, and the FDW form Greenplum 7 and Cloudberry
+  use) are reported as `TABLE`, because that is what a BI tool can query.
+
+Which catalogs the driver reads is decided by **probing the server at connect**,
+not by the version string: one query asks whether `gp_distribution_policy`,
+`pg_appendonly`, `pg_exttable` and `pg_class.relispartition` actually exist.
+That means a catalog call can never fail with "relation gp_… does not exist",
+and pointing `BACKEND=greenplum` at a plain PostgreSQL degrades to PostgreSQL
+behaviour with a `01000` warning at connect rather than breaking `SQLTables`.
+
+> **Verification status.** Neither Greenplum nor Cloudberry has a maintained,
+> pullable public container image, so the MPP catalog SQL has **not** been run
+> against a real cluster. It is exercised against a simulated Greenplum catalog
+> built on PostgreSQL (`tests/integration/test_pg_mpp_sim.c`), which proves the
+> SQL parses and the logic is right, and the dialect tables are inherited from
+> PostgreSQL rather than independently verified — the header of
+> `src/odbc/dialect.c` records exactly this. To verify against your own cluster:
+> ```
+> PG_BACKEND=greenplum PG_HOST=coordinator PG_PORT=5432 ./test_postgres_escapes
+> BI_BACKEND=greenplum BI_HOST=coordinator BI_PORT=5432 ./test_bi_escapes
+> ```
 
 ### Arrow Flight SQL (BACKEND=flightsql)
 

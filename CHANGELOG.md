@@ -4,6 +4,38 @@ All notable changes to the Argus ODBC Driver project.
 
 ## [Unreleased]
 
+### Greenplum and Apache Cloudberry backends (`BACKEND=greenplum` / `cloudberry`)
+- **Two MPP backends over the same libpq core**, with their own vtables,
+  dialect entries and `SQL_DBMS_NAME` so a BI tool can name the engine it is
+  talking to.
+- **Partition children are hidden from `SQLTables`/`SQLColumns` on both catalog
+  layouts** — Greenplum 6's inheritance plus `pg_partition_rule`, and Greenplum
+  7 / Cloudberry's declarative partitioning. A warehouse with a few hundred
+  monthly-partitioned fact tables is tens of thousands of child relations that a
+  driver filtering on `relkind` alone puts in the connection dialog.
+- **`REMARKS` carries the distribution policy, append-optimized storage and
+  external-table location** — `[DISTRIBUTED BY (customer_id)]`, `[AO column]`,
+  `[external: gpfdist]`. Both BI tools display it as the table description.
+- **Catalog SQL is chosen by probing the server, not by its version string.**
+  One connect-time query asks whether `gp_distribution_policy`, `pg_appendonly`,
+  `pg_exttable` and `pg_class.relispartition` exist, so a catalog call can never
+  fail with "relation gp_… does not exist" and pointing `BACKEND=greenplum` at a
+  plain PostgreSQL degrades to PostgreSQL behaviour with a `01000` warning
+  rather than breaking `SQLTables`.
+- `SQLDriverConnect` now returns **`SQL_SUCCESS_WITH_INFO`** when a successful
+  connect left diagnostics, instead of swallowing them behind `SQL_SUCCESS`.
+  Scoped to records the successful attempt itself produced, so failover still
+  reports plain success.
+- **Verification status, stated plainly:** neither engine has a maintained
+  public container image, so the MPP catalog SQL has not been run against a real
+  cluster. It is exercised against a *simulated* Greenplum catalog built on
+  PostgreSQL (`tests/integration/test_pg_mpp_sim.c` — same relation and column
+  names and types), which proves the SQL parses and the logic holds, including
+  the int2vector `distkey` decoding and declaration-order distribution keys. The
+  dialect tables are inherited from PostgreSQL and marked not-live-verified in
+  the header of `src/odbc/dialect.c`. Compose services exist behind
+  `--profile greenplum` / `--profile cloudberry`.
+
 ### PostgreSQL backend (`BACKEND=postgres`)
 - **New backend over the PostgreSQL wire protocol** (libpq), auto-detected at
   configure time from `libpq-dev`. Shares a core (`src/backend/pgcommon/`) with

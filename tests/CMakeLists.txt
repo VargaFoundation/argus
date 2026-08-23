@@ -193,6 +193,27 @@ if(BUILD_INTEGRATION_TESTS)
         argus_add_integration_test(test_postgres_connect integration/test_postgres_connect.c)
         argus_add_integration_test(test_postgres_query integration/test_postgres_query.c)
         argus_add_integration_test(test_postgres_escapes integration/test_postgres_escapes.c)
+
+        # The Greenplum/Cloudberry catalog SQL, exercised against a simulated
+        # Greenplum catalog built on plain PostgreSQL. Links the static library
+        # (and libpq directly) because it calls the fragment builders, which
+        # the shared driver does not export.
+        add_executable(test_pg_mpp_sim integration/test_pg_mpp_sim.c)
+        target_include_directories(test_pg_mpp_sim PRIVATE
+            ${PROJECT_SOURCE_DIR}/include
+            ${PROJECT_SOURCE_DIR}/src/backend/pgcommon
+            ${ODBC_INCLUDE_DIRS}
+            ${CMOCKA_INCLUDE_DIRS}
+            ${GLIB2_INCLUDE_DIRS}
+            ${LIBPQ_INCLUDE_DIRS}
+        )
+        target_link_libraries(test_pg_mpp_sim PRIVATE
+            argus_odbc_static ${CMOCKA_LIBRARIES} ${LIBPQ_LIBRARIES} stdc++)
+        target_link_directories(test_pg_mpp_sim PRIVATE
+            ${CMOCKA_LIBRARY_DIRS} ${LIBPQ_LIBRARY_DIRS})
+        target_compile_definitions(test_pg_mpp_sim PRIVATE ARGUS_STATIC)
+        add_test(NAME test_pg_mpp_sim COMMAND test_pg_mpp_sim)
+        set_tests_properties(test_pg_mpp_sim PROPERTIES LABELS "integration")
     endif()
 
     # Arrow Flight SQL backend (InfluxDB 3 service; also covers Dremio/Doris)

@@ -304,7 +304,10 @@ if(ARGUS_BUILD_POSTGRES)
         backend/pgcommon/pg_probe.c
         backend/pgcommon/pg_meta_util.c
         backend/pgcommon/pg_metadata_base.c
+        backend/pgcommon/pg_mpp.c
         backend/postgres/pg_backend.c
+        backend/greenplum/gp_backend.c
+        backend/cloudberry/cb_backend.c
     )
     list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
         ${CMAKE_CURRENT_SOURCE_DIR}/backend/pgcommon

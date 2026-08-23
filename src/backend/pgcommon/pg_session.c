@@ -224,6 +224,8 @@ void pg_disconnect(argus_backend_conn_t raw_conn)
     if (!conn) return;
     if (conn->pg) PQfinish(conn->pg);
     free(conn->database);
+    g_free(conn->mpp_remarks_expr);
+    g_free(conn->mpp_tables_filter);
     free(conn);
 }
 

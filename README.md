@@ -3,14 +3,14 @@
 [![CI](https://github.com/VargaFoundation/argus/actions/workflows/ci.yml/badge.svg)](https://github.com/VargaFoundation/argus/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/VargaFoundation/argus/actions/workflows/codeql.yml/badge.svg)](https://github.com/VargaFoundation/argus/actions/workflows/codeql.yml)
 
-Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix, Pinot, Druid, Kudu, MySQL-wire (StarRocks/Doris/ClickHouse), PostgreSQL and Arrow Flight SQL (Dremio/InfluxDB 3) — with comprehensive logging, SSL/TLS, OAuth2 and an Arrow ADBC surface built over the same stack.
+Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix, Pinot, Druid, Kudu, MySQL-wire (StarRocks/Doris/ClickHouse), PostgreSQL, Greenplum, Apache Cloudberry and Arrow Flight SQL (Dremio/InfluxDB 3) — with comprehensive logging, SSL/TLS, OAuth2 and an Arrow ADBC surface built over the same stack.
 
 ## Features
 
 ### Core ODBC Support
 - **107 ODBC entry points** (ANSI + Unicode `W` variants) — ODBC 3.80, **Level 1 interface conformance** (`SQL_OIC_LEVEL1`, SQL-92 Entry), plus ODBC 2.x compatibility (`SQLAllocConnect`, `SQLError`, `SQLExtendedFetch`, ...). This matches the commercial Simba/Starburst drivers for these engines; stored procedures and transactions — the two OLTP features Level 1 also names — are reported absent (`SQL_PROCEDURES="N"`, `SQL_TXN_CAPABLE=SQL_TC_NONE`), as they are on Trino/BigQuery/Hive themselves.
 - **Statement-level asynchronous execution** (`SQL_ASYNC_MODE = SQL_AM_STATEMENT`): async `SQLExecDirect`/`SQLExecute` on a worker thread, with `SQLCompleteAsync` and `SQLCancelHandle` (ODBC 3.8).
-- **11 backends**, enabled by dependency auto-detection at configure time
+- **13 backends**, enabled by dependency auto-detection at configure time
 - **Cross-platform**: Linux, macOS and Windows x64
 - **Arrow ADBC driver** (`libargus_adbc`) exposing the same backends through the Arrow C Data Interface
 
@@ -27,6 +27,8 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 | `bigquery` | Google BigQuery — incl. sovereign clouds (S3NS): every Google endpoint is configurable | REST/JSON | libcurl + json-glib (+ OpenSSL for key files) | yes |
 | `mysql` | StarRocks / Doris / ClickHouse / MySQL / MariaDB | MySQL wire | libmariadb | yes |
 | `postgres` | PostgreSQL | PostgreSQL wire | libpq | yes |
+| `greenplum` | VMware/Broadcom Greenplum 6 and 7 | PostgreSQL wire | libpq | yes |
+| `cloudberry` | Apache Cloudberry | PostgreSQL wire | libpq | yes |
 | `flightsql` | Dremio / InfluxDB 3 / any Arrow Flight SQL server | gRPC / Arrow | arrow-flight-sql (C++) | no |
 | `kudu` | Apache Kudu (deprecated — prefer `BACKEND=impala`) | kudu_client | libkudu_client | no |
 
@@ -80,7 +82,7 @@ inspection of real Simba binaries and a live Tableau TDVT run, is in
 
 | | **Argus** | Simba / Starburst (per engine) | Generic *Other Databases (ODBC)* |
 |---|---|---|---|
-| Engines per driver | **10 in one binary** | one driver per engine | any, but dialect-blind |
+| Engines per driver | **13 in one binary** | one driver per engine | any, but dialect-blind |
 | Licensing | **open** (Varga Foundation) | proprietary, per-seat | bundled |
 | ODBC level | 3.8, Level 1, SQL-92 Entry | 3.8, Level 1/2 | depends on driver |
 | Exported ODBC entry points | **107** | 89 (SimbaEngine core) | n/a |
@@ -180,7 +182,7 @@ HOST=localhost;PORT=10000;UID=myuser;PWD=mypass;DATABASE=default;BACKEND=hive
 | **UID** / USERNAME | Username | `admin` | `` |
 | **PWD** / PASSWORD | Password | `secret` | `` |
 | **DATABASE** / SCHEMA | Database name | `mydb` | `default` |
-| **BACKEND** | `hive`, `impala`, `trino`, `phoenix`, `pinot`, `druid`, `bigquery`, `mysql`, `postgres`, `flightsql`, `kudu` | `trino` | `hive` |
+| **BACKEND** | `hive`, `impala`, `trino`, `phoenix`, `pinot`, `druid`, `bigquery`, `mysql`, `postgres`, `greenplum`, `cloudberry`, `flightsql`, `kudu` | `trino` | `hive` |
 | **SSL** / UseSSL | Enable SSL | `1`, `true` | `false` |
 | **SSLCertFile** | Client certificate | `/path/cert.pem` | - |
 | **SSLKeyFile** | Client key | `/path/key.pem` | - |

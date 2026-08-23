@@ -38,6 +38,8 @@ extern const argus_backend_t *argus_bigquery_backend_get(void);
 #endif
 #ifdef ARGUS_HAS_POSTGRES
 extern const argus_backend_t *argus_postgres_backend_get(void);
+extern const argus_backend_t *argus_greenplum_backend_get(void);
+extern const argus_backend_t *argus_cloudberry_backend_get(void);
 #endif
 
 void argus_backend_register(const argus_backend_t *backend)
@@ -101,5 +103,7 @@ void argus_backends_init(void)
 #endif
 #ifdef ARGUS_HAS_POSTGRES
     argus_backend_register(argus_postgres_backend_get());
+    argus_backend_register(argus_greenplum_backend_get());
+    argus_backend_register(argus_cloudberry_backend_get());
 #endif
 }

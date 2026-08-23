@@ -18,27 +18,14 @@
  * filters on relkind alone and returns all of them, which is why a partitioned
  * schema makes its connection dialog crawl.
  *
- * relispartition is PostgreSQL 10 and later. The pg_inherits test covers
- * classic inheritance and works on every version, so both are applied and 9.x
- * still gets the right answer.
+ * The predicate itself is shared with the MPP backends (pg_mpp.c) because the
+ * PostgreSQL half of it is identical; which tests it uses comes from the
+ * connect-time probe, not from a version comparison.
  */
-static const char *postgres_tables_filter(const struct pg_conn *conn)
-{
-    if (conn && conn->show_partitions) return NULL;
-
-    if (conn && conn->pg_major >= 10)
-        return " AND NOT c.relispartition"
-               " AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i"
-               " WHERE i.inhrelid = c.oid)";
-
-    return " AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i"
-           " WHERE i.inhrelid = c.oid)";
-}
-
 static const pg_profile_t postgres_profile = {
     .engine        = PG_ENGINE_POSTGRES,
     .backend_name  = "postgres",
-    .tables_filter = postgres_tables_filter,
+    .tables_filter = pg_plain_tables_filter,
     .remarks_expr  = NULL,     /* plain obj_description */
 };
 

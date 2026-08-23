@@ -90,8 +90,33 @@ int pg_probe_identity(pg_conn_t *conn)
     conn->engine_major = 0;
     conn->version_str[0] = '\0';
 
+    /*
+     * One round trip settles both questions: which engine this is, and which
+     * of the fork-specific catalog objects it actually has. to_regclass
+     * returns NULL rather than raising for a missing relation (9.4+, so
+     * Greenplum 6 is covered), and pg_attribute answers the column questions,
+     * so nothing here can fail on an engine that lacks any of it.
+     */
     PGresult *res = PQexec(conn->pg,
-        "SELECT version(), current_setting('server_version_num')");
+        "SELECT version(), current_setting('server_version_num'), "
+        "to_regclass('pg_catalog.gp_distribution_policy') IS NOT NULL, "
+        "to_regclass('pg_catalog.pg_appendonly') IS NOT NULL, "
+        /* pg_exttable is only useful if it has the column the REMARKS
+         * fragment reads: Greenplum 5 called it location, 6 urilocation. */
+        "EXISTS (SELECT 1 FROM pg_catalog.pg_attribute "
+                "WHERE attrelid = to_regclass('pg_catalog.pg_exttable') "
+                "AND attname = 'urilocation' AND NOT attisdropped), "
+        "to_regclass('pg_catalog.pg_partition_rule') IS NOT NULL, "
+        "EXISTS (SELECT 1 FROM pg_catalog.pg_attribute "
+                "WHERE attrelid = 'pg_catalog.pg_class'::regclass "
+                "AND attname = 'relispartition' AND NOT attisdropped), "
+        "EXISTS (SELECT 1 FROM pg_catalog.pg_attribute "
+                "WHERE attrelid = 'pg_catalog.pg_class'::regclass "
+                "AND attname = 'relam' AND NOT attisdropped), "
+        /* Greenplum 5 called it attrnums, Greenplum 6 onward distkey. */
+        "EXISTS (SELECT 1 FROM pg_catalog.pg_attribute "
+                "WHERE attrelid = to_regclass('pg_catalog.gp_distribution_policy') "
+                "AND attname = 'distkey' AND NOT attisdropped)");
     if (!res || PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) < 1) {
         if (res) PQclear(res);
         ARGUS_LOG_WARN("PostgreSQL: identity probe failed; "
@@ -101,6 +126,14 @@ int pg_probe_identity(pg_conn_t *conn)
 
     const char *banner = PQgetvalue(res, 0, 0);
     const char *vernum = PQgetvalue(res, 0, 1);
+
+    conn->has_gp_policy          = (PQgetvalue(res, 0, 2)[0] == 't');
+    conn->has_pg_appendonly      = (PQgetvalue(res, 0, 3)[0] == 't');
+    conn->has_pg_exttable        = (PQgetvalue(res, 0, 4)[0] == 't');
+    conn->has_partition_rule     = (PQgetvalue(res, 0, 5)[0] == 't');
+    conn->has_relispartition     = (PQgetvalue(res, 0, 6)[0] == 't');
+    conn->has_relam              = (PQgetvalue(res, 0, 7)[0] == 't');
+    conn->has_gp_policy_distkey  = (PQgetvalue(res, 0, 8)[0] == 't');
 
     /* server_version_num is MMmmpp on 9.x (90426) and MMpppp from 10 on
      * (160015); dividing by 10000 yields the major in both encodings. */

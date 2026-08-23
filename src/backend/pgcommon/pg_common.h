@@ -73,10 +73,34 @@ typedef struct pg_conn {
     int          pg_major;       /* PostgreSQL major underneath (server_version_num) */
     char         version_str[128]; /* engine version for SQL_DBMS_VER */
 
+    /*
+     * What this particular server's catalog actually contains.
+     *
+     * Greenplum 6, Greenplum 7 and Cloudberry do not agree on where partition
+     * children, distribution policies and append-optimized storage are
+     * recorded, and the engine version alone does not settle it — a fork can
+     * carry a catalog its base version did not, or drop one. Probing for the
+     * relations and columns directly costs one round trip at connect and means
+     * a catalog query can never fail with "relation gp_… does not exist",
+     * which is the failure mode of writing the SQL from documentation.
+     */
+    bool         has_gp_policy;      /* gp_distribution_policy               */
+    bool         has_gp_policy_distkey; /* …with the GP6+ distkey column     */
+    bool         has_pg_appendonly;  /* pg_appendonly (GP6 and GP7)          */
+    bool         has_pg_exttable;    /* pg_exttable WITH urilocation (GP6)   */
+    bool         has_partition_rule; /* pg_partition_rule (GP6 partitioning) */
+    bool         has_relispartition; /* pg_class.relispartition (PG10+/GP7)  */
+    bool         has_relam;          /* pg_class.relam (PG12+/GP7/CBDB)      */
+
     char        *database;
     int          fetch_batch;    /* rows per streaming chunk (FetchBufferSize) */
     bool         show_partitions;/* SHOWPARTITIONS=1: stop hiding child partitions */
     bool         use_copy;       /* COPY BINARY fast path allowed */
+
+    /* SQL fragments assembled once from the probe flags above, because they
+     * are rebuilt on every catalog call otherwise. Owned by the connection. */
+    char        *mpp_remarks_expr;
+    char        *mpp_tables_filter;
 
     /* Most recent server error, kept for get_last_error() and so the ODBC
      * layer can surface PostgreSQL's own SQLSTATE instead of a made-up one. */
@@ -200,6 +224,20 @@ uint8_t     pg_native_kind(Oid oid);
 /* SQLGetTypeInfo, synthesised as a UNION ALL of literal rows. */
 int         pg_get_type_info(argus_backend_conn_t conn, SQLSMALLINT sql_type,
                              argus_backend_op_t *out_op);
+
+/* ── pg_mpp.c ────────────────────────────────────────────────────
+ * The catalog fragments Greenplum and Cloudberry share. Both are MPP forks of
+ * PostgreSQL with the same three questions to answer — which relations are
+ * partition children, how a table is distributed, and how it is stored — so
+ * the builders live here and each engine's profile decides whether to use
+ * them. Everything they emit is gated on the probe flags, so a fragment can
+ * never reference a catalog the server does not have. */
+
+const char *pg_mpp_tables_filter(const struct pg_conn *conn);
+const char *pg_mpp_remarks_expr(const struct pg_conn *conn);
+/* The plain-PostgreSQL filter, used by the postgres profile and as the
+ * fallback when an MPP backend finds itself talking to vanilla PostgreSQL. */
+const char *pg_plain_tables_filter(const struct pg_conn *conn);
 
 /* ── pg_metadata_base.c ──────────────────────────────────────────
  * The catalog queries that are identical on all three engines; the
