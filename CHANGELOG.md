@@ -4,6 +4,26 @@ All notable changes to the Argus ODBC Driver project.
 
 ## [Unreleased]
 
+### BI connectors
+- **Power BI**: `postgres`, `greenplum` and `cloudberry` added to the connector's
+  backend list. They stay out of `AnsiOffsetBackends` — PostgreSQL has accepted
+  ANSI `OFFSET…FETCH` since 8.4 and either form folds, but `LIMIT…OFFSET` is what
+  a user recognises in `pg_stat_activity`, is safe on Greenplum 6's
+  PostgreSQL 9.4-era planner, and is the better-exercised Power Query path.
+  `FractionalSecondsScale` becomes per-backend: 6 for the PostgreSQL family,
+  because reporting 3 against a `timestamp(6)` column silently truncates a
+  pushed-down predicate and folds to the wrong rows.
+- **Tableau**: three new connectors, `argus-postgres`, `argus-greenplum` and
+  `argus-cloudberry`. They are the only Argus connectors that enable both
+  namespace levels and that do **not** suppress transactions, `SQLStatistics` or
+  `SQLForeignKeys` — those are real on these backends, and the last two are how
+  Tableau discovers join keys and cardinality. Base dialect is
+  `PostgreSQL91Dialect`, deliberately not newer: Greenplum 6 is PostgreSQL 9.4.
+  Temporary tables are left disabled despite PostgreSQL supporting them, because
+  the customization could not be run through TDVT here and an untested "yes"
+  breaks a workbook at refresh time. All eight connectors validate against
+  Tableau's XSDs.
+
 ### Performance, measured
 - **PostgreSQL fetch measured against psqlODBC** on the same server, query and
   client loop: **727 k rows/s vs 391 k** (1.5 M rows × 9 columns), with peak RSS

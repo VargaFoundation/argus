@@ -16,9 +16,10 @@ Druid, Pinot, TDengine, Arrow Flight SQL).
 
 Argus est un driver ODBC open-source en C11 (~26 000 LOC + ~8 800 LOC de tests)
 connectant les outils BI à des moteurs SQL big-data via une architecture à deux couches
-(API ODBC `src/odbc/` + backends pluggables `src/backend/`). Neuf backends existent :
+(API ODBC `src/odbc/` + backends pluggables `src/backend/`). Douze backends existent :
 Hive, Impala (Thrift CLI), Trino, Phoenix, Pinot, Druid (HTTP/JSON), MySQL-wire
-(StarRocks/Doris/ClickHouse), Arrow Flight SQL (Dremio/InfluxDB 3) et Kudu (client C++
+(StarRocks/Doris/ClickHouse), PostgreSQL, Greenplum, Apache Cloudberry (protocole
+PostgreSQL via libpq), Arrow Flight SQL (Dremio/InfluxDB 3) et Kudu (client C++
 natif, déprécié — préférer `BACKEND=impala`). Une surface Arrow ADBC est bâtie sur la
 même pile.
 
@@ -73,10 +74,18 @@ sécurisés et sur la BI cloud. C'est la priorité absolue de la roadmap.
   `SQLSetPos` partiel (`SQL_POSITION`/`SQL_REFRESH` seulement) ; async partiel ;
   `SQLDescribeParam` stub (et `SQL_DESCRIBE_PARAMETER` répond désormais `"N"`) ;
   `SQL_DBMS_VER` codé en dur faute de hook backend pour interroger la version
-  serveur ; `SQLForeignKeys`/`SQLProcedures`/`SQL*Privileges`/`SQLSpecialColumns`
-  renvoient toujours un result set vide (aucun hook dans la vtable).
-  `get_statistics` n'existe que pour Trino ; `get_primary_keys` couvre Hive,
-  Impala, Trino, Phoenix, Kudu, MySQL-wire et Flight SQL.
+  serveur.
+  **Corrigé depuis** pour la famille PostgreSQL : `SQLForeignKeys`,
+  `SQLProcedures`, `SQLProcedureColumns`, `SQL*Privileges` et
+  `SQLSpecialColumns` ont désormais des hooks optionnels dans la vtable et
+  renvoient de vraies données depuis `pg_catalog` ; les dix autres backends
+  gardent le result set vide, qui reste la bonne réponse pour un moteur qui
+  n'a pas ces objets. Les transactions sont réelles là où le moteur en a
+  (`SQL_TXN_CAPABLE` par backend via `argus_backend_caps_t`), `SQLDescribeParam`
+  interroge le serveur, et les SQLSTATE serveur remontent tels quels.
+  `get_statistics` couvre Trino et la famille PostgreSQL ; `get_primary_keys`
+  couvre Hive, Impala, Trino, Phoenix, Kudu, MySQL-wire, Flight SQL et
+  PostgreSQL.
   **Corrigé depuis** : le driver traduit les escape sequences ODBC
   (`src/odbc/escape.c`) — il annonçait 48 fonctions scalaires sans en traduire
   aucune, ce qui cassait Tableau/Excel/Qlik ; les bitmaps `SQLGetInfo` dérivent
@@ -138,6 +147,7 @@ sécurisés et sur la BI cloud. C'est la priorité absolue de la roadmap.
 | **Apache Pinot** | backend HTTP/JSON neuf | infra curl+json-glib | Moyen-élevé | Moyenne (plus gros manque OSS ODBC) |
 | **Arrow Flight SQL** | backend gRPC/Arrow → Dremio, InfluxDB 3, Doris, StarRocks | rien (nouvelle dépendance Arrow/Flight) | Élevé | Élevée (modernité, futur ADBC) |
 | **TDengine** | propre protocole natif/WebSocket | rien | Élevé | Faible (niche, driver déjà fourni par l'éditeur) |
+| **PostgreSQL / Greenplum / Cloudberry** ✅ *livré* | nouveau backend **protocole PostgreSQL** (libpq) | rien (lib `libpq`) | Moyen | **Très élevée** (3 moteurs ; Greenplum et Cloudberry n'ont aucun connecteur Power BI natif, et psqlODBC ignore leur catalogue) |
 
 > **Note** : **Spark Connect (gRPC, Spark 4.0) n'est PAS adressable en ODBC** — c'est une
 > API DataFrame, pas un wire protocol SQL. Le seul chemin ODBC vers Spark reste le Thrift

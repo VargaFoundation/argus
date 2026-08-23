@@ -27,9 +27,24 @@ DriverName = "Argus ODBC Driver";
 // report which engine it actually reached.
 AnsiOffsetBackends = {"trino"};
 
+// The PostgreSQL family is deliberately NOT in the list above, and it is a
+// closer call than the others. PostgreSQL has accepted ANSI
+// OFFSET…FETCH since 8.4 and the planner treats the two forms identically, so
+// either would fold. LIMIT…OFFSET wins on three counts: it is the form every
+// PostgreSQL user recognises in pg_stat_activity and a slow-query log; it is
+// the safe one on Greenplum 6, whose planner is PostgreSQL 9.4-era; and it is
+// the more heavily exercised path in Power Query itself.
+//
+// Backends whose timestamps carry microseconds rather than milliseconds.
+// FractionalSecondsScale drives how Power Query renders a timestamp literal it
+// pushes down, so reporting 3 against a PostgreSQL timestamp(6) column silently
+// truncates the predicate and the fold returns the wrong rows.
+MicrosecondBackends = {"postgres", "greenplum", "cloudberry"};
+
 BackendList = {
     "hive", "impala", "trino", "phoenix", "pinot",
-    "druid", "mysql", "bigquery", "flightsql", "kudu"
+    "druid", "mysql", "bigquery", "postgres", "greenplum", "cloudberry",
+    "flightsql", "kudu"
 };
 
 [DataSource.Kind = "Argus", Publish = "Argus.Publish"]
@@ -122,7 +137,9 @@ ArgusImpl = (Host as text, Port as number, Backend as text,
                 LimitClauseKind = LimitKind,
                 // GROUP BY may reference any SELECT column (SQL_GB_GROUP_BY_CONTAINS_SELECT).
                 GroupByCapabilities = 2,
-                FractionalSecondsScale = 3,
+                FractionalSecondsScale =
+                    if List.Contains(MicrosecondBackends, Backend)
+                    then 6 else 3,
                 SupportsNumericLiterals = true,
                 SupportsStringLiterals = true,
                 SupportsOdbcDateLiterals = true,
@@ -162,7 +179,9 @@ Argus = [
     Authentication = [
         // Trino/Presto without auth, and other open backends.
         Anonymous = [],
-        // Username/password (Trino LDAP, StarRocks/Doris/ClickHouse, Hive PLAIN).
+        // Username/password (Trino LDAP, StarRocks/Doris/ClickHouse, Hive PLAIN,
+        // and the PostgreSQL family, where libpq negotiates SCRAM-SHA-256 or
+        // md5 from the server's challenge with nothing to configure).
         UsernamePassword = [],
         // Kerberos via native SSPI on a domain-joined Windows host.
         Windows = []

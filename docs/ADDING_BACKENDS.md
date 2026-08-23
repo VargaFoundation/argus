@@ -157,11 +157,33 @@ DRIVER=Argus;Backend=mybackend;HOST=my-host;PORT=12345;...
 
 ## Backend Differences
 
-| Feature | Hive | Impala | Trino |
-|---------|------|--------|-------|
-| Protocol | Thrift (TCLIService) | Thrift (TCLIService) | REST (HTTP/JSON) |
-| Default Port | 10000 | 21050 | 8080 |
-| Protocol Version | V10 | V6 | N/A |
-| Auth | NOSASL, PLAIN | NOSASL, PLAIN | HTTP headers |
-| Catalog | Hive Metastore | Hive Metastore | information_schema |
-| Dependencies | thrift_c_glib | thrift_c_glib | libcurl, json-glib |
+| Feature | Hive | Impala | Trino | PostgreSQL family |
+|---------|------|--------|-------|-------------------|
+| Protocol | Thrift (TCLIService) | Thrift (TCLIService) | REST (HTTP/JSON) | PostgreSQL wire v3 |
+| Default Port | 10000 | 21050 | 8080 | 5432 |
+| Protocol Version | V10 | V6 | N/A | v3 |
+| Auth | NOSASL, PLAIN | NOSASL, PLAIN | HTTP headers | SCRAM/md5/GSSAPI (libpq) |
+| Catalog | Hive Metastore | Hive Metastore | information_schema | pg_catalog |
+| Dependencies | thrift_c_glib | thrift_c_glib | libcurl, json-glib | libpq |
+
+### PostgreSQL family (`src/backend/pgcommon/` + `postgres/`, `greenplum/`, `cloudberry/`)
+
+Three registered backends over one libpq core, and the worked example of the
+optional half of the vtable. Worth reading before adding a backend for an engine
+that has more than the analytics engines do:
+
+- the shared core owns the wire plumbing (session, streaming fetch, error
+  mapping, transactions, the base catalog queries); each engine directory owns
+  only its vtable, its capability descriptor and what genuinely differs —
+  Greenplum's partition-child filter and distribution metadata;
+- it is the only backend that implements the optional hooks: `get_foreign_keys`,
+  `get_special_columns`, `get_procedures`, `get_procedure_columns`, the two
+  privilege hooks, `set_autocommit`/`end_transaction`/`set_isolation`,
+  `reset_session`, `describe_params` and `get_last_error_ex`. Every one of them
+  is NULL on the other ten backends, and the ODBC layer's behaviour there is
+  unchanged;
+- it is the only backend with an `argus_backend_caps_t` beyond a display name
+  (`include/argus/caps.h`), which is how it reports real transactions and a real
+  schema level without moving anyone else's answers;
+- catalog filters go through `PQescapeLiteral`, not `snprintf("%s")`. Do not
+  copy the interpolation the older backends use.
