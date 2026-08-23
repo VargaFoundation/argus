@@ -56,24 +56,25 @@ All notable changes to the Argus ODBC Driver project.
   Tableau's XSDs.
 
 ### Fixed
+- **Memory leak in every backend's fetch path.** `argus_row_cache_clear()` kept
+  the row array on the theory that the next batch would reuse it, but no
+  backend ever did: each assigns `cache->rows` unconditionally on entry to
+  `fetch_results`, so the array was overwritten and leaked — one per batch,
+  8 KB at the default `FetchBufferSize`, ~8 MB per million rows. Invisible on a
+  single-batch result and steady growth in a long-lived BI process. The cache
+  now owns and releases its row array, which makes all thirteen backends
+  correct without touching any of them; the ones that grow the array with
+  realloc see NULL/0 and allocate. Found by running the PostgreSQL integration
+  suite under AddressSanitizer, and audited across every backend before the
+  shared helper was changed. Also frees `cursor_name` in the wide-API test's
+  fake statement, so the whole suite is ASan-clean.
 - **Memory leak in the PostgreSQL fetch path.** `pg_fetch_results` allocated a
   fresh row array on every call, but `argus_row_cache_clear()` deliberately
   keeps the array it already has — so every batch after the first leaked one
   array (8 KB at the default `FetchBufferSize`, ~8 MB per million rows). Found
-  by running the integration suite under AddressSanitizer; the suite is now
-  ASan-clean.
+  the same root cause as above, fixed first locally and then centrally.
 - `SQL_ATTR_TXN_ISOLATION` on a backend with no isolation hook fell off the end
   of `SQLSetConnectAttr` instead of returning HY092.
-
-### Known issue (pre-existing, not introduced here)
-- The same row-array pattern appears in the hive, impala, trino, phoenix, mysql
-  and kudu fetch paths: each allocates `cache->rows` unconditionally while
-  `argus_row_cache_clear()` preserves the previous array, so a multi-batch fetch
-  leaks one array per batch. The central fix — freeing the array in
-  `argus_row_cache_clear()` — is a one-line change, but several backends hand
-  the cache a row array they built themselves, and confirming each of those
-  transfers ownership rather than sharing it needs those engines running. Left
-  alone rather than changed blind; the PostgreSQL family is fixed locally above.
 
 ### Performance, measured
 - **PostgreSQL fetch measured against psqlODBC** on the same server, query and

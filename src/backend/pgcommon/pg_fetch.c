@@ -219,25 +219,16 @@ int pg_fetch_results(argus_backend_conn_t raw_conn, argus_backend_op_t raw_op,
     int batch = (max_rows > 0) ? max_rows : conn->fetch_batch;
     if (batch <= 0) batch = ARGUS_DEFAULT_BATCH_SIZE;
 
-    /*
-     * Reuse the row array the cache already holds.
-     *
-     * argus_row_cache_clear() frees the cells but deliberately keeps the array
-     * and its capacity (src/odbc/fetch.c), so allocating a fresh one here would
-     * leak the previous batch's array on every call after the first — invisible
-     * on a single-batch result and 8 KB per batch on a large extract.
-     */
-    if (cache->capacity < (size_t)batch || !cache->rows) {
-        free(cache->rows);
-        cache->rows = calloc((size_t)batch, sizeof(argus_row_t));
-        if (!cache->rows) {
-            cache->capacity = 0;
-            return -1;
-        }
-        cache->capacity = (size_t)batch;
-    } else {
-        memset(cache->rows, 0, cache->capacity * sizeof(argus_row_t));
+    /* The cache owns its row array and argus_row_cache_clear() released the
+     * previous one, so this is an allocation rather than a leak — the same
+     * shape every other backend uses. */
+    free(cache->rows);
+    cache->rows = calloc((size_t)batch, sizeof(argus_row_t));
+    if (!cache->rows) {
+        cache->capacity = 0;
+        return -1;
     }
+    cache->capacity = (size_t)batch;
     cache->num_cols = ncols;
 
     size_t filled = 0;

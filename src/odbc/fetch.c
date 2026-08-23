@@ -40,16 +40,38 @@ void argus_row_cache_free(argus_row_cache_t *cache)
     memset(cache, 0, sizeof(*cache));
 }
 
+/*
+ * Empty the cache, including the row array itself.
+ *
+ * This used to keep the array and its capacity, on the theory that the next
+ * batch could reuse it — but no backend ever did. Every one of them assigns
+ * cache->rows unconditionally on entry to fetch_results (a fresh calloc, or a
+ * hand-over from an operation that then nulls its own pointer), so the array
+ * kept here was simply overwritten and leaked: one array per batch, 8 KB at
+ * the default FetchBufferSize, ~8 MB per million rows fetched. Invisible on a
+ * single-batch result and steady growth in a long-lived BI process.
+ *
+ * Freeing it here makes the rule uniform and unsurprising — the cache owns its
+ * row array, and clearing the cache releases it — and every existing backend
+ * becomes correct without touching any of them. The ones that grow the array
+ * with realloc see rows == NULL and capacity == 0, which realloc handles as a
+ * plain allocation. num_cols and the exhausted flag are still preserved: the
+ * first is needed to free the cells above, and the second is the caller's
+ * state, not the array's.
+ */
 void argus_row_cache_clear(argus_row_cache_t *cache)
 {
     if (cache->rows) {
         for (size_t i = 0; i < cache->num_rows; i++) {
             free_row(&cache->rows[i], cache->num_cols);
         }
+        free(cache->rows);
+        cache->rows = NULL;
     }
     cache->num_rows    = 0;
+    cache->capacity    = 0;
     cache->current_row = 0;
-    /* Keep allocated capacity, num_cols, and exhausted flag */
+    /* Keep num_cols and the exhausted flag */
 }
 
 /* ── Internal: fetch a batch from backend ─────────────────────── */
