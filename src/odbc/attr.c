@@ -149,8 +149,16 @@ SQLRETURN SQL_API SQLSetConnectAttr(
      * ignoring it would be worse than refusing it.
      */
     case SQL_ATTR_TXN_ISOLATION: {
-        if (!dbc->connected || !dbc->backend || !dbc->backend->set_isolation)
-            break;      /* falls through to the HY092 default */
+        /* No hook: keep the HY092 the default case has always returned.
+         * Accepting the attribute and then ignoring it would be worse than
+         * refusing it — an application would believe it got the isolation
+         * level it asked for. */
+        if (!dbc->connected || !dbc->backend || !dbc->backend->set_isolation) {
+            ARGUS_LOG_DEBUG("SQLSetConnectAttr: SQL_ATTR_TXN_ISOLATION "
+                            "unsupported by this backend");
+            return argus_set_error(&dbc->diag, "HY092",
+                                   "[Argus] Invalid attribute identifier", 0);
+        }
         SQLUINTEGER level = (SQLUINTEGER)(uintptr_t)Value;
         if (dbc->backend->set_isolation(dbc->backend_conn, level) != 0)
             return argus_set_error(&dbc->diag, "HYC00",

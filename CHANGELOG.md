@@ -24,6 +24,26 @@ All notable changes to the Argus ODBC Driver project.
   breaks a workbook at refresh time. All eight connectors validate against
   Tableau's XSDs.
 
+### Fixed
+- **Memory leak in the PostgreSQL fetch path.** `pg_fetch_results` allocated a
+  fresh row array on every call, but `argus_row_cache_clear()` deliberately
+  keeps the array it already has — so every batch after the first leaked one
+  array (8 KB at the default `FetchBufferSize`, ~8 MB per million rows). Found
+  by running the integration suite under AddressSanitizer; the suite is now
+  ASan-clean.
+- `SQL_ATTR_TXN_ISOLATION` on a backend with no isolation hook fell off the end
+  of `SQLSetConnectAttr` instead of returning HY092.
+
+### Known issue (pre-existing, not introduced here)
+- The same row-array pattern appears in the hive, impala, trino, phoenix, mysql
+  and kudu fetch paths: each allocates `cache->rows` unconditionally while
+  `argus_row_cache_clear()` preserves the previous array, so a multi-batch fetch
+  leaks one array per batch. The central fix — freeing the array in
+  `argus_row_cache_clear()` — is a one-line change, but several backends hand
+  the cache a row array they built themselves, and confirming each of those
+  transfers ownership rather than sharing it needs those engines running. Left
+  alone rather than changed blind; the PostgreSQL family is fixed locally above.
+
 ### Performance, measured
 - **PostgreSQL fetch measured against psqlODBC** on the same server, query and
   client loop: **727 k rows/s vs 391 k** (1.5 M rows × 9 columns), with peak RSS
