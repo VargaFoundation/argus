@@ -75,13 +75,15 @@ default — is a genuinely plaintext session, not libpq's `prefer`.
 ### Greenplum showing partition children
 
 ```
-DRIVER={Argus ODBC Driver};BACKEND=greenplum;HOST=gp-coordinator;PORT=5432;UID=analyst;PWD=secret;DATABASE=warehouse
+DRIVER={Argus ODBC Driver};BACKEND=greenplum;HOST=gp-coordinator;PORT=5432;
+UID=analyst;PWD=secret;DATABASE=warehouse;SHOWPARTITIONS=1
 ```
 
-with `ARGUS_PG_SHOW_PARTITIONS=1` in the environment. By default the driver hides
-partition children from `SQLTables` and `SQLColumns`, which is what keeps a BI
-connection dialog usable on a warehouse with tens of thousands of them; set this
-when you need to inspect a specific child.
+By default the driver hides partition children from `SQLTables` and
+`SQLColumns`, which is what keeps a BI connection dialog usable on a warehouse
+with tens of thousands of them; set this when you need to inspect a specific
+child. It is per connection, so a staging DSN can show them while production
+does not.
 
 ## Development/Testing
 

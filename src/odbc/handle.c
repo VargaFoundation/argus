@@ -38,6 +38,11 @@ SQLRETURN argus_alloc_dbc(argus_env_t *env, argus_dbc_t **out)
     dbc->connection_timeout = 0;
     dbc->access_mode        = SQL_MODE_READ_WRITE;
     dbc->autocommit         = SQL_AUTOCOMMIT_ON;
+    /* -1 = not specified: the backend falls back to its environment variable,
+     * then to its default. */
+    dbc->pg_show_partitions     = -1;
+    dbc->pg_show_all_databases  = -1;
+    dbc->pg_row_versioning      = -1;
     argus_diag_clear(&dbc->diag);
 
     /* Initialize SSL/TLS defaults */
@@ -214,6 +219,8 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     /* Free additional connection parameters */
     free(dbc->app_name);
     free(dbc->http_path);
+    free(dbc->pg_sslmode);
+    free(dbc->pg_search_path);
     free(dbc->log_file);
     free(dbc->oauth_token_url);
     free(dbc->oauth_client_id);

@@ -215,6 +215,70 @@ static void test_type_mapping(void **state)
     close_conn(env, dbc);
 }
 
+/*
+ * Domains and enums.
+ *
+ * The wire protocol reports a domain column's own OID, not the type it is
+ * built on, so a driver that does not resolve it reports `postcode` — a domain
+ * over varchar(10) — as an unbounded long string, and the application both
+ * loses the length and sizes its buffers for the worst case.
+ */
+static void test_domain_and_enum_types(void **state)
+{
+    (void)state;
+    SQLHENV env; SQLHDBC dbc; SQLHSTMT stmt;
+    open_conn(&env, &dbc);
+    assert_int_equal(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt), SQL_SUCCESS);
+
+    exec_direct(stmt, "SELECT pc, n, m, plain FROM argus_test.domains");
+
+    SQLCHAR cname[64];
+    SQLSMALLINT nlen, dtype, ddigits, nullable;
+    SQLULEN csize;
+
+    /* postcode → varchar(10), carrying the domain's declared length. */
+    SQLDescribeCol(stmt, 1, cname, sizeof(cname), &nlen, &dtype,
+                   &csize, &ddigits, &nullable);
+    assert_int_equal(dtype, SQL_VARCHAR);
+    assert_int_equal((int)csize, 10);
+
+    /* positive_int → integer, and it must take the same native fast path a
+     * plain integer takes. */
+    SQLDescribeCol(stmt, 2, cname, sizeof(cname), &nlen, &dtype,
+                   &csize, &ddigits, &nullable);
+    assert_int_equal(dtype, SQL_INTEGER);
+    assert_int_equal((int)csize, 10);
+
+    /* An enum label is capped at 63 bytes by PostgreSQL, so it is reported as
+     * a bounded string rather than an unbounded one. */
+    SQLDescribeCol(stmt, 3, cname, sizeof(cname), &nlen, &dtype,
+                   &csize, &ddigits, &nullable);
+    assert_int_equal(dtype, SQL_VARCHAR);
+    assert_int_equal((int)csize, 63);
+
+    SQLDescribeCol(stmt, 4, cname, sizeof(cname), &nlen, &dtype,
+                   &csize, &ddigits, &nullable);
+    assert_int_equal(dtype, SQL_INTEGER);
+
+    assert_int_equal(SQLFetch(stmt), SQL_SUCCESS);
+
+    char buf[64] = {0};
+    SQLLEN ind = 0;
+    SQLGetData(stmt, 1, SQL_C_CHAR, buf, sizeof(buf), &ind);
+    assert_string_equal(buf, "75001");
+
+    SQLINTEGER v = 0;
+    assert_int_equal(SQLGetData(stmt, 2, SQL_C_SLONG, &v, sizeof(v), &ind),
+                     SQL_SUCCESS);
+    assert_int_equal(v, 42);
+
+    SQLGetData(stmt, 3, SQL_C_CHAR, buf, sizeof(buf), &ind);
+    assert_string_equal(buf, "happy");
+
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    close_conn(env, dbc);
+}
+
 /* ── NULLs ───────────────────────────────────────────────────── */
 
 static void test_nulls(void **state)
@@ -532,6 +596,7 @@ int main(void)
         cmocka_unit_test(test_select_scalar),
         cmocka_unit_test(test_fetch_many_rows),
         cmocka_unit_test(test_type_mapping),
+        cmocka_unit_test(test_domain_and_enum_types),
         cmocka_unit_test(test_nulls),
         cmocka_unit_test(test_error_reports_server_message),
         cmocka_unit_test(test_error_does_not_stick),

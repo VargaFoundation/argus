@@ -26,6 +26,11 @@
  * rather than assumed, and pinned for every registered backend in
  * tests/unit/test_backend_caps.c.
  *
+ * SQL_PROCEDURES is deliberately *not* here. It promises both that the engine
+ * has procedures and that the driver accepts ODBC's {call ...} syntax, so it is
+ * derived from the dialect's call template — the only thing that can make the
+ * second half true — rather than from a flag that could disagree with it.
+ *
  * This is a data table, not behaviour: only info.c reads it.
  */
 typedef struct argus_backend_caps {
@@ -48,7 +53,6 @@ typedef struct argus_backend_caps {
     /* SQL_ODBC_SQL_CONFORMANCE. 0 == SQL_OSC_MINIMUM, the legacy answer. */
     SQLUSMALLINT   odbc_sql_conformance;
 
-    bool           procedures;           /* false → SQL_PROCEDURES        = "N" */
     bool           describe_parameter;   /* false → SQL_DESCRIBE_PARAMETER = "N" */
 } argus_backend_caps_t;
 

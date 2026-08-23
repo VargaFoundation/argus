@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include "argus/handle.h"
 #include "argus/caps.h"
+#include "argus/dialect.h"
 
 /*
  * The non-regression net for per-backend SQLGetInfo capabilities.
@@ -107,6 +108,9 @@ static void test_backends_without_caps_are_unchanged(void **state)
         if (strcmp(buf, "procedure") != 0)
             fail_msg("%s: SQL_PROCEDURE_TERM changed to '%s'", b->name, buf);
 
+        /* SQL_PROCEDURES is derived from the dialect's {call} template, not
+         * from the capability struct: it promises the invocation syntax works,
+         * and only a dialect that can render it can keep that promise. */
         get_str(dbc, SQL_PROCEDURES, buf, sizeof(buf));
         if (strcmp(buf, "N") != 0)
             fail_msg("%s: SQL_PROCEDURES changed to '%s'", b->name, buf);
@@ -211,7 +215,7 @@ static void test_defaulting_helpers(void **state)
     assert_non_null(d);
     assert_null(d->dbms_name);
     assert_int_equal(d->txn_capable, SQL_TC_NONE);
-    assert_false(d->procedures);
+    assert_false(d->describe_parameter);
 
     assert_string_equal(argus_caps_str(NULL, "fallback"), "fallback");
     assert_string_equal(argus_caps_str("set", "fallback"), "set");
@@ -267,6 +271,12 @@ static void test_postgres_family_caps(void **state)
 
         get_str(dbc, SQL_DESCRIBE_PARAMETER, buf, sizeof(buf));
         assert_string_equal(buf, "Y");
+
+        /* "Y" only because escape.c can now render {call ...}; the dialect's
+         * template is the single source of both. */
+        get_str(dbc, SQL_PROCEDURES, buf, sizeof(buf));
+        assert_string_equal(buf, "Y");
+        assert_non_null(argus_dialect_by_name(pg[i].backend)->call_tmpl);
 
         free_dbc(dbc);
     }

@@ -276,6 +276,39 @@ static void test_unadvertised_functions_are_refused(void **state)
     }
 }
 
+/*
+ * {call ...} against a live server, which is what makes SQL_PROCEDURES = "Y"
+ * honest: the info type promises both that the engine has procedures and that
+ * the driver accepts ODBC's invocation syntax.
+ */
+static void test_procedure_call_escape(void **state)
+{
+    (void)state;
+
+    /* order_count(cust) counts the seeded orders for a customer. */
+    probe("{call}", "SELECT * FROM ({call argus_test.order_count(1)}) t(c)", "250");
+
+    /* The ?= form binds the return value, which is what this rendering already
+     * produces, so it must be accepted rather than refused. */
+    probe("{?= call}",
+          "SELECT * FROM ({?= call argus_test.order_count(1)}) t(c)", "250");
+
+    /* A nested {fn} inside the argument list must be translated too. */
+    probe("{call} nested",
+          "SELECT * FROM ({call argus_test.order_count({fn ABS(-1)})}) t(c)",
+          "250");
+}
+
+static void test_sql_procedures_is_now_yes(void **state)
+{
+    (void)state;
+    SQLCHAR buf[8] = {0};
+    SQLSMALLINT len = 0;
+    assert_int_equal(SQLGetInfo(g_dbc, SQL_PROCEDURES, buf, sizeof(buf), &len),
+                     SQL_SUCCESS);
+    assert_string_equal((char *)buf, "Y");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -283,6 +316,8 @@ int main(void)
         cmocka_unit_test(test_numeric_functions),
         cmocka_unit_test(test_system_functions),
         cmocka_unit_test(test_datetime_functions),
+        cmocka_unit_test(test_procedure_call_escape),
+        cmocka_unit_test(test_sql_procedures_is_now_yes),
         cmocka_unit_test(test_unadvertised_functions_are_refused),
     };
     return cmocka_run_group_tests(tests, setup, teardown);

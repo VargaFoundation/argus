@@ -197,6 +197,7 @@ if(BUILD_INTEGRATION_TESTS)
         argus_add_integration_test(test_pg_transactions integration/test_pg_transactions.c)
         argus_add_integration_test(test_pg_catalog_ext integration/test_pg_catalog_ext.c)
         argus_add_integration_test(test_pg_describe_param integration/test_pg_describe_param.c)
+        argus_add_integration_test(test_pg_options integration/test_pg_options.c)
 
         # The Greenplum/Cloudberry catalog SQL, exercised against a simulated
         # Greenplum catalog built on plain PostgreSQL. Links the static library

@@ -96,6 +96,13 @@ static void obs_resolve_secret_field(char **field)
     }
 }
 
+static int argus_parse_tristate(const char *v)
+{
+    if (!v || !*v) return -1;
+    if (*v == '1' || *v == 'y' || *v == 'Y' || *v == 't' || *v == 'T') return 1;
+    return 0;
+}
+
 /* ── Internal: perform the actual connection ─────────────────── */
 
 static SQLRETURN do_connect(argus_dbc_t *dbc)
@@ -467,6 +474,24 @@ SQLRETURN SQL_API SQLDriverConnect(
 
     v = argus_conn_params_get(&params, "HTTPPATH");
     if (v) { free(dbc->http_path); dbc->http_path = strdup(v); }
+
+    /* PostgreSQL family. Per-connection rather than machine-wide, so two DSNs
+     * in one process can disagree. */
+    v = argus_conn_params_get(&params, "SSLMODE");
+    if (v) { free(dbc->pg_sslmode); dbc->pg_sslmode = strdup(v); }
+
+    v = argus_conn_params_get(&params, "SEARCHPATH");
+    if (!v) v = argus_conn_params_get(&params, "CURRENTSCHEMA");
+    if (v) { free(dbc->pg_search_path); dbc->pg_search_path = strdup(v); }
+
+    v = argus_conn_params_get(&params, "SHOWPARTITIONS");
+    if (v) dbc->pg_show_partitions = argus_parse_tristate(v);
+
+    v = argus_conn_params_get(&params, "SHOWALLDATABASES");
+    if (v) dbc->pg_show_all_databases = argus_parse_tristate(v);
+
+    v = argus_conn_params_get(&params, "ROWVERSIONING");
+    if (v) dbc->pg_row_versioning = argus_parse_tristate(v);
 
     /* OAuth2 client-credentials (M2M) parameters (Trino) */
     v = argus_conn_params_get(&params, "OAUTH2TOKENENDPOINT");

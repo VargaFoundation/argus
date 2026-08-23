@@ -32,6 +32,10 @@ void pg_describe_result(pg_op_t *op, PGresult *res)
         Oid oid = PQftype(res, i);
         int mod = PQfmod(res, i);
 
+        /* A domain column reports the domain's OID; resolve it to the type it
+         * is built on, carrying the domain's declared length or precision. */
+        pg_resolve_oid(op->conn, &oid, &mod);
+
         const char *name = PQfname(res, i);
         if (name) {
             strncpy((char *)col->name, name, ARGUS_MAX_COLUMN_NAME - 1);
@@ -129,7 +133,8 @@ static int pull_next_chunk(pg_conn_t *conn, pg_op_t *op)
 
 /* Copy one PGresult row into the cache. Returns 0, or -1 on allocation
  * failure. */
-static int copy_row(PGresult *res, int row, int ncols, argus_cell_t *cells)
+static int copy_row(const pg_conn_t *conn, PGresult *res, int row, int ncols,
+                    argus_cell_t *cells)
 {
     for (int c = 0; c < ncols; c++) {
         argus_cell_t *cell = &cells[c];
@@ -142,6 +147,10 @@ static int copy_row(PGresult *res, int row, int ncols, argus_cell_t *cells)
         const char *val = PQgetvalue(res, row, c);
         size_t len = (size_t)PQgetlength(res, row, c);
         Oid oid = PQftype(res, c);
+        int mod = -1;
+        /* Resolve here too: a domain over integer must take the same native
+         * fast path an integer column takes, or the two disagree. */
+        pg_resolve_oid(conn, &oid, &mod);
 
         /*
          * PostgreSQL renders booleans as 't'/'f'. ODBC's SQL_BIT is 1/0, and
@@ -242,7 +251,7 @@ int pg_fetch_results(argus_backend_conn_t raw_conn, argus_backend_op_t raw_op,
         cache->rows[filled].cells = calloc((size_t)ncols, sizeof(argus_cell_t));
         if (!cache->rows[filled].cells) return -1;
 
-        if (copy_row(op->pending, op->pending_row, ncols,
+        if (copy_row(conn, op->pending, op->pending_row, ncols,
                      cache->rows[filled].cells) != 0)
             return -1;
 

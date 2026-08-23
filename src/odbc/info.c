@@ -574,9 +574,17 @@ SQLRETURN SQL_API SQLGetInfo(
                                   InfoValue, StringLength);
 
     /* ── Additional info types for BI tool compatibility ─────── */
+    /*
+     * "Y" promises two things: the data source has procedures, and the driver
+     * accepts ODBC's {call ...} invocation syntax. Deriving it from the
+     * dialect's call template makes the second half true by construction —
+     * the same rule the scalar-function bitmaps follow, and the reason this
+     * could not honestly be "Y" before escape.c could translate {call}.
+     */
     case SQL_PROCEDURES:
-        return set_string_info(argus_caps_for(dbc)->procedures ? "Y" : "N",
-                               InfoValue, BufferLength, StringLength);
+        return set_string_info(
+            argus_dialect_for(dbc)->call_tmpl ? "Y" : "N",
+            InfoValue, BufferLength, StringLength);
 
     case SQL_MAX_BINARY_LITERAL_LEN:
         return set_uinteger_info(0, InfoValue, StringLength);

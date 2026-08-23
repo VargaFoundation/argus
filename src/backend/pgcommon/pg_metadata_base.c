@@ -245,14 +245,11 @@ int pg_get_catalogs(argus_backend_conn_t raw_conn, argus_backend_op_t *out_op)
      * all would put entries in a BI navigator that fail the moment anyone
      * expands them — Power BI's hierarchical navigator does exactly that. The
      * honest answer is the one catalog that can actually be queried, which is
-     * also what psqlODBC reports. ARGUS_PG_SHOW_ALL_DATABASES=1 opts into the
-     * full list for tools that use it to offer a reconnect target.
+     * also what psqlODBC reports. SHOWALLDATABASES=1 opts into the full list
+     * for tools that use it to offer a reconnect target.
      */
-    const char *env = g_getenv("ARGUS_PG_SHOW_ALL_DATABASES");
-    bool show_all = (env && (*env == '1' || *env == 't' || *env == 'T'));
-
     GString *sql = g_string_new(
-        show_all
+        conn->show_all_databases
         ? "SELECT d.datname AS \"TABLE_CAT\" "
           "FROM pg_catalog.pg_database d "
           "WHERE d.datallowconn AND NOT d.datistemplate "

@@ -81,6 +81,11 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | FETCHBUFFERSIZE | | (backend default) | Rows fetched per backend round-trip |
 | SOCKETTIMEOUT | | 0 (none) | Socket I/O timeout in seconds |
 | MAXSCROLLROWS | | (driver default) | Cap on rows a static (scrollable) cursor will materialize in memory |
+| SSLMODE | | (from SSL/SSLVerify) | PostgreSQL family: libpq `sslmode`, verbatim (`prefer`, `verify-ca`, …) |
+| SEARCHPATH | CURRENTSCHEMA | (server default) | PostgreSQL family: `search_path` for the session |
+| SHOWPARTITIONS | | 0 | PostgreSQL family: list partition children in `SQLTables`/`SQLColumns` |
+| SHOWALLDATABASES | | 0 | PostgreSQL family: list every database, not just the connected one |
+| ROWVERSIONING | | 0 | PostgreSQL family: expose `xmin` to `SQLSpecialColumns(SQL_ROWVER)` |
 
 ### Default Ports by Backend
 
@@ -226,13 +231,13 @@ DRIVER=Argus;BACKEND=postgres;HOST=pg.example.com;SSL=1;SSLCAFile=/etc/ssl/certs
 - Namespace model: a **database is the ODBC catalog** and a **schema is the ODBC
   schema** — the full three-level model, unlike the MySQL backend. A PostgreSQL
   session cannot query across databases, so `SQLTables(SQL_ALL_CATALOGS)`
-  reports only the connected database; set `ARGUS_PG_SHOW_ALL_DATABASES=1` to
-  list them all instead.
+  reports only the connected database; `SHOWALLDATABASES=1` lists them all
+  instead.
 - Catalog operations read `pg_catalog` directly, with every application-supplied
   filter escaped through libpq (`PQescapeLiteral`) rather than interpolated
 - **Partition and inheritance children are hidden from `SQLTables` and
   `SQLColumns`.** A table partitioned monthly over ten years is one entry in a
-  BI navigator, not 120. Set `ARGUS_PG_SHOW_PARTITIONS=1` to list them.
+  BI navigator, not 120. `SHOWPARTITIONS=1` lists them.
 - System schemas (`pg_catalog`, `information_schema`, `pg_toast*`, `pg_temp*`)
   and relations the user cannot `SELECT` from are hidden unless asked for by name
 - **Rows are streamed, not buffered.** Memory is a function of `FetchBufferSize`,
@@ -280,8 +285,22 @@ DRIVER=Argus;BACKEND=postgres;HOST=pg.example.com;SSL=1;SSLCAFile=/etc/ssl/certs
   real data**, read from `pg_catalog`. `SQL_BEST_ROWID` reports the primary key
   or a fully-NOT-NULL unique index; `ctid` is deliberately not offered as a
   fallback, because UPDATE and VACUUM FULL invalidate it.
-  `SQL_ROWVER` reports `xmin` only under `ARGUS_PG_ROW_VERSIONING=1` — the
-  counter wraps.
+  `SQL_ROWVER` reports `xmin` only under `ROWVERSIONING=1` — the counter wraps.
+- **`SQLTables`' enumeration forms work**: `SQLTables("%", "", "")` lists
+  catalogs and `SQLTables("", "%", "")` lists schemas, which is how Power BI's
+  hierarchical navigator and Tableau's schema picker open.
+- **`SQLRowCount` reports rows affected** after INSERT/UPDATE/DELETE. DDL keeps
+  -1, which ODBC defines as "not available" and is not the same as 0.
+- **`{call f(a)}` is translated** to `SELECT * FROM f(a)`, so `SQL_PROCEDURES`
+  answers `"Y"` — the info type promises both that the engine has procedures and
+  that the driver accepts the invocation syntax.
+- **Domains and enums are resolved.** A column declared over
+  `CREATE DOMAIN postcode AS varchar(10)` reports SQL_VARCHAR with size 10, not
+  an unbounded string; an enum reports a bounded string, since PostgreSQL caps
+  labels at 63 bytes. The map is built once at connect.
+- Every option above is **per connection**, and the matching `ARGUS_PG_*`
+  environment variable is a machine-wide fallback for flipping a behaviour
+  without editing every DSN.
 - Requires a build with libpq (`libpq-dev`); auto-detected at cmake time
 
 ### Greenplum and Apache Cloudberry (BACKEND=greenplum / BACKEND=cloudberry)
@@ -306,7 +325,7 @@ What they add over `BACKEND=postgres`:
   that opens and one that enumerates tens of thousands of child relations: a
   fact table partitioned monthly over ten years, times two hundred tables, is
   ~24,000 relations a driver filtering on `relkind` alone will list.
-  `ARGUS_PG_SHOW_PARTITIONS=1` turns the filter off.
+  `SHOWPARTITIONS=1` turns the filter off.
 - **`REMARKS` carries the facts that explain query cost** — the distribution
   policy (`[DISTRIBUTED BY (customer_id)]`, `[DISTRIBUTED RANDOMLY]`,
   `[DISTRIBUTED REPLICATED]`), append-optimized and column-oriented storage

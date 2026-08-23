@@ -71,6 +71,20 @@ typedef struct argus_dialect {
     argus_literal_style_t   literals;
     bool                    supports_oj; /* {oj ...} / SQL_OJ_CAPABILITIES */
     const argus_fn_entry_t *fn_map;      /* terminated by odbc_name == NULL */
+
+    /*
+     * How {call name(args)} is rendered, with $1 standing for everything
+     * between the braces after the `call` keyword. NULL means the engine has
+     * no procedures to invoke and the escape is rejected with HYC00 — which is
+     * the truth for every backend but the PostgreSQL family.
+     *
+     * SQL_PROCEDURES is answered from whether this is set, not from a separate
+     * flag: the info type promises both that the data source has procedures
+     * *and* that the driver accepts the invocation syntax, so deriving it from
+     * the one thing that makes the second half true is what keeps the two from
+     * drifting — the same discipline fn_map applies to the scalar bitmaps.
+     */
+    const char             *call_tmpl;
 } argus_dialect_t;
 
 /* Look up a dialect by backend name. Never returns NULL: an unknown or absent

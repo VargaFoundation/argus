@@ -190,6 +190,13 @@ typedef struct argus_backend {
     int (*describe_params)(argus_backend_conn_t conn, const char *query,
                            argus_column_desc_t *params, int *num_params);
 
+    /* Rows affected by the last DML statement, for SQLRowCount. NULL → the
+     * statement's row count stays -1 ("not available"), which is what every
+     * backend reported before this existed and is the truthful answer for an
+     * engine whose protocol does not carry one. */
+    bool (*get_affected_rows)(argus_backend_conn_t conn, argus_backend_op_t op,
+                              SQLLEN *out_rows);
+
     /* The last error together with the server's own SQLSTATE. NULL → the ODBC
      * layer uses get_last_error and reports HY000, as today. PostgreSQL hands
      * back a real five-character SQLSTATE, and collapsing 42P01 to HY000

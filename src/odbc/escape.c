@@ -351,6 +351,37 @@ static void scan_body(escape_ctx_t *ctx, const char **p, GString *out,
         escape_fail(ctx, "42000", "[Argus] Unterminated {%s ...} escape", kind);
 }
 
+/*
+ * {call name(args)} → the dialect's call_tmpl, with $1 replaced by everything
+ * between the braces.
+ *
+ * The body is copied through rather than parsed: an argument may itself be a
+ * nested escape, a quoted literal containing a brace, or a parameter marker,
+ * and scan_body already handles all three for {oj} and {escape}.
+ */
+static void scan_call(escape_ctx_t *ctx, const char **p, GString *out)
+{
+    GString *body = g_string_new(NULL);
+    scan_body(ctx, p, body, "call");
+    if (ctx->failed) {
+        g_string_free(body, TRUE);
+        return;
+    }
+
+    g_strstrip(body->str);
+    body->len = strlen(body->str);
+
+    for (const char *t = ctx->dialect->call_tmpl; *t; t++) {
+        if (t[0] == '$' && t[1] == '1') {
+            g_string_append(out, body->str);
+            t++;
+        } else {
+            g_string_append_c(out, *t);
+        }
+    }
+    g_string_free(body, TRUE);
+}
+
 /* Dispatch on the escape keyword. *p is just past the opening '{'. */
 static void scan_escape(escape_ctx_t *ctx, const char **p, GString *out)
 {
@@ -358,12 +389,22 @@ static void scan_escape(escape_ctx_t *ctx, const char **p, GString *out)
 
     skip_ws(p);
 
-    /* {?= call proc(...)} — the only escape that doesn't start with a word. */
+    /*
+     * {?= call proc(...)} — the only escape that doesn't start with a word.
+     * The `?=` binds a return value, which for the engines here means the
+     * function's result, and that is already what the rendering below
+     * produces. So the marker is consumed and the rest handled as a plain
+     * call rather than refused.
+     */
     if (**p == '?') {
-        escape_fail(ctx, "HYC00",
-                    "[Argus] Procedure call escapes are not supported "
-                    "(this driver reports no procedures)");
-        return;
+        (*p)++;
+        skip_ws(p);
+        if (**p != '=') {
+            escape_fail(ctx, "42000", "[Argus] Malformed escape sequence");
+            return;
+        }
+        (*p)++;
+        skip_ws(p);
     }
 
     if (!read_word(p, word, sizeof(word))) {
@@ -394,9 +435,13 @@ static void scan_escape(escape_ctx_t *ctx, const char **p, GString *out)
         g_string_append(out, "INTERVAL ");
         scan_body(ctx, p, out, "interval");
     } else if (g_ascii_strcasecmp(word, "call") == 0) {
-        escape_fail(ctx, "HYC00",
-                    "[Argus] Procedure call escapes are not supported "
-                    "(this driver reports no procedures)");
+        if (!ctx->dialect->call_tmpl) {
+            escape_fail(ctx, "HYC00",
+                        "[Argus] Procedure call escapes are not supported by "
+                        "the %s dialect", ctx->dialect->name);
+            return;
+        }
+        scan_call(ctx, p, out);
     } else {
         escape_fail(ctx, "42000", "[Argus] Unknown ODBC escape sequence '{%s ...}'", word);
     }

@@ -155,7 +155,8 @@ static int pg_run(pg_conn_t *conn, const char *query, bool streaming,
 
     case PGRES_COMMAND_OK: {
         const char *n = PQcmdTuples(res);
-        op->affected_rows = (n && *n) ? atoll(n) : 0;
+        op->has_affected_rows = (n && *n);
+        op->affected_rows = op->has_affected_rows ? atoll(n) : 0;
         op->num_cols = 0;
         op->metadata_fetched = true;
         op->drained = true;
@@ -182,6 +183,27 @@ static int pg_run(pg_conn_t *conn, const char *query, bool streaming,
 
     *out_op = op;
     return 0;
+}
+
+/*
+ * Rows affected by the last DML, from the server's command tag.
+ *
+ * PQcmdTuples returns "" for anything that is not INSERT/UPDATE/DELETE/MERGE,
+ * which is why this reports false there rather than 0: ODBC distinguishes
+ * "zero rows changed" from "this statement does not have a row count", and
+ * SQLRowCount is specified to leave the latter at -1.
+ */
+bool pg_get_affected_rows(argus_backend_conn_t raw_conn,
+                          argus_backend_op_t raw_op, SQLLEN *out_rows)
+{
+    (void)raw_conn;
+    pg_op_t *op = (pg_op_t *)raw_op;
+    if (!op || !out_rows) return false;
+    if (op->num_cols > 0) return false;      /* a result set, not a DML count */
+    if (!op->has_affected_rows) return false;
+
+    *out_rows = (SQLLEN)op->affected_rows;
+    return true;
 }
 
 int pg_get_operation_status(argus_backend_conn_t raw_conn,

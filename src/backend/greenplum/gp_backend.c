@@ -83,10 +83,9 @@ static const argus_backend_caps_t greenplum_caps = {
     .default_txn_isolation = SQL_TXN_READ_COMMITTED,
     .odbc_sql_conformance  = SQL_OSC_CORE,
     .describe_parameter    = true,
-    /* .procedures stays false: SQL_PROCEDURES also promises the driver
-     * accepts ODBC's {call ...} invocation syntax, and escape.c still
-     * rejects it. SQLProcedures itself is implemented and useful; claiming
-     * "Y" before {call} works would be a second kind of over-claim. */
+    /* SQL_PROCEDURES is not a field here: it is derived from the dialect's
+     * call template, so it can only say "Y" while {call ...} really
+     * translates. See include/argus/caps.h. */
 };
 
 static const argus_backend_t greenplum_backend = {
@@ -107,6 +106,7 @@ static const argus_backend_t greenplum_backend = {
     .get_catalogs          = pg_get_catalogs,
     .get_primary_keys      = pg_get_primary_keys,
     .get_statistics        = pg_get_statistics,
+    .get_affected_rows     = pg_get_affected_rows,
     .get_last_error        = pg_get_last_error,
     .get_last_error_ex     = pg_get_last_error_ex,
     .get_server_version    = pg_get_server_version,

@@ -657,6 +657,20 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
         }
     }
 
+    /*
+     * SQLRowCount after a DML statement. Only asked of backends that can
+     * answer, and only when the statement produced no result set — for a
+     * SELECT, fetch.c fills row_count from what was actually read. Backends
+     * without the hook keep the -1 they have always reported, which ODBC
+     * defines as "not available".
+     */
+    if (dbc->backend->get_affected_rows && stmt->num_cols == 0) {
+        SQLLEN affected = -1;
+        if (dbc->backend->get_affected_rows(dbc->backend_conn, stmt->op,
+                                            &affected))
+            stmt->row_count = affected;
+    }
+
     /* Asynchronous backends (e.g. Trino) only surface a query error while the
      * result is being polled for metadata, after execute() itself returned ok.
      * If the backend now reports an error, fail the statement instead of

@@ -116,10 +116,10 @@ int pg_get_special_columns(argus_backend_conn_t raw_conn,
          * xmin is a real row version — it changes on every UPDATE — but it is
          * a 32-bit counter that wraps, so an application caching it across a
          * long period can be told a row is unchanged when it is not. Off
-         * unless asked for, which is the same call psqlODBC makes.
+         * unless ROWVERSIONING=1 asks for it, which is the same call psqlODBC
+         * makes.
          */
-        const char *env = g_getenv("ARGUS_PG_ROW_VERSIONING");
-        bool enabled = (env && (*env == '1' || *env == 't' || *env == 'T'));
+        bool enabled = conn->row_versioning;
 
         GString *sql = g_string_new(
             "SELECT NULL::int2 AS \"SCOPE\", "

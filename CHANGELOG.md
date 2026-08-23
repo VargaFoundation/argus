@@ -4,6 +4,37 @@ All notable changes to the Argus ODBC Driver project.
 
 ## [Unreleased]
 
+### PostgreSQL family: per-connection options and the last ODBC gaps
+- **`SHOWPARTITIONS`, `SHOWALLDATABASES`, `ROWVERSIONING`, `SSLMODE` and
+  `SEARCHPATH` are connection-string and DSN keys**, not environment variables.
+  A process routinely holds connections to several servers, and a machine-wide
+  switch cannot say "show partition children on staging but not on production".
+  The `ARGUS_PG_*` variables remain as a fallback. `SSLMODE` is handed to libpq
+  verbatim, which is the only way to express `prefer` or `verify-ca`.
+- **Fixed: `SQLTables`' enumeration forms never worked.**
+  `SQLTables("%", "", "")` (list catalogs) and `SQLTables("", "%", "")` (list
+  schemas) fell through to `get_tables`, so asking for the schema list returned
+  the table list. Every backend has implemented `get_catalogs` and
+  `get_schemas` since the vtable was written and nothing called them. Power BI's
+  hierarchical navigator and Tableau's schema picker both open with one of these.
+- **`SQLRowCount` after DML** (new optional `get_affected_rows` hook): INSERT,
+  UPDATE and DELETE report rows affected instead of -1. DDL stays -1, which ODBC
+  defines as "not available" and is not the same as 0. Backends without the hook
+  are unchanged.
+- **`{call f(a)}` is translated** to `SELECT * FROM f(a)` — what psqlODBC
+  generates and what an ODBC application means, since the thing that returns a
+  result set in PostgreSQL is a function. `{?= call …}` is accepted too. Driven
+  by a new `call_tmpl` field on the dialect, and `SQL_PROCEDURES` is now
+  *derived* from it rather than from a separate flag, so it cannot claim the
+  invocation syntax works when the dialect cannot render it. Backends without a
+  template still reject `{call}` with HYC00.
+- **Domains and enums are resolved.** A column over
+  `CREATE DOMAIN postcode AS varchar(10)` reports SQL_VARCHAR size 10 rather
+  than an unbounded string, and takes the same native fast path its base type
+  would; an enum reports a bounded string, since PostgreSQL caps labels at 63
+  bytes. The map is built in one query at connect, because in streaming mode the
+  connection is busy exactly when an unknown OID first appears.
+
 ### BI connectors
 - **Power BI**: `postgres`, `greenplum` and `cloudberry` added to the connector's
   backend list. They stay out of `AnsiOffsetBackends` — PostgreSQL has accepted

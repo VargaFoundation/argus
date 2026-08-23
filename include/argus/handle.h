@@ -108,6 +108,20 @@ struct argus_dbc {
     char        *bq_key_file;         /* service-account JSON key path */
     char        *bq_access_token;     /* pre-fetched bearer token */
 
+    /* PostgreSQL family (BACKEND=postgres/greenplum/cloudberry).
+     *
+     * These are per-connection on purpose. They started life as environment
+     * variables, which is wrong for a driver: one process routinely holds
+     * connections to several servers, and a machine-wide switch cannot say
+     * "show partition children on the staging DSN but not the production one".
+     * The environment variables are still honoured as a fallback so an
+     * operator can flip a behaviour without editing every DSN. */
+    char        *pg_sslmode;          /* verbatim libpq sslmode override */
+    char        *pg_search_path;      /* SET search_path at connect */
+    int          pg_show_partitions;  /* -1 unset, 0 hide, 1 show */
+    int          pg_show_all_databases;
+    int          pg_row_versioning;   /* expose xmin to SQLSpecialColumns */
+
     /* SQLBrowseConnect accumulated keywords */
     char        *browse_buf;
 

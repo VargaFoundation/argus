@@ -578,28 +578,36 @@ static const argus_fn_entry_t postgres_fns[] = {
  * DATE '...' yet rejects CURRENT_DATE, so an engine's SQL-92 coverage is not
  * all-or-nothing and cannot be inferred from its lineage. */
 static const argus_dialect_t argus_dialects[] = {
-    { "trino",    "\"", ARGUS_LIT_ANSI, true,  trino_fns },
-    { "hive",     "`",  ARGUS_LIT_ANSI, true,  hive_fns },
+    { "trino",    "\"", ARGUS_LIT_ANSI, true,  trino_fns, NULL },
+    { "hive",     "`",  ARGUS_LIT_ANSI, true,  hive_fns, NULL },
     /* Impala rejects the ANSI TIMESTAMP '…' literal (ParseException) but accepts
      * CAST('…' AS TIMESTAMP), and CAST works for DATE too — verified live. */
-    { "impala",   "`",  ARGUS_LIT_CAST, true,  impala_fns },
-    { "mysql",    "`",  ARGUS_LIT_ANSI, true,  mywire_fns },
-    { "bigquery", "`",  ARGUS_LIT_ANSI, true,  bigquery_fns },
-    { "phoenix",  "\"", ARGUS_LIT_ANSI, false, ansi_fns },
-    { "pinot",    "\"", ARGUS_LIT_ANSI, false, pinot_fns },
-    { "druid",    "\"", ARGUS_LIT_ANSI, false, ansi_fns },
-    { "flightsql","\"", ARGUS_LIT_ANSI, false, ansi_fns },
-    { "kudu",     "\"", ARGUS_LIT_ANSI, false, ansi_fns },
+    { "impala",   "`",  ARGUS_LIT_CAST, true,  impala_fns, NULL },
+    { "mysql",    "`",  ARGUS_LIT_ANSI, true,  mywire_fns, NULL },
+    { "bigquery", "`",  ARGUS_LIT_ANSI, true,  bigquery_fns, NULL },
+    { "phoenix",  "\"", ARGUS_LIT_ANSI, false, ansi_fns, NULL },
+    { "pinot",    "\"", ARGUS_LIT_ANSI, false, pinot_fns, NULL },
+    { "druid",    "\"", ARGUS_LIT_ANSI, false, ansi_fns, NULL },
+    { "flightsql","\"", ARGUS_LIT_ANSI, false, ansi_fns, NULL },
+    { "kudu",     "\"", ARGUS_LIT_ANSI, false, ansi_fns, NULL },
     /* Greenplum and Cloudberry share PostgreSQL's table today; they are listed
      * separately so a divergence can be expressed without a structural change,
-     * and so each carries its own verification provenance (see the header). */
-    { "postgres",  "\"", ARGUS_LIT_ANSI, true, postgres_fns },
-    { "greenplum", "\"", ARGUS_LIT_ANSI, true, postgres_fns },
-    { "cloudberry","\"", ARGUS_LIT_ANSI, true, postgres_fns },
+     * and so each carries its own verification provenance (see the header).
+     *
+     * The call template renders {call f(a,b)} as SELECT * FROM f(a,b), which is
+     * what psqlODBC does and what an ODBC application means by it: the thing
+     * that returns a result set in PostgreSQL is a *function*. PostgreSQL 11's
+     * CALL statement is for procedures, which return nothing, and no BI tool
+     * asks for one through {call}. This is also what makes SQL_PROCEDURES
+     * answer "Y" for these backends — the info type promises the invocation
+     * syntax works, and now it does. */
+    { "postgres",  "\"", ARGUS_LIT_ANSI, true, postgres_fns, "SELECT * FROM $1" },
+    { "greenplum", "\"", ARGUS_LIT_ANSI, true, postgres_fns, "SELECT * FROM $1" },
+    { "cloudberry","\"", ARGUS_LIT_ANSI, true, postgres_fns, "SELECT * FROM $1" },
 };
 
 static const argus_dialect_t argus_ansi_dialect = {
-    "ansi", "\"", ARGUS_LIT_ANSI, false, ansi_fns
+    "ansi", "\"", ARGUS_LIT_ANSI, false, ansi_fns, NULL
 };
 
 #define ARGUS_DIALECT_COUNT (sizeof(argus_dialects) / sizeof(argus_dialects[0]))

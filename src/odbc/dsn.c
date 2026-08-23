@@ -22,6 +22,14 @@ extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
 
 /* ── Internal: apply a single DSN key-value pair to DBC ─────── */
 
+/* "1"/"yes"/"true" → 1, anything else present → 0, absent → -1 (unset). */
+static int dsn_tristate(const char *v)
+{
+    if (!v || !*v) return -1;
+    if (*v == '1' || *v == 'y' || *v == 'Y' || *v == 't' || *v == 'T') return 1;
+    return 0;
+}
+
 static void apply_dsn_param(argus_dbc_t *dbc, const char *key, const char *val)
 {
     if (!key || !val || !*val) return;
@@ -89,6 +97,19 @@ static void apply_dsn_param(argus_dbc_t *dbc, const char *key, const char *val)
         dbc->fetch_buffer_size = atoi(val);
     } else if (strcasecmp(key, "MAXSCROLLROWS") == 0) {
         dbc->max_scroll_rows = atol(val);
+    } else if (strcasecmp(key, "SSLMODE") == 0) {
+        free(dbc->pg_sslmode);
+        dbc->pg_sslmode = strdup(val);
+    } else if (strcasecmp(key, "SEARCHPATH") == 0 ||
+               strcasecmp(key, "CURRENTSCHEMA") == 0) {
+        free(dbc->pg_search_path);
+        dbc->pg_search_path = strdup(val);
+    } else if (strcasecmp(key, "SHOWPARTITIONS") == 0) {
+        dbc->pg_show_partitions = dsn_tristate(val);
+    } else if (strcasecmp(key, "SHOWALLDATABASES") == 0) {
+        dbc->pg_show_all_databases = dsn_tristate(val);
+    } else if (strcasecmp(key, "ROWVERSIONING") == 0) {
+        dbc->pg_row_versioning = dsn_tristate(val);
     } else if (strcasecmp(key, "LOGLEVEL") == 0) {
         dbc->log_level = atoi(val);
     } else if (strcasecmp(key, "LOGFILE") == 0) {

@@ -82,6 +82,20 @@ static SQLRETURN catalog_dispatch(argus_stmt_t *stmt)
     return SQL_SUCCESS;
 }
 
+/* True when the argument is present and exactly `want`. A NULL pointer is
+ * "omitted" and never matches: ODBC distinguishes an absent argument (no
+ * filter) from an empty one (no value), and SQLTables' enumeration forms are
+ * defined in terms of the empty string. */
+static bool argus_arg_is(const SQLCHAR *arg, SQLSMALLINT len, const char *want)
+{
+    if (!arg) return false;
+    size_t n = (len == SQL_NTS) ? strlen((const char *)arg) : (size_t)len;
+    return n == strlen(want) && memcmp(arg, want, n) == 0;
+}
+
+static SQLRETURN catalog_delegate(argus_stmt_t *stmt, const char *what);
+static SQLRETURN catalog_failed(argus_stmt_t *stmt, const char *what);
+
 /* ── ODBC API: SQLTables ─────────────────────────────────────── */
 
 SQLRETURN SQL_API SQLTables(
@@ -105,6 +119,41 @@ SQLRETURN SQL_API SQLTables(
 
     if (!dbc->backend->get_tables) {
         return argus_set_not_implemented(&stmt->diag, "SQLTables");
+    }
+
+    /*
+     * SQLTables' three enumeration forms.
+     *
+     * ODBC overloads SQLTables: "%" in exactly one argument with the others
+     * given as *empty strings* (not NULL — an omitted argument means "no
+     * filter", an empty one means "no value") asks for the list of catalogs or
+     * of schemas rather than for tables. Power BI's hierarchical navigator and
+     * Tableau's schema picker both open with one of these.
+     *
+     * Every backend has implemented get_catalogs and get_schemas since the
+     * vtable was written, and nothing ever called them: the special cases fell
+     * through to get_tables, so asking for the catalog list returned the table
+     * list. Routing them is the whole fix.
+     */
+    {
+        bool cat_pct = argus_arg_is(CatalogName, NameLength1, "%");
+        bool sch_pct = argus_arg_is(SchemaName,  NameLength2, "%");
+        bool cat_empty = argus_arg_is(CatalogName, NameLength1, "");
+        bool sch_empty = argus_arg_is(SchemaName,  NameLength2, "");
+        bool tab_empty = argus_arg_is(TableName,   NameLength3, "");
+
+        if (cat_pct && sch_empty && tab_empty && dbc->backend->get_catalogs) {
+            if (dbc->backend->get_catalogs(dbc->backend_conn, &stmt->op) != 0)
+                return catalog_failed(stmt, "SQLTables (catalog list)");
+            return catalog_delegate(stmt, "SQLTables (catalog list)");
+        }
+
+        if (sch_pct && cat_empty && tab_empty && dbc->backend->get_schemas) {
+            if (dbc->backend->get_schemas(dbc->backend_conn, NULL, NULL,
+                                          &stmt->op) != 0)
+                return catalog_failed(stmt, "SQLTables (schema list)");
+            return catalog_delegate(stmt, "SQLTables (schema list)");
+        }
     }
 
     SQLULEN mid = stmt->metadata_id;

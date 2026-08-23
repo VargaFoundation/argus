@@ -109,9 +109,12 @@ FROM generate_series(0, 60) g;
 CREATE OR REPLACE VIEW big_orders AS
     SELECT * FROM orders WHERE amount > 100;
 
+-- Schema-qualified inside the body on purpose: a SQL function resolves
+-- unqualified names with the *caller's* search_path, and the escape test calls
+-- it from a connection that has none set.
 CREATE OR REPLACE FUNCTION order_count(cust integer)
 RETURNS bigint LANGUAGE sql STABLE AS
-    $$ SELECT count(*) FROM orders WHERE customer_id = cust $$;
+    $$ SELECT count(*) FROM argus_test.orders WHERE customer_id = cust $$;
 
 ANALYZE customers;
 ANALYZE orders;
@@ -140,3 +143,24 @@ INSERT INTO nation VALUES
 
 ANALYZE nation;
 ANALYZE region;
+
+-- ── Domains and an enum ──────────────────────────────────────────
+-- A column declared over a domain reports the *domain's* OID in the wire
+-- protocol, so without resolving it the driver would report an unbounded
+-- string for postcode instead of varchar(10).
+DROP TABLE IF EXISTS domains CASCADE;
+DROP DOMAIN IF EXISTS postcode CASCADE;
+DROP DOMAIN IF EXISTS positive_int CASCADE;
+DROP TYPE IF EXISTS mood CASCADE;
+
+CREATE DOMAIN postcode     AS varchar(10) CHECK (VALUE <> '');
+CREATE DOMAIN positive_int AS integer     CHECK (VALUE > 0);
+CREATE TYPE   mood         AS ENUM ('sad', 'ok', 'happy');
+
+CREATE TABLE domains (
+    pc     postcode,
+    n      positive_int,
+    m      mood,
+    plain  integer
+);
+INSERT INTO domains VALUES ('75001', 42, 'happy', 7);

@@ -312,22 +312,23 @@ static void test_special_columns_rowver(void **state)
     SQLFreeHandle(SQL_HANDLE_STMT, s);
 }
 
-/* ── SQL_PROCEDURES is still "N" ─────────────────────────────── */
+/* ── SQL_PROCEDURES ──────────────────────────────────────────── */
 
-static void test_procedures_getinfo_stays_honest(void **state)
+static void test_procedures_getinfo(void **state)
 {
     (void)state;
     /*
-     * SQLProcedures works, but SQL_PROCEDURES also promises the driver accepts
-     * ODBC's {call ...} invocation syntax, which escape.c still rejects.
-     * Answering "Y" would be a promise the driver cannot keep — the same
-     * over-claiming the dialect layer exists to prevent.
+     * "Y" promises two things: the engine has procedures, and the driver
+     * accepts ODBC's {call ...} invocation syntax. Both are true here —
+     * SQLProcedures reads pg_proc and escape.c renders {call f(a)} as
+     * SELECT * FROM f(a). The answer is derived from the dialect's call
+     * template, so it cannot drift from the second half.
      */
     SQLCHAR buf[8] = {0};
     SQLSMALLINT len = 0;
     assert_int_equal(SQLGetInfo(g_dbc, SQL_PROCEDURES, buf, sizeof(buf), &len),
                      SQL_SUCCESS);
-    assert_string_equal((char *)buf, "N");
+    assert_string_equal((char *)buf, "Y");
 }
 
 int main(void)
@@ -339,7 +340,7 @@ int main(void)
         cmocka_unit_test(test_privileges),
         cmocka_unit_test(test_special_columns_best_rowid),
         cmocka_unit_test(test_special_columns_rowver),
-        cmocka_unit_test(test_procedures_getinfo_stays_honest),
+        cmocka_unit_test(test_procedures_getinfo),
     };
     return cmocka_run_group_tests(tests, setup, teardown);
 }

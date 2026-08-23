@@ -100,8 +100,15 @@ typedef struct pg_conn {
 
     char        *database;
     int          fetch_batch;    /* rows per streaming chunk (FetchBufferSize) */
-    bool         show_partitions;/* SHOWPARTITIONS=1: stop hiding child partitions */
-    bool         use_copy;       /* COPY BINARY fast path allowed */
+    /* Per-connection switches, from the connection string or DSN with the
+     * matching ARGUS_PG_* environment variable as a machine-wide fallback. */
+    bool         show_partitions;     /* SHOWPARTITIONS: list child partitions  */
+    bool         show_all_databases;  /* SHOWALLDATABASES: every pg_database row */
+    bool         row_versioning;      /* ROWVERSIONING: expose xmin as SQL_ROWVER */
+
+    /* Domain and enum OIDs mapped to the type to report instead
+     * (pg_oidmap.c). GHashTable*, built once at connect. */
+    void        *oid_map;
 
     /* SQL fragments assembled once from the probe flags above, because they
      * are rebuilt on every catalog call otherwise. Owned by the connection. */
@@ -130,7 +137,8 @@ typedef struct pg_op {
     int                  num_cols;
     bool                 metadata_fetched;
 
-    long long            affected_rows; /* PQcmdTuples for DML/DDL */
+    long long            affected_rows;     /* PQcmdTuples for DML */
+    bool                 has_affected_rows; /* false for DDL and SELECT */
 
     /* COPY BINARY path (pg_copy.c). NULL when not taken. */
     struct pg_copy_state *copy;
@@ -179,6 +187,8 @@ int  pg_execute_buffered(argus_backend_conn_t conn, const char *query,
                          argus_backend_op_t *out_op);
 int  pg_get_operation_status(argus_backend_conn_t conn, argus_backend_op_t op,
                              bool *finished);
+bool pg_get_affected_rows(argus_backend_conn_t conn, argus_backend_op_t op,
+                          SQLLEN *out_rows);
 void pg_close_operation(argus_backend_conn_t conn, argus_backend_op_t op);
 int  pg_cancel(argus_backend_conn_t conn, argus_backend_op_t op);
 
@@ -234,6 +244,16 @@ uint8_t     pg_native_kind(Oid oid);
 /* SQLGetTypeInfo, synthesised as a UNION ALL of literal rows. */
 int         pg_get_type_info(argus_backend_conn_t conn, SQLSMALLINT sql_type,
                              argus_backend_op_t *out_op);
+
+/* ── pg_oidmap.c ─────────────────────────────────────────────────
+ * Domains and enums: a column declared over a domain reports the domain's own
+ * OID, which no static table can know. Resolved once at connect. */
+
+void pg_oidmap_prime(pg_conn_t *conn);
+void pg_oidmap_free(pg_conn_t *conn);
+/* Replace a domain OID with its base type (and its declared modifier, when the
+ * column has none). A no-op for a type the map does not hold. */
+void pg_resolve_oid(const pg_conn_t *conn, Oid *oid, int *typmod);
 
 /* ── pg_prepare.c ────────────────────────────────────────────────
  * Server-side Parse + Describe for SQLDescribeParam. Metadata only: execution

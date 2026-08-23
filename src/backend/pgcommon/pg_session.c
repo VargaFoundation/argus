@@ -82,11 +82,30 @@ static void kv_free(pg_kv_t *kv)
  */
 static const char *ssl_mode_for(const argus_dbc_t *dbc)
 {
+    /* SSLMODE, when given, is passed to libpq verbatim. It is the only way to
+     * express `prefer`, `allow` or `verify-ca`, which the two-knob SSL/SSLVerify
+     * pair cannot distinguish, and it is the spelling every PostgreSQL user and
+     * every Tableau PostgreSQL connector already knows. */
+    if (dbc && dbc->pg_sslmode && *dbc->pg_sslmode) return dbc->pg_sslmode;
+
     if (!dbc || !dbc->ssl_enabled) return "disable";
     if (!dbc->ssl_verify)          return "require";
     /* verify-full needs a CA to verify against; without one libpq falls back
      * to the system store, which is what a user supplying no CA expects. */
     return "verify-full";
+}
+
+/*
+ * A per-connection switch: the connection string or DSN wins, and the
+ * environment variable is the machine-wide fallback for an operator who wants
+ * to flip a behaviour without editing every DSN.
+ */
+static bool pg_switch(int dbc_value, const char *env_name)
+{
+    if (dbc_value >= 0) return dbc_value != 0;
+    const char *env = g_getenv(env_name);
+    return env && (*env == '1' || *env == 't' || *env == 'T' ||
+                   *env == 'y' || *env == 'Y');
 }
 
 int pg_connect(const pg_profile_t *profile, argus_dbc_t *dbc,
@@ -105,9 +124,18 @@ int pg_connect(const pg_profile_t *profile, argus_dbc_t *dbc,
     conn->detected = profile->engine;
     conn->fetch_batch = (dbc && dbc->fetch_buffer_size > 0)
                         ? dbc->fetch_buffer_size : ARGUS_DEFAULT_BATCH_SIZE;
-    conn->use_copy = (g_getenv("ARGUS_PG_NOCOPY") == NULL);
     /* PostgreSQL's own default, and ODBC's: SQL_AUTOCOMMIT_ON. */
     conn->autocommit = true;
+
+    conn->show_partitions =
+        pg_switch(dbc ? dbc->pg_show_partitions : -1,
+                  "ARGUS_PG_SHOW_PARTITIONS");
+    conn->show_all_databases =
+        pg_switch(dbc ? dbc->pg_show_all_databases : -1,
+                  "ARGUS_PG_SHOW_ALL_DATABASES");
+    conn->row_versioning =
+        pg_switch(dbc ? dbc->pg_row_versioning : -1,
+                  "ARGUS_PG_ROW_VERSIONING");
 
     pg_kv_t kv = {0};
 
@@ -175,6 +203,7 @@ int pg_connect(const pg_profile_t *profile, argus_dbc_t *dbc,
     PQsetClientEncoding(conn->pg, "UTF8");
 
     pg_probe_identity(conn);
+    pg_oidmap_prime(conn);
 
     /*
      * A declared/detected mismatch is a warning, not a failure. The connection
@@ -196,6 +225,29 @@ int pg_connect(const pg_profile_t *profile, argus_dbc_t *dbc,
         ARGUS_LOG_WARN("%s", msg);
     }
 
+    /* An explicit search_path, so unqualified names resolve the way the DSN
+     * says rather than the way the role's default happens to. Sent through
+     * set_config() with a bound value: a schema list is user input, and the
+     * SET statement has no parameter form. */
+    if (dbc && dbc->pg_search_path && *dbc->pg_search_path) {
+        const char *vals[1] = { dbc->pg_search_path };
+        PGresult *r = PQexecParams(conn->pg,
+                                   "SELECT set_config('search_path', $1, false)",
+                                   1, NULL, vals, NULL, NULL, 0);
+        if (!r || PQresultStatus(r) != PGRES_TUPLES_OK) {
+            if (r) {
+                pg_fail(conn, r, "HY000");
+                PQclear(r);
+            }
+            ARGUS_LOG_WARN("PostgreSQL: could not set search_path to '%s'",
+                           dbc->pg_search_path);
+            conn->last_error[0] = '\0';
+            conn->last_sqlstate[0] = '\0';
+        } else {
+            PQclear(r);
+        }
+    }
+
     /* QueryTimeout is a server-side setting in PostgreSQL, which is strictly
      * better than a client-side clock: the server stops doing the work. */
     if (dbc && dbc->query_timeout_sec > 0) {
@@ -208,14 +260,6 @@ int pg_connect(const pg_profile_t *profile, argus_dbc_t *dbc,
 
     conn->database = strdup(effective_dbname(database));
 
-    /* SHOWPARTITIONS=1 turns off the child-partition filter in SQLTables. It
-     * is read from the raw connection string because it is specific to this
-     * backend family and has no argus_dbc_t field. */
-    {
-        const char *env = g_getenv("ARGUS_PG_SHOW_PARTITIONS");
-        conn->show_partitions = (env && (*env == '1' || *env == 't' || *env == 'T'));
-    }
-
     *out_conn = conn;
     return 0;
 }
@@ -226,6 +270,7 @@ void pg_disconnect(argus_backend_conn_t raw_conn)
     if (!conn) return;
     if (conn->pg) PQfinish(conn->pg);
     free(conn->database);
+    pg_oidmap_free(conn);
     g_free(conn->mpp_remarks_expr);
     g_free(conn->mpp_tables_filter);
     free(conn);

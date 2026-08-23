@@ -309,6 +309,7 @@ if(ARGUS_BUILD_POSTGRES)
         backend/pgcommon/pg_mpp.c
         backend/pgcommon/pg_txn.c
         backend/pgcommon/pg_prepare.c
+        backend/pgcommon/pg_oidmap.c
         backend/postgres/pg_backend.c
         backend/greenplum/gp_backend.c
         backend/cloudberry/cb_backend.c
