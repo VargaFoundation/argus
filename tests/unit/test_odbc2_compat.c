@@ -82,12 +82,14 @@ static void test_transact_dbc(void **state)
     SQLHDBC dbc = SQL_NULL_HDBC;
     SQLAllocConnect(env, &dbc);
 
-    /* SQLTransact should succeed (transactions are no-op) */
+    /* COMMIT of nothing is vacuously true on an auto-commit-only connection
+     * (SQL_TXN_CAPABLE=SQL_TC_NONE); ROLLBACK cannot be honored — the work is
+     * already committed — and must not report success. */
     SQLRETURN ret = SQLTransact(SQL_NULL_HENV, dbc, SQL_COMMIT);
     assert_int_equal(ret, SQL_SUCCESS);
 
     ret = SQLTransact(SQL_NULL_HENV, dbc, SQL_ROLLBACK);
-    assert_int_equal(ret, SQL_SUCCESS);
+    assert_int_equal(ret, SQL_ERROR);
 
     SQLFreeConnect(dbc);
     SQLFreeEnv(env);

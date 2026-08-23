@@ -572,19 +572,35 @@ SQLRETURN SQL_API SQLEndTran(
     SQLHANDLE   Handle,
     SQLSMALLINT CompletionType)
 {
-    (void)CompletionType;
+    /*
+     * The driver reports SQL_TXN_CAPABLE = SQL_TC_NONE: every statement is
+     * auto-committed and there is never an open transaction. A COMMIT of
+     * nothing is vacuously true; a ROLLBACK is not — the work the caller wants
+     * undone has already been committed, and answering SQL_SUCCESS would tell
+     * the application its data was rolled back when it was not (silent commit).
+     */
+    argus_diag_t *diag = NULL;
 
-    /* Hive doesn't support transactions - just return success */
     switch (HandleType) {
     case SQL_HANDLE_ENV:
         if (!argus_valid_env(Handle)) return SQL_INVALID_HANDLE;
-        return SQL_SUCCESS;
+        diag = &((argus_env_t *)Handle)->diag;
+        break;
     case SQL_HANDLE_DBC:
         if (!argus_valid_dbc(Handle)) return SQL_INVALID_HANDLE;
-        return SQL_SUCCESS;
+        diag = &((argus_dbc_t *)Handle)->diag;
+        break;
     default:
         return SQL_ERROR;
     }
+
+    if (CompletionType == SQL_COMMIT)
+        return SQL_SUCCESS;
+
+    return argus_set_error(diag, "HYC00",
+                           "[Argus] Rollback is not supported: the connection "
+                           "is auto-commit only (SQL_TXN_CAPABLE=SQL_TC_NONE), "
+                           "completed statements cannot be undone", 0);
 }
 
 /* ── ODBC API: SQLGetCursorName ──────────────────────────────── */

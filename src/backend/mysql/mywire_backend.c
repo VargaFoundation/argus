@@ -155,7 +155,10 @@ static int mywire_cancel(argus_backend_conn_t conn, argus_backend_op_t op)
 {
     (void)conn;
     (void)op;
-    /* Results are fetched synchronously; there is nothing to cancel. */
+    /* Results are fetched synchronously: by the time SQLCancel can reach this
+     * the query has already completed, and cancelling a finished operation is
+     * a no-op success per ODBC. Mid-flight cancel would need KILL QUERY on a
+     * second wire connection; not implemented. */
     return 0;
 }
 

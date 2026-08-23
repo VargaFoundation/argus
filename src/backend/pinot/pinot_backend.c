@@ -139,9 +139,46 @@ static void pinot_disconnect(argus_backend_conn_t raw)
     free(conn);
 }
 
+static size_t discard_cb(void *contents, size_t size, size_t nmemb, void *userp)
+{
+    (void)contents; (void)userp;
+    return size * nmemb;
+}
+
+/* Real liveness probe: the pool relies on this to avoid handing out
+ * connections to a dead broker, so a pointer check is not enough. The
+ * broker's /health endpoint answers in microseconds. */
 static bool pinot_is_alive(argus_backend_conn_t raw)
 {
-    return raw != NULL;
+    pinot_conn_t *conn = (pinot_conn_t *)raw;
+    if (!conn || !conn->curl || !conn->broker_url) return false;
+
+    char url[560];
+    snprintf(url, sizeof(url), "%s/health", conn->broker_url);
+
+    CURL *curl = conn->curl;
+    curl_easy_reset(curl);
+    if (conn->ssl_enabled) {
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);
+    }
+    if (conn->user && *conn->user) {
+        char up[512];
+        snprintf(up, sizeof(up), "%s:%s", conn->user,
+                 conn->password ? conn->password : "");
+        curl_easy_setopt(curl, CURLOPT_HTTPAUTH, (long)CURLAUTH_BASIC);
+        curl_easy_setopt(curl, CURLOPT_USERPWD, up);
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_cb);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+
+    if (curl_easy_perform(curl) != CURLE_OK) return false;
+    long code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    return code >= 200 && code < 400;
 }
 
 /* ── Value + result parsing ──────────────────────────────────── */
@@ -333,10 +370,13 @@ static void pinot_close_operation(argus_backend_conn_t conn,
     free(op);
 }
 
+/* Execution is synchronous: by the time SQLCancel can reach this the query
+ * has already completed, and cancelling a finished operation is a no-op
+ * success per ODBC. Pinot has no mid-flight cancel API for broker queries. */
 static int pinot_cancel(argus_backend_conn_t conn, argus_backend_op_t op)
 {
     (void)conn; (void)op;
-    return 0;   /* synchronous */
+    return 0;
 }
 
 /* ── Metadata + fetch ────────────────────────────────────────── */

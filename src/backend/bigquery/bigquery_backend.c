@@ -552,6 +552,9 @@ static void bq_disconnect(argus_backend_conn_t raw)
     bq_conn_free((bq_conn_t *)raw);
 }
 
+/* A BigQuery "connection" is stateless REST configuration plus cached tokens —
+ * there is no persistent socket that can die between queries, so a non-NULL
+ * handle genuinely is alive. (Token refresh happens per request.) */
 static bool bq_is_alive(argus_backend_conn_t raw)
 {
     return raw != NULL;

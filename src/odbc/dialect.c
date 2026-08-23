@@ -461,22 +461,22 @@ static const argus_fn_entry_t ansi_fns[] = {
  * DATE '...' yet rejects CURRENT_DATE, so an engine's SQL-92 coverage is not
  * all-or-nothing and cannot be inferred from its lineage. */
 static const argus_dialect_t argus_dialects[] = {
-    { "trino",    "\"", ARGUS_LIT_ANSI, true,  trino_fns },
-    { "hive",     "`",  ARGUS_LIT_ANSI, true,  hive_fns },
+    { "trino",    "\"", ARGUS_LIT_ANSI, true,  false, trino_fns },
+    { "hive",     "`",  ARGUS_LIT_ANSI, true,  true,  hive_fns },
     /* Impala rejects the ANSI TIMESTAMP '…' literal (ParseException) but accepts
      * CAST('…' AS TIMESTAMP), and CAST works for DATE too — verified live. */
-    { "impala",   "`",  ARGUS_LIT_CAST, true,  impala_fns },
-    { "mysql",    "`",  ARGUS_LIT_ANSI, true,  mywire_fns },
-    { "bigquery", "`",  ARGUS_LIT_ANSI, true,  bigquery_fns },
-    { "phoenix",  "\"", ARGUS_LIT_ANSI, false, ansi_fns },
-    { "pinot",    "\"", ARGUS_LIT_ANSI, false, pinot_fns },
-    { "druid",    "\"", ARGUS_LIT_ANSI, false, ansi_fns },
-    { "flightsql","\"", ARGUS_LIT_ANSI, false, ansi_fns },
-    { "kudu",     "\"", ARGUS_LIT_ANSI, false, ansi_fns },
+    { "impala",   "`",  ARGUS_LIT_CAST, true,  true,  impala_fns },
+    { "mysql",    "`",  ARGUS_LIT_ANSI, true,  true,  mywire_fns },
+    { "bigquery", "`",  ARGUS_LIT_ANSI, true,  true,  bigquery_fns },
+    { "phoenix",  "\"", ARGUS_LIT_ANSI, false, false, ansi_fns },
+    { "pinot",    "\"", ARGUS_LIT_ANSI, false, false, pinot_fns },
+    { "druid",    "\"", ARGUS_LIT_ANSI, false, false, ansi_fns },
+    { "flightsql","\"", ARGUS_LIT_ANSI, false, false, ansi_fns },
+    { "kudu",     "\"", ARGUS_LIT_ANSI, false, false, ansi_fns },
 };
 
 static const argus_dialect_t argus_ansi_dialect = {
-    "ansi", "\"", ARGUS_LIT_ANSI, false, ansi_fns
+    "ansi", "\"", ARGUS_LIT_ANSI, false, false, ansi_fns
 };
 
 #define ARGUS_DIALECT_COUNT (sizeof(argus_dialects) / sizeof(argus_dialects[0]))
