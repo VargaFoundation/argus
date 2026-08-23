@@ -3,14 +3,14 @@
 [![CI](https://github.com/VargaFoundation/argus/actions/workflows/ci.yml/badge.svg)](https://github.com/VargaFoundation/argus/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/VargaFoundation/argus/actions/workflows/codeql.yml/badge.svg)](https://github.com/VargaFoundation/argus/actions/workflows/codeql.yml)
 
-Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix, Pinot, Druid, Kudu, MySQL-wire (StarRocks/Doris/ClickHouse) and Arrow Flight SQL (Dremio/InfluxDB 3) — with comprehensive logging, SSL/TLS, OAuth2 and an Arrow ADBC surface built over the same stack.
+Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix, Pinot, Druid, Kudu, MySQL-wire (StarRocks/Doris/ClickHouse), PostgreSQL and Arrow Flight SQL (Dremio/InfluxDB 3) — with comprehensive logging, SSL/TLS, OAuth2 and an Arrow ADBC surface built over the same stack.
 
 ## Features
 
 ### Core ODBC Support
 - **107 ODBC entry points** (ANSI + Unicode `W` variants) — ODBC 3.80, **Level 1 interface conformance** (`SQL_OIC_LEVEL1`, SQL-92 Entry), plus ODBC 2.x compatibility (`SQLAllocConnect`, `SQLError`, `SQLExtendedFetch`, ...). This matches the commercial Simba/Starburst drivers for these engines; stored procedures and transactions — the two OLTP features Level 1 also names — are reported absent (`SQL_PROCEDURES="N"`, `SQL_TXN_CAPABLE=SQL_TC_NONE`), as they are on Trino/BigQuery/Hive themselves.
 - **Statement-level asynchronous execution** (`SQL_ASYNC_MODE = SQL_AM_STATEMENT`): async `SQLExecDirect`/`SQLExecute` on a worker thread, with `SQLCompleteAsync` and `SQLCancelHandle` (ODBC 3.8).
-- **10 backends**, enabled by dependency auto-detection at configure time
+- **11 backends**, enabled by dependency auto-detection at configure time
 - **Cross-platform**: Linux, macOS and Windows x64
 - **Arrow ADBC driver** (`libargus_adbc`) exposing the same backends through the Arrow C Data Interface
 
@@ -26,6 +26,7 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 | `druid` | Apache Druid | HTTP/JSON | libcurl + json-glib | yes |
 | `bigquery` | Google BigQuery — incl. sovereign clouds (S3NS): every Google endpoint is configurable | REST/JSON | libcurl + json-glib (+ OpenSSL for key files) | yes |
 | `mysql` | StarRocks / Doris / ClickHouse / MySQL / MariaDB | MySQL wire | libmariadb | yes |
+| `postgres` | PostgreSQL | PostgreSQL wire | libpq | yes |
 | `flightsql` | Dremio / InfluxDB 3 / any Arrow Flight SQL server | gRPC / Arrow | arrow-flight-sql (C++) | no |
 | `kudu` | Apache Kudu (deprecated — prefer `BACKEND=impala`) | kudu_client | libkudu_client | no |
 
@@ -135,6 +136,8 @@ sudo apt-get install libthrift-c-glib-dev thrift-compiler
 sudo apt-get install libcurl4-openssl-dev libjson-glib-dev
 # MySQL-wire (optional)
 sudo apt-get install libmariadb-dev
+# PostgreSQL (optional)
+sudo apt-get install libpq-dev
 
 cmake -B build && cmake --build build
 cd build && ctest --output-on-failure -L unit
@@ -147,6 +150,7 @@ pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake \
           mingw-w64-ucrt-x86_64-glib2 mingw-w64-ucrt-x86_64-curl \
           mingw-w64-ucrt-x86_64-json-glib mingw-w64-ucrt-x86_64-openssl \
           mingw-w64-ucrt-x86_64-glib-networking mingw-w64-ucrt-x86_64-libmariadbclient \
+          mingw-w64-ucrt-x86_64-postgresql \
           mingw-w64-ucrt-x86_64-thrift mingw-w64-ucrt-x86_64-cmocka
 # thrift c_glib runtime (MSYS2 only ships the compiler):
 bash scripts/build-thrift-c-glib.sh "$PWD/thrift-c-glib-prefix" 0.23.0
@@ -155,7 +159,10 @@ PKG_CONFIG_PATH="$PWD/thrift-c-glib-prefix/lib/pkgconfig" \
 cmake --build build
 ```
 
-**macOS:** Homebrew `unixodbc glib json-glib curl` then the same CMake invocation.
+**macOS:** Homebrew `unixodbc glib json-glib curl libpq` then the same CMake
+invocation. `libpq` is keg-only, so add it to `PKG_CONFIG_PATH` first
+(`export PKG_CONFIG_PATH="$(brew --prefix libpq)/lib/pkgconfig:$PKG_CONFIG_PATH"`)
+or the PostgreSQL backend is silently left out.
 
 ## Connection String Parameters
 
@@ -173,7 +180,7 @@ HOST=localhost;PORT=10000;UID=myuser;PWD=mypass;DATABASE=default;BACKEND=hive
 | **UID** / USERNAME | Username | `admin` | `` |
 | **PWD** / PASSWORD | Password | `secret` | `` |
 | **DATABASE** / SCHEMA | Database name | `mydb` | `default` |
-| **BACKEND** | `hive`, `impala`, `trino`, `phoenix`, `pinot`, `druid`, `bigquery`, `mysql`, `flightsql`, `kudu` | `trino` | `hive` |
+| **BACKEND** | `hive`, `impala`, `trino`, `phoenix`, `pinot`, `druid`, `bigquery`, `mysql`, `postgres`, `flightsql`, `kudu` | `trino` | `hive` |
 | **SSL** / UseSSL | Enable SSL | `1`, `true` | `false` |
 | **SSLCertFile** | Client certificate | `/path/cert.pem` | - |
 | **SSLKeyFile** | Client key | `/path/key.pem` | - |

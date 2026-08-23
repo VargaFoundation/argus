@@ -153,6 +153,30 @@ else()
     message(STATUS "MySQL-wire backend: DISABLED (install libmariadb-dev to enable)")
 endif()
 
+# Optional: PostgreSQL-family backends (PostgreSQL / Greenplum / Apache Cloudberry)
+# One libpq-based core serves all three; they differ in catalog and dialect.
+pkg_check_modules(LIBPQ libpq)
+if(NOT LIBPQ_FOUND)
+    # Homebrew's libpq is keg-only and Windows/MSYS2 layouts vary, so fall back
+    # to a direct search before giving up on the backend.
+    find_library(PQ_LIB NAMES pq libpq)
+    find_path(PQ_INC NAMES libpq-fe.h PATH_SUFFIXES postgresql)
+    if(PQ_LIB AND PQ_INC)
+        set(LIBPQ_FOUND TRUE)
+        set(LIBPQ_LIBRARIES ${PQ_LIB})
+        set(LIBPQ_INCLUDE_DIRS ${PQ_INC})
+        set(LIBPQ_VERSION "unknown")
+    endif()
+endif()
+
+if(LIBPQ_FOUND)
+    set(ARGUS_BUILD_POSTGRES ON)
+    message(STATUS "PostgreSQL/Greenplum/Cloudberry backends: ENABLED (libpq ${LIBPQ_VERSION})")
+else()
+    set(ARGUS_BUILD_POSTGRES OFF)
+    message(STATUS "PostgreSQL/Greenplum/Cloudberry backends: DISABLED (install libpq-dev to enable)")
+endif()
+
 # Optional: Arrow Flight SQL backend (Dremio / InfluxDB 3 / Doris / StarRocks)
 pkg_check_modules(ARROW_FLIGHT_SQL arrow-flight-sql)
 if(ARROW_FLIGHT_SQL_FOUND)
@@ -163,8 +187,8 @@ else()
     message(STATUS "Arrow Flight SQL backend: DISABLED (install libarrow-flight-sql-dev to enable)")
 endif()
 
-if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO AND NOT ARGUS_BUILD_PHOENIX AND NOT ARGUS_BUILD_KUDU AND NOT ARGUS_BUILD_MYSQL AND NOT ARGUS_BUILD_FLIGHTSQL AND NOT ARGUS_BUILD_PINOT AND NOT ARGUS_BUILD_DRUID AND NOT ARGUS_BUILD_BIGQUERY)
-    message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino/Phoenix) or libkudu_client (for Kudu) or libmariadb-dev (for MySQL-wire: StarRocks/Doris/ClickHouse) or libarrow-flight-sql-dev (for Arrow Flight SQL: Dremio/InfluxDB 3).")
+if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO AND NOT ARGUS_BUILD_PHOENIX AND NOT ARGUS_BUILD_KUDU AND NOT ARGUS_BUILD_MYSQL AND NOT ARGUS_BUILD_FLIGHTSQL AND NOT ARGUS_BUILD_PINOT AND NOT ARGUS_BUILD_DRUID AND NOT ARGUS_BUILD_BIGQUERY AND NOT ARGUS_BUILD_POSTGRES)
+    message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino/Phoenix) or libkudu_client (for Kudu) or libmariadb-dev (for MySQL-wire: StarRocks/Doris/ClickHouse) or libpq-dev (for PostgreSQL/Greenplum/Cloudberry) or libarrow-flight-sql-dev (for Arrow Flight SQL: Dremio/InfluxDB 3).")
 endif()
 
 # Anonymous opt-in telemetry (requires libcurl for the HTTPS transport)

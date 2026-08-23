@@ -82,6 +82,14 @@ if(ARGUS_BUILD_BIGQUERY)
     )
 endif()
 
+if(ARGUS_BUILD_POSTGRES)
+    argus_add_unit_test(test_postgres_types unit/test_postgres_types.c)
+    target_include_directories(test_postgres_types PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/backend/pgcommon
+        ${LIBPQ_INCLUDE_DIRS}
+    )
+endif()
+
 if(ARGUS_BUILD_KUDU)
     argus_add_unit_test(test_kudu_types unit/test_kudu_types.c)
     argus_add_unit_test(test_kudu_sql_parser unit/test_kudu_sql_parser.c)
@@ -176,6 +184,15 @@ if(BUILD_INTEGRATION_TESTS)
     if(ARGUS_BUILD_MYSQL)
         argus_add_integration_test(test_mysql_connect integration/test_mysql_connect.c)
         argus_add_integration_test(test_mysql_query integration/test_mysql_query.c)
+    endif()
+
+    # PostgreSQL family. Only the `postgres` service is started by default;
+    # the greenplum/cloudberry compose services are behind profiles, so their
+    # tests are opt-in via PG_HOST/PG_PORT pointed at a real cluster.
+    if(ARGUS_BUILD_POSTGRES)
+        argus_add_integration_test(test_postgres_connect integration/test_postgres_connect.c)
+        argus_add_integration_test(test_postgres_query integration/test_postgres_query.c)
+        argus_add_integration_test(test_postgres_escapes integration/test_postgres_escapes.c)
     endif()
 
     # Arrow Flight SQL backend (InfluxDB 3 service; also covers Dremio/Doris)

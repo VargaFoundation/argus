@@ -1,5 +1,6 @@
 #include "argus/backend.h"
 #include "argus/compat.h"
+#include "argus/log.h"
 #include <string.h>
 
 /* Backend registry */
@@ -35,12 +36,24 @@ extern const argus_backend_t *argus_druid_backend_get(void);
 #ifdef ARGUS_HAS_BIGQUERY
 extern const argus_backend_t *argus_bigquery_backend_get(void);
 #endif
+#ifdef ARGUS_HAS_POSTGRES
+extern const argus_backend_t *argus_postgres_backend_get(void);
+#endif
 
 void argus_backend_register(const argus_backend_t *backend)
 {
-    if (registry_count < ARGUS_MAX_BACKENDS && backend) {
-        registry[registry_count++] = backend;
+    if (!backend) return;
+
+    if (registry_count >= ARGUS_MAX_BACKENDS) {
+        /* Silently dropping a backend here would surface much later as
+         * "Unknown backend: <name>" from do_connect(), with nothing to
+         * connect it to the real cause. */
+        ARGUS_LOG_ERROR("Backend registry full (%d): '%s' not registered. "
+                        "Raise ARGUS_MAX_BACKENDS.",
+                        ARGUS_MAX_BACKENDS, backend->name);
+        return;
     }
+    registry[registry_count++] = backend;
 }
 
 const argus_backend_t *argus_backend_find(const char *name)
@@ -85,5 +98,8 @@ void argus_backends_init(void)
 #endif
 #ifdef ARGUS_HAS_BIGQUERY
     argus_backend_register(argus_bigquery_backend_get());
+#endif
+#ifdef ARGUS_HAS_POSTGRES
+    argus_backend_register(argus_postgres_backend_get());
 #endif
 }

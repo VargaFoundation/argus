@@ -292,6 +292,33 @@ if(ARGUS_BUILD_MYSQL)
     list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_MYSQL)
 endif()
 
+# Conditionally add the PostgreSQL-family backends
+# (PostgreSQL / Greenplum / Apache Cloudberry — one libpq core, three vtables)
+if(ARGUS_BUILD_POSTGRES)
+    list(APPEND ARGUS_SOURCES
+        backend/pgcommon/pg_session.c
+        backend/pgcommon/pg_query.c
+        backend/pgcommon/pg_fetch.c
+        backend/pgcommon/pg_types.c
+        backend/pgcommon/pg_error.c
+        backend/pgcommon/pg_probe.c
+        backend/pgcommon/pg_meta_util.c
+        backend/pgcommon/pg_metadata_base.c
+        backend/postgres/pg_backend.c
+    )
+    list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend/pgcommon
+        ${LIBPQ_INCLUDE_DIRS}
+    )
+    list(APPEND ARGUS_LINK_LIBS
+        ${LIBPQ_LIBRARIES}
+    )
+    list(APPEND ARGUS_LINK_DIRS
+        ${LIBPQ_LIBRARY_DIRS}
+    )
+    list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_POSTGRES)
+endif()
+
 # Conditionally add Arrow Flight SQL backend (Dremio/InfluxDB 3/Doris/StarRocks)
 if(ARGUS_BUILD_FLIGHTSQL)
     # CXX is enabled at the top-level scope (see top CMakeLists.txt). Arrow's

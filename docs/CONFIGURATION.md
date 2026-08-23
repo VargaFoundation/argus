@@ -76,7 +76,7 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | KRBSERVICENAME | SERVICEPRINCIPALNAME | hive/impala | Kerberos SPN service name |
 | KRBHOSTFQDN | KRBHOST | (HOST) | Kerberos SPN host, if it differs from HOST |
 | KRBREALM | REALM | (from krb5.conf) | Explicit Kerberos realm |
-| BACKEND | DRIVER_TYPE | hive | Backend type: hive, impala, trino, phoenix, pinot, druid, bigquery, mysql, flightsql, kudu |
+| BACKEND | DRIVER_TYPE | hive | Backend type: hive, impala, trino, phoenix, pinot, druid, bigquery, mysql, postgres, flightsql, kudu |
 | APPLICATIONNAME | APPNAME | (none) | Client application name reported to the backend |
 | FETCHBUFFERSIZE | | (backend default) | Rows fetched per backend round-trip |
 | SOCKETTIMEOUT | | 0 (none) | Socket I/O timeout in seconds |
@@ -90,6 +90,7 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | impala | 21050 |
 | trino | 8080 |
 | mysql | 3306 |
+| postgres | 5432 |
 | flightsql | 32010 |
 | pinot | 8000 |
 | druid | 8888 |
@@ -208,6 +209,52 @@ DRIVER=Argus;BACKEND=mysql;HOST=clickhouse;PORT=9004;UID=default;DATABASE=defaul
 - Catalog operations run against `information_schema`
 - `SSL=1` enables TLS (`SSLCertFile`/`SSLKeyFile`/`SSLCAFile`, `SSLVerify` honored)
 - Requires a build with libmariadb (`libmariadb-dev`); auto-detected at cmake time
+
+### PostgreSQL (BACKEND=postgres)
+
+Native PostgreSQL over the PostgreSQL wire protocol, via libpq.
+
+```
+DRIVER=Argus;BACKEND=postgres;HOST=pg.example.com;PORT=5432;UID=analyst;PWD={secret};DATABASE=warehouse
+DRIVER=Argus;BACKEND=postgres;HOST=pg.example.com;SSL=1;SSLCAFile=/etc/ssl/certs/ca.pem;UID=analyst;PWD={secret};DATABASE=warehouse
+```
+
+- Protocol: PostgreSQL wire protocol v3 (libpq)
+- Default port: **5432**
+- Namespace model: a **database is the ODBC catalog** and a **schema is the ODBC
+  schema** — the full three-level model, unlike the MySQL backend. A PostgreSQL
+  session cannot query across databases, so `SQLTables(SQL_ALL_CATALOGS)`
+  reports only the connected database; set `ARGUS_PG_SHOW_ALL_DATABASES=1` to
+  list them all instead.
+- Catalog operations read `pg_catalog` directly, with every application-supplied
+  filter escaped through libpq (`PQescapeLiteral`) rather than interpolated
+- **Partition and inheritance children are hidden from `SQLTables` and
+  `SQLColumns`.** A table partitioned monthly over ten years is one entry in a
+  BI navigator, not 120. Set `ARGUS_PG_SHOW_PARTITIONS=1` to list them.
+- System schemas (`pg_catalog`, `information_schema`, `pg_toast*`, `pg_temp*`)
+  and relations the user cannot `SELECT` from are hidden unless asked for by name
+- **Rows are streamed, not buffered.** Memory is a function of `FetchBufferSize`,
+  not of the result set, so a multi-million-row extract does not have to fit in
+  client memory first
+- Numeric columns take the driver's native fast path — no value→text→value
+  round trip for `SQL_C_SLONG`/`SQL_C_DOUBLE` and friends
+- **`SQLCancel` is a real server-side cancellation** (libpq's out-of-band cancel
+  request), not a no-op
+- **Server SQLSTATEs are passed through.** A missing table reports PostgreSQL's
+  own `42P01` rather than a generic driver code
+- `QueryTimeout` becomes a server-side `statement_timeout`, so the server stops
+  doing the work rather than the client stopping to wait for it
+- TLS: `SSL=0` (the default) means a genuinely plaintext session (`sslmode=disable`);
+  `SSL=1` with `SSLVerify=1` (the default) is `sslmode=verify-full`;
+  `SSLVerify=0` downgrades to `require`. `SSLCAFile`/`SSLCertFile`/`SSLKeyFile`
+  map to `sslrootcert`/`sslcert`/`sslkey`.
+- Auth: libpq negotiates **SCRAM-SHA-256** or md5 from the server's challenge with
+  no configuration. `AUTHMECH=KERBEROS` uses libpq's own GSSAPI (SSPI on Windows);
+  `KRBSERVICENAME` sets the SPN service name, default `postgres`
+- If `DATABASE` is omitted the driver connects to `postgres`. (The ODBC layer
+  substitutes the literal `default` for an absent database, which is meaningful
+  for Hive and is not a database any PostgreSQL has.)
+- Requires a build with libpq (`libpq-dev`); auto-detected at cmake time
 
 ### Arrow Flight SQL (BACKEND=flightsql)
 

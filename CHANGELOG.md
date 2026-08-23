@@ -4,6 +4,49 @@ All notable changes to the Argus ODBC Driver project.
 
 ## [Unreleased]
 
+### PostgreSQL backend (`BACKEND=postgres`)
+- **New backend over the PostgreSQL wire protocol** (libpq), auto-detected at
+  configure time from `libpq-dev`. Shares a core (`src/backend/pgcommon/`) with
+  the Greenplum and Cloudberry backends that build on it.
+- **Streaming fetch.** Rows are read in bounded chunks rather than materialised
+  in client memory before the first one is visible, so peak memory follows
+  `FetchBufferSize` and not the size of the answer. Numeric columns use the row
+  cache's native typed path, skipping the value→text→value round trip.
+- **Real `SQLCancel`** — libpq's out-of-band cancel request stops the statement
+  server-side. The other synchronous backends can only return success.
+- **Server SQLSTATEs.** `PG_DIAG_SQLSTATE` is passed through instead of being
+  collapsed to a driver-invented code, so a missing relation surfaces as
+  PostgreSQL's own `42P01`.
+- **Catalog from `pg_catalog`,** with the full catalog/schema/table namespace and
+  every application-supplied filter escaped through `PQescapeLiteral` rather
+  than interpolated. `SQLTables`, `SQLColumns`, `SQLPrimaryKeys`,
+  `SQLStatistics`, `SQLGetTypeInfo` and the schema/catalog lists are all real.
+- **Partition and inheritance children are hidden** from `SQLTables` and
+  `SQLColumns` (`ARGUS_PG_SHOW_PARTITIONS=1` restores them). A ten-year monthly
+  partitioned table is one row in a BI navigator instead of 120 — the case where
+  generic PostgreSQL ODBC makes a connection dialog unusable.
+- **atttypmod is decoded**, so `varchar(20)` reports column size 20 and
+  `numeric(12,3)` reports precision 12 / scale 3 rather than driver defaults.
+- **PostgreSQL dialect** with every `{fn …}` entry executed against a live
+  PostgreSQL 16 and its value checked
+  (`tests/integration/test_postgres_escapes.c`). `ROUND`/`TRUNCATE` cast to
+  `numeric` because PostgreSQL has no two-argument form for `double precision`;
+  `WEEK` is deliberately not advertised because `extract(week)` is ISO-8601 and
+  would return wrong week numbers for ODBC's definition.
+- TLS maps `SSL`/`SSLVerify` onto `sslmode` (`disable` / `require` /
+  `verify-full`); `AUTHMECH=KERBEROS` uses libpq's own GSSAPI/SSPI;
+  `QueryTimeout` becomes a server-side `statement_timeout`.
+- An absent `DATABASE` connects to `postgres` rather than failing on the
+  literal `default` the ODBC layer substitutes.
+- `ARGUS_MAX_BACKENDS` raised to 24, and a backend dropped for want of a slot is
+  now logged instead of vanishing silently.
+- Tests: `tests/unit/test_postgres_types.c`,
+  `tests/integration/test_postgres_{connect,query,escapes}.c`, a `postgres`
+  compose service and its seed, and `libpq` added to all three CI platforms.
+  `tests/integration/test_bi_escapes.c` gained `BI_UID`/`BI_PWD`/`BI_TABLE`/
+  `BI_TABLE2`/`BI_JOIN_COL`/`BI_TEXT_COL`/`BI_TEXT_VAL` so the shared probe runs
+  on any engine (defaults unchanged, so Trino runs exactly as before).
+
 ### Telemetry (opt-in, off by default)
 - **Anonymous usage telemetry**, disabled by default and gated behind explicit
   opt-in (`TELEMETRY=1` per connection, `ARGUS_TELEMETRY=1` machine-wide;

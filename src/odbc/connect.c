@@ -107,6 +107,9 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
 #elif defined(ARGUS_HAS_TRINO)
     const char *default_backend = "trino";
     int default_port = 8080;
+#elif defined(ARGUS_HAS_POSTGRES)
+    const char *default_backend = "postgres";
+    int default_port = 5432;
 #else
     const char *default_backend = "";
     int default_port = 0;

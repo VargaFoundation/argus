@@ -242,3 +242,63 @@ services:
       timeout: 8s
       retries: 40
       start_period: 40s
+
+  # ── PostgreSQL (BACKEND=postgres) ──────────────────────────────────────
+  # Also the reference server for the PostgreSQL-family dialect probe:
+  #   PG_HOST=127.0.0.1 PG_PORT=5432 ./test_postgres_escapes
+  #   BI_BACKEND=postgres BI_HOST=127.0.0.1 BI_PORT=5432 BI_UID=argus \
+  #     BI_PWD=argus BI_DATABASE=argusdb BI_TABLE=argus_test.nation \
+  #     BI_TABLE2=argus_test.region ./test_bi_escapes
+  postgres:
+    image: postgres:16-alpine
+    container_name: argus-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: argus
+      POSTGRES_DB: argusdb
+    volumes:
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U argus -d argusdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # ── Greenplum (BACKEND=greenplum) ──────────────────────────────────────
+  # Behind a profile, so `docker compose up -d` never tries to start it and CI
+  # never depends on it: there is no official, currently-maintained Greenplum
+  # image. The open-source line was archived when Greenplum 7 moved behind a
+  # commercial licence, and the community single-node images come and go.
+  #
+  # This entry is therefore a template, like the spark-thrift one above. Start
+  # it with `docker compose --profile greenplum up -d`, and if the tag below no
+  # longer pulls, point the tests at a real cluster instead:
+  #   PG_BACKEND=greenplum PG_HOST=<coordinator> PG_PORT=5432 ./test_postgres_escapes
+  greenplum:
+    profiles: ["greenplum"]
+    image: datagrip/greenplum:6.8
+    container_name: argus-greenplum
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: argus
+
+  # ── Apache Cloudberry (BACKEND=cloudberry) ─────────────────────────────
+  # Same treatment and the same caveat: Cloudberry publishes container images
+  # and a deploy/docker tree, but the tag is not pinned here because it has not
+  # been verified from this repository. Start with
+  # `docker compose --profile cloudberry up -d` after checking the tag, or
+  # point PG_HOST at a real coordinator.
+  cloudberry:
+    profiles: ["cloudberry"]
+    image: apache/cloudberry:latest
+    container_name: argus-cloudberry
+    ports:
+      - "25432:5432"
+    environment:
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: argus

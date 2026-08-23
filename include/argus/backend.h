@@ -126,8 +126,10 @@ typedef struct argus_backend {
     bool (*get_server_version)(argus_backend_conn_t conn, char *buf, size_t buflen);
 } argus_backend_t;
 
-/* Backend registry */
-#define ARGUS_MAX_BACKENDS 16
+/* Backend registry. The array is a handful of pointers, so the bound exists
+ * only to keep registration total — leave real headroom rather than trimming
+ * it to the current backend count. */
+#define ARGUS_MAX_BACKENDS 24
 
 void argus_backend_register(const argus_backend_t *backend);
 const argus_backend_t *argus_backend_find(const char *name);

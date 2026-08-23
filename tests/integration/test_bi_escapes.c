@@ -24,7 +24,13 @@
  * there.
  *
  * Defaults target Trino's built-in tpch.tiny.nation. Override with
- * BI_HOST/BI_PORT/BI_BACKEND/BI_DATABASE.
+ * BI_HOST/BI_PORT/BI_BACKEND/BI_DATABASE/BI_UID/BI_PWD.
+ *
+ * The two join/LIKE probes need a pair of related tables. They default to
+ * tpch.tiny.nation and tpch.tiny.region so a Trino run is unchanged, and
+ * BI_TABLE/BI_TABLE2/BI_JOIN_COL/BI_TEXT_COL/BI_TEXT_VAL point them at an
+ * equivalent pair on any other engine — tests/integration/postgres-init
+ * seeds one for the PostgreSQL family.
  */
 
 static const char *env_or(const char *name, const char *dflt)
@@ -45,8 +51,9 @@ static int setup(void **state)
 
     char conn[512];
     snprintf(conn, sizeof(conn),
-             "HOST=%s;PORT=%s;UID=test;Backend=%s;Database=%s",
+             "HOST=%s;PORT=%s;UID=%s;PWD=%s;Backend=%s;Database=%s",
              env_or("BI_HOST", "localhost"), env_or("BI_PORT", "8080"),
+             env_or("BI_UID", "test"), env_or("BI_PWD", ""),
              env_or("BI_BACKEND", "trino"), env_or("BI_DATABASE", "tpch"));
 
     if (SQLDriverConnect(g_dbc, NULL, (SQLCHAR *)conn, SQL_NTS,
@@ -154,16 +161,25 @@ static void test_join_and_like_escapes(void **state)
 {
     (void)state;
 
-    assert_scalar("{oj}",
-                  "SELECT n.name FROM {oj tpch.tiny.nation n "
-                  "LEFT OUTER JOIN tpch.tiny.region r ON n.regionkey = r.regionkey} "
-                  "WHERE n.name = 'PERU'",
-                  "PERU");
+    const char *t1   = env_or("BI_TABLE",    "tpch.tiny.nation");
+    const char *t2   = env_or("BI_TABLE2",   "tpch.tiny.region");
+    const char *jcol = env_or("BI_JOIN_COL", "regionkey");
+    const char *tcol = env_or("BI_TEXT_COL", "name");
+    const char *tval = env_or("BI_TEXT_VAL", "PERU");
 
-    assert_scalar("{escape}",
-                  "SELECT name FROM tpch.tiny.nation "
-                  "WHERE name LIKE 'PER%' {escape '!'}",
-                  "PERU");
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+             "SELECT n.%s FROM {oj %s n "
+             "LEFT OUTER JOIN %s r ON n.%s = r.%s} "
+             "WHERE n.%s = '%s'",
+             tcol, t1, t2, jcol, jcol, tcol, tval);
+    assert_scalar("{oj}", sql, tval);
+
+    /* Three leading characters are enough of a prefix for every fixture. */
+    snprintf(sql, sizeof(sql),
+             "SELECT %s FROM %s WHERE %s LIKE '%.3s%%' {escape '!'}",
+             tcol, t1, tcol, tval);
+    assert_scalar("{escape}", sql, tval);
 }
 
 /* A brace inside a literal is data. Getting this wrong corrupts queries
@@ -184,16 +200,25 @@ static void test_native_sql_reports_translated_text(void **state)
 
     SQLCHAR    out[512] = {0};
     SQLINTEGER len      = 0;
-    const char *in = "SELECT {fn UCASE(name)} FROM tpch.tiny.nation "
-                     "WHERE {fn LENGTH(name)} > 5";
+    char in[512];
+    snprintf(in, sizeof(in),
+             "SELECT {fn UCASE(%s)} FROM %s WHERE {fn LENGTH(%s)} > 5",
+             env_or("BI_TEXT_COL", "name"), env_or("BI_TABLE", "tpch.tiny.nation"),
+             env_or("BI_TEXT_COL", "name"));
 
     SQLRETURN r = SQLNativeSql(g_dbc, (SQLCHAR *)in, SQL_NTS,
                                out, sizeof(out), &len);
     assert_int_equal(r, SQL_SUCCESS);
 
+    char expect_upper[128], expect_length[128];
+    snprintf(expect_upper,  sizeof(expect_upper),  "upper(%s)",
+             env_or("BI_TEXT_COL", "name"));
+    snprintf(expect_length, sizeof(expect_length), "length(%s)",
+             env_or("BI_TEXT_COL", "name"));
+
     assert_null(strstr((const char *)out, "{fn"));
-    assert_non_null(strstr((const char *)out, "upper(name)"));
-    assert_non_null(strstr((const char *)out, "length(name)"));
+    assert_non_null(strstr((const char *)out, expect_upper));
+    assert_non_null(strstr((const char *)out, expect_length));
     assert_int_equal(len, (SQLINTEGER)strlen((const char *)out));
 }
 
