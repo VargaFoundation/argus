@@ -201,15 +201,14 @@ static inline int sj_hex(char h)
     return -1;
 }
 
-/* Parse a JSON string (p at opening quote) into a fresh UTF-8 buffer. */
+/* Parse a JSON string (p at opening quote) into caller-provided storage
+ * (unescaping only shrinks, so any buffer >= the escaped content fits). */
 static const char *sj_parse_string(const char *p, const char *e,
-                                   char **out, size_t *out_len)
+                                   char *buf, size_t *out_len)
 {
     const char *end = sj_skip_string(p, e);
-    if (!end) { *out = NULL; *out_len = 0; return NULL; }
+    if (!end) { *out_len = 0; return NULL; }
     const char *s = p + 1, *last = end - 1;     /* content is [s, last) */
-    char *buf = malloc((size_t)(last - s) + 1);  /* unescaping only shrinks */
-    if (!buf) { *out = NULL; *out_len = 0; return end; }
     size_t o = 0;
     for (const char *r = s; r < last; ) {
         char c = *r++;
@@ -252,31 +251,48 @@ static const char *sj_parse_string(const char *p, const char *e,
         }
     }
     buf[o] = '\0';
-    *out = buf; *out_len = o;
+    *out_len = o;
     return end;
 }
 
-/* Parse one JSON value at p into a cell, mirroring trino_parse_data. */
-static const char *sj_value_to_cell(const char *p, const char *e, argus_cell_t *cell)
+/* Write `len` bytes + NUL into the row's bump cursor and point the cell at
+ * it. The row block was sized from the raw JSON row slice (+1 NUL per cell),
+ * which every decoded value is bounded by. */
+static void sj_put(argus_cell_t *cell, char **cursor,
+                   const char *text, size_t len)
+{
+    memcpy(*cursor, text, len);
+    (*cursor)[len] = '\0';
+    cell->data = *cursor;
+    cell->data_len = len;
+    *cursor += len + 1;
+}
+
+/* Parse one JSON value at p into a cell, mirroring trino_parse_data. String
+ * payloads go into the row's single block via `cursor`. */
+static const char *sj_value_to_cell(const char *p, const char *e,
+                                    argus_cell_t *cell, char **cursor)
 {
     p = sj_ws(p, e);
     if (p >= e) return NULL;
     char c = *p;
     if (c == 'n') { cell->is_null = true; return (p + 4 <= e) ? p + 4 : e; }
-    if (c == 't') { cell->data = strdup("true");  cell->data_len = 4; return (p + 4 <= e) ? p + 4 : e; }
-    if (c == 'f') { cell->data = strdup("false"); cell->data_len = 5; return (p + 5 <= e) ? p + 5 : e; }
+    if (c == 't') { sj_put(cell, cursor, "true", 4);  return (p + 4 <= e) ? p + 4 : e; }
+    if (c == 'f') { sj_put(cell, cursor, "false", 5); return (p + 5 <= e) ? p + 5 : e; }
     if (c == '"') {
-        char *s = NULL; size_t sl = 0;
-        const char *q = sj_parse_string(p, e, &s, &sl);
-        cell->data = s; cell->data_len = sl;
+        size_t sl = 0;
+        const char *q = sj_parse_string(p, e, *cursor, &sl);
+        if (q) {
+            cell->data = *cursor;
+            cell->data_len = sl;
+            *cursor += sl + 1;
+        }
         return q ? q : e;
     }
     if (c == '[' || c == '{') {
         const char *ve = sj_skip_value(p, e);
         if (!ve) return NULL;
-        size_t rl = (size_t)(ve - p);
-        char *buf = malloc(rl + 1);
-        if (buf) { memcpy(buf, p, rl); buf[rl] = '\0'; cell->data = buf; cell->data_len = rl; }
+        sj_put(cell, cursor, p, (size_t)(ve - p));
         return ve;
     }
     /* number */
@@ -321,19 +337,28 @@ static int sj_scan_data(const char *ds, const char *de,
     while (p < de) {
         p = sj_ws(p, de);
         if (p >= de || *p != '[') goto fail;
-        p++;
         if (n == cap) {
             cap *= 2;
             argus_row_t *nr = realloc(rows, cap * sizeof(argus_row_t));
             if (!nr) goto fail;
             rows = nr;
         }
-        rows[n].cells = calloc((size_t)num_cols, sizeof(argus_cell_t));
-        if (!rows[n].cells) goto fail;
+        /* Size the whole row from its raw JSON slice (string-aware skip, no
+         * decoding): every decoded value is a substring of its token, so
+         * slice length + one NUL per cell bounds the payload. One allocation
+         * per row instead of one per cell. */
+        const char *rend = sj_skip_value(p, de);
+        if (!rend) goto fail;
+        char *cursor = argus_row_alloc_block(&rows[n], num_cols,
+                                             (size_t)(rend - p)
+                                                 + (size_t)num_cols);
+        if (!cursor) goto fail;
+        p++;
         for (int col = 0; col < num_cols; col++) {
             p = sj_ws(p, de);
             if (p < de && *p == ']') break;   /* short row */
-            const char *ve = sj_value_to_cell(p, de, &rows[n].cells[col]);
+            const char *ve = sj_value_to_cell(p, de, &rows[n].cells[col],
+                                              &cursor);
             if (!ve) { n++; goto fail; }
             p = sj_ws(ve, de);
             if (p < de && *p == ',') p++;
@@ -351,12 +376,8 @@ static int sj_scan_data(const char *ds, const char *de,
     return 0;
 
 fail:
-    for (size_t i = 0; i < n; i++) {
-        if (rows[i].cells) {
-            for (int c = 0; c < num_cols; c++) free(rows[i].cells[c].data);
-            free(rows[i].cells);
-        }
-    }
+    for (size_t i = 0; i < n; i++)
+        argus_row_free(&rows[i], num_cols);
     free(rows);
     return -1;
 }
