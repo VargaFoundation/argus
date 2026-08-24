@@ -31,7 +31,7 @@ confirming it is the shared SimbaEngine core, not a per-data-store surface.
 | Unicode / `W` entry points | full | full (`src/odbc/unicode.c`, UTF-16↔UTF-8) | Parity |
 | Connection pooling | yes | yes (`src/odbc/pool.c`, opt-in) | Parity |
 | Auth: Kerberos/SASL/OAuth2/SSL | yes | GSSAPI + SSPI, SASL, OAuth2 (M2M + device flow), JWT, LDAP/Basic, TLS | Parity |
-| Platform / driver manager | Win / unixODBC / macOS | Win (attribute-list `ConfigDSN` + NSIS + Intune), unixODBC, macOS pkg, RPM/DEB | ~Parity — **Simba ships a DSN configuration dialog; Argus's `ConfigDSN` is deliberately UI-less** (PowerShell/`odbcconf` only), a real gap for interactive setup in odbcad32.exe |
+| Platform / driver manager | Win / unixODBC / macOS | Win (`ConfigDSN` **with a configuration dialog + Test Connection**, plus the attribute-list scripted path, NSIS, Intune), unixODBC, macOS pkg, RPM/DEB | ~Parity — the dialog is newly added (in-memory DLGTEMPLATE, cross-compile-verified); first interactive validation on a real Windows desktop still pending |
 | Type mapping | extensive | WCHAR/NUMERIC/GUID/BINARY/INTERVAL; minor tinyint/float & interval-subtype gaps | ~Parity |
 | Bulk / array | param arrays, row arrays | row arrays + param arrays; `SQLBulkOperations`→HYC00 (Simba Spark doesn't export it either) | ~Parity |
 | Tableau TDVT | certified (>90%) | **91.4%** measured (703/769) | Parity |

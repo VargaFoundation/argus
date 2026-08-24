@@ -216,7 +216,14 @@ scope for an ODBC driver.
 
 ## Windows
 
-The [NSIS installer](installer/) registers the driver and bundles its DLLs. The driver reads DSNs from the registry (user DSNs first, then system). The setup has no configuration dialog, so create DSNs from PowerShell:
+The [NSIS installer](installer/) registers the driver and bundles its DLLs. The driver reads DSNs from the registry (user DSNs first, then system).
+
+The setup now ships a **configuration dialog**: Add/Configure in
+odbcad32.exe opens a form (backend, host/port, database, credentials,
+SSL, auth mechanism) with a live **Test Connection** button that drives this
+very driver. The dialog is newly added and cross-compile-verified; until it
+has been exercised on a real Windows desktop, scripted DSN creation remains
+the recommended automated path:
 
 ```powershell
 Add-OdbcDsn -Name MyTrino -DriverName "Argus ODBC Driver" -Platform 64-bit `
