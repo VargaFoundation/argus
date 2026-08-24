@@ -20,7 +20,10 @@ function(argus_add_unit_test name source)
     target_link_directories(${name} PRIVATE
         ${CMOCKA_LIBRARY_DIRS}
     )
-    target_compile_definitions(${name} PRIVATE ARGUS_STATIC)
+    target_compile_definitions(${name} PRIVATE
+        ARGUS_STATIC
+        ARGUS_DRIVER_NAME="${ARGUS_DRIVER_FILE_NAME}"
+    )
     add_test(NAME ${name} COMMAND ${name})
     set_tests_properties(${name} PROPERTIES LABELS "unit")
 endfunction()

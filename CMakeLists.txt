@@ -250,6 +250,17 @@ else()
     endif()
 endif()
 
+# SQL_DRIVER_NAME is the driver's own file name, which differs per platform.
+# It lives here rather than in src/ because tests/ asserts on it too, and a
+# second copy of the rule is exactly how the two drifted apart before.
+if(WIN32)
+    set(ARGUS_DRIVER_FILE_NAME "argus_odbc.dll")
+elseif(APPLE)
+    set(ARGUS_DRIVER_FILE_NAME "libargus_odbc.dylib")
+else()
+    set(ARGUS_DRIVER_FILE_NAME "libargus_odbc.so")
+endif()
+
 # Thrift generated code (only if Hive/Impala backends enabled)
 if(ARGUS_BUILD_THRIFT_BACKENDS)
     add_subdirectory(thrift)

@@ -48,15 +48,8 @@ set(ARGUS_COMPILE_DEFS ARGUS_BUILD_DLL SQL_NOUNICODEMAP)
 
 # SQLGetInfo must report the driver's real identity, not a literal that drifts.
 # SQL_DRIVER_VER's format is fixed by ODBC at "##.##.####" (2-digit major,
-# 2-digit minor, 4-digit build), and SQL_DRIVER_NAME is the driver's file name,
-# which differs per platform.
-if(WIN32)
-    set(ARGUS_DRIVER_FILE_NAME "argus_odbc.dll")
-elseif(APPLE)
-    set(ARGUS_DRIVER_FILE_NAME "libargus_odbc.dylib")
-else()
-    set(ARGUS_DRIVER_FILE_NAME "libargus_odbc.so")
-endif()
+# 2-digit minor, 4-digit build); SQL_DRIVER_NAME is ARGUS_DRIVER_FILE_NAME,
+# set once in the top-level CMakeLists so tests/ sees the same value.
 list(APPEND ARGUS_COMPILE_DEFS
     ARGUS_DRIVER_NAME="${ARGUS_DRIVER_FILE_NAME}"
     ARGUS_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}

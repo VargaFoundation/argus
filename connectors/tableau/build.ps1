@@ -54,7 +54,10 @@ param(
     [string]$KeystorePath = $env:TACO_KEYSTORE,
     [string]$KeystoreAlias = $env:TACO_ALIAS,
     [string]$SdkRef = "v2024.2.0",
-    [string]$ToolsCacheDir = (Join-Path $env:TEMP "argus-tableau-sdk")
+    # $env:TEMP only exists on Windows; under PowerShell Core on the Linux and
+    # macOS runners it is null and Join-Path throws on a null -Path. GetTempPath
+    # resolves on all three (TMPDIR, then /tmp).
+    [string]$ToolsCacheDir = (Join-Path ([System.IO.Path]::GetTempPath()) "argus-tableau-sdk")
 )
 
 $ErrorActionPreference = "Stop"

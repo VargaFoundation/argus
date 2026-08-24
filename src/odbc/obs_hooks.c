@@ -1,16 +1,29 @@
 /*
  * obs_hooks.c — weak, no-op capability tap points (open driver).
  *
- * These weak definitions make the open driver link and run with zero behaviour
+ * These definitions make the open driver link and run with zero behaviour
  * change. When an object providing strong definitions of the same symbols is
- * linked in, those win and the taps light up. `__attribute__((weak))` is
- * supported by GCC and Clang — the only compilers the driver targets (Linux
- * GCC, macOS Clang, Windows MinGW-GCC).
+ * linked in, those win and the taps light up — that override is what
+ * `__attribute__((weak))` buys, and GCC and Clang both honour it on ELF and
+ * Mach-O.
+ *
+ * PE/COFF is the exception. A weak *definition* there becomes a weak external
+ * that the linker only resolves through an explicit default alias, so ld
+ * reports every use of these symbols as undefined and libargus_odbc.dll fails
+ * to link. On Windows the definitions are therefore plain and strong: the
+ * driver links and behaves identically, and a build that wants to override a
+ * tap replaces this translation unit rather than out-ranking it.
  */
 #include "argus/obs_hooks.h"
 #include <stddef.h>
 
-__attribute__((weak))
+#if defined(_WIN32)
+#define ARGUS_OBS_WEAK
+#else
+#define ARGUS_OBS_WEAK __attribute__((weak))
+#endif
+
+ARGUS_OBS_WEAK
 void argus_obs_hook_connect(const void *dbc, const char *connstr,
                             const char *backend, const char *host,
                             const char *user, int ok, double connect_ms)
@@ -19,7 +32,7 @@ void argus_obs_hook_connect(const void *dbc, const char *connstr,
     (void)user; (void)ok; (void)connect_ms;
 }
 
-__attribute__((weak))
+ARGUS_OBS_WEAK
 void argus_obs_hook_statement(const void *dbc, const char *backend,
                               const char *sql, double exec_ms,
                               unsigned long rows, unsigned long bytes,
@@ -29,20 +42,20 @@ void argus_obs_hook_statement(const void *dbc, const char *backend,
     (void)rows; (void)bytes; (void)sqlstate;
 }
 
-__attribute__((weak))
+ARGUS_OBS_WEAK
 void argus_obs_hook_disconnect(const void *dbc)
 {
     (void)dbc;
 }
 
-__attribute__((weak))
+ARGUS_OBS_WEAK
 char *argus_obs_hook_resolve_secret(const char *value)
 {
     (void)value;
     return NULL;
 }
 
-__attribute__((weak))
+ARGUS_OBS_WEAK
 char *argus_obs_hook_token_get(const char *issuer, const char *client_id,
                                const char *scope, const char *subject)
 {
@@ -50,7 +63,7 @@ char *argus_obs_hook_token_get(const char *issuer, const char *client_id,
     return NULL;
 }
 
-__attribute__((weak))
+ARGUS_OBS_WEAK
 void argus_obs_hook_token_put(const char *issuer, const char *client_id,
                               const char *scope, const char *subject,
                               const char *token, long long expiry_epoch_ms)
@@ -59,14 +72,14 @@ void argus_obs_hook_token_put(const char *issuer, const char *client_id,
     (void)token; (void)expiry_epoch_ms;
 }
 
-__attribute__((weak))
+ARGUS_OBS_WEAK
 long argus_obs_hook_fetch_preset(const char *app_name)
 {
     (void)app_name;
     return 0;
 }
 
-__attribute__((weak))
+ARGUS_OBS_WEAK
 int argus_obs_hook_guards(const void *dbc, unsigned long *max_rows,
                           unsigned long *timeout_ms)
 {
@@ -74,7 +87,7 @@ int argus_obs_hook_guards(const void *dbc, unsigned long *max_rows,
     return 0;
 }
 
-__attribute__((weak))
+ARGUS_OBS_WEAK
 int argus_obs_hook_pick_host(const void *dbc, const char *hosts_csv,
                              int nhosts)
 {
@@ -82,14 +95,14 @@ int argus_obs_hook_pick_host(const void *dbc, const char *hosts_csv,
     return -1;
 }
 
-__attribute__((weak))
+ARGUS_OBS_WEAK
 void argus_obs_hook_host_result(const void *dbc, const char *hosts_csv,
                                 int idx, int ok)
 {
     (void)dbc; (void)hosts_csv; (void)idx; (void)ok;
 }
 
-__attribute__((weak))
+ARGUS_OBS_WEAK
 int argus_obs_hook_connect_gate(const void *dbc, const char *backend,
                                 const char *connstr, char **reason)
 {
