@@ -1574,12 +1574,31 @@ SQLRETURN SQL_API SQLBindParameter(
     /* Unbind if ParameterValuePtr is NULL and not SQL_NULL_DATA */
     if (!ParameterValuePtr && !(StrLen_or_IndPtr &&
                                  *StrLen_or_IndPtr == SQL_NULL_DATA)) {
+        if (idx >= stmt->param_bindings_capacity)
+            return SQL_SUCCESS;               /* never bound: nothing to undo */
         stmt->param_bindings[idx].bound = false;
         /* Recalculate num_param_bindings */
         while (stmt->num_param_bindings > 0 &&
                !stmt->param_bindings[stmt->num_param_bindings - 1].bound)
             stmt->num_param_bindings--;
         return SQL_SUCCESS;
+    }
+
+    /* Lazy growth of the binding array (zeroing the new tail so unbound slots
+     * between sparse parameter numbers read as bound == false). */
+    if (idx >= stmt->param_bindings_capacity) {
+        int ncap = stmt->param_bindings_capacity ? stmt->param_bindings_capacity : 8;
+        while (ncap <= idx) ncap *= 2;
+        if (ncap > ARGUS_MAX_PARAMS) ncap = ARGUS_MAX_PARAMS;
+        argus_param_binding_t *p =
+            realloc(stmt->param_bindings, (size_t)ncap * sizeof(*p));
+        if (!p)
+            return argus_set_error(&stmt->diag, "HY001",
+                                   "[Argus] Memory allocation failed", 0);
+        memset(p + stmt->param_bindings_capacity, 0,
+               (size_t)(ncap - stmt->param_bindings_capacity) * sizeof(*p));
+        stmt->param_bindings = p;
+        stmt->param_bindings_capacity = ncap;
     }
 
     argus_param_binding_t *bind = &stmt->param_bindings[idx];

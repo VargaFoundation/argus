@@ -17,6 +17,7 @@ SQLRETURN argus_alloc_env(argus_env_t **out)
     env->signature          = ARGUS_ENV_SIGNATURE;
     env->odbc_version       = SQL_OV_ODBC3;
     env->connection_pooling = SQL_CP_OFF;
+    g_mutex_init(&env->mutex);
     argus_diag_clear(&env->diag);
 
     *out = env;
@@ -175,6 +176,8 @@ SQLRETURN argus_free_env(argus_env_t *env)
 {
     if (!argus_valid_env(env)) return SQL_INVALID_HANDLE;
     argus_pool_cleanup();
+    argus_diag_dispose(&env->diag);
+    g_mutex_clear(&env->mutex);
     env->signature = 0;
     free(env);
     return SQL_SUCCESS;
@@ -237,6 +240,7 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     /* Free metadata cache */
     argus_metadata_cache_free(dbc);
 
+    argus_diag_dispose(&dbc->diag);
     free(dbc);
     return SQL_SUCCESS;
 }
@@ -307,7 +311,10 @@ void argus_stmt_reset(argus_stmt_t *stmt)
     }
 
     /* Reset parameter bindings */
-    memset(stmt->param_bindings, 0, sizeof(stmt->param_bindings));
+    if (stmt->param_bindings)
+        memset(stmt->param_bindings, 0,
+               (size_t)stmt->param_bindings_capacity
+                   * sizeof(*stmt->param_bindings));
     stmt->num_param_bindings = 0;
     stmt->paramset_size = 1;
 
@@ -353,6 +360,12 @@ SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
      * point at an explicitly-associated descriptor the application still owns
      * and will free with SQLFreeHandle(SQL_HANDLE_DESC). */
     free(stmt->implicit_bindings);
+    free(stmt->param_bindings);
+    argus_diag_dispose(&stmt->diag);
+    argus_diag_dispose(&stmt->desc_ard.diag);
+    argus_diag_dispose(&stmt->desc_apd.diag);
+    argus_diag_dispose(&stmt->desc_ird.diag);
+    argus_diag_dispose(&stmt->desc_ipd.diag);
     stmt->signature = 0;
     free(stmt);
     return SQL_SUCCESS;
@@ -399,6 +412,7 @@ SQLRETURN argus_free_desc(argus_desc_t *desc)
     }
 
     free(desc->records);
+    argus_diag_dispose(&desc->diag);
     desc->signature = 0;
     free(desc);
     return SQL_SUCCESS;
@@ -549,7 +563,10 @@ SQLRETURN SQL_API SQLFreeStmt(
         return SQL_SUCCESS;
 
     case SQL_RESET_PARAMS:
-        memset(stmt->param_bindings, 0, sizeof(stmt->param_bindings));
+        if (stmt->param_bindings)
+            memset(stmt->param_bindings, 0,
+                   (size_t)stmt->param_bindings_capacity
+                       * sizeof(*stmt->param_bindings));
         stmt->num_param_bindings = 0;
         return SQL_SUCCESS;
 

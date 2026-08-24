@@ -55,6 +55,8 @@ static void free_test_stmt(argus_stmt_t *stmt)
     argus_row_cache_free(&stmt->row_cache);
     free(stmt->columns);
     free(stmt->bindings);
+    free(stmt->param_bindings);
+    argus_diag_dispose(&stmt->diag);
     g_mutex_clear(&stmt->mutex);
     stmt->signature = 0;
     free(stmt);
@@ -256,13 +258,16 @@ static void test_putdata_accumulation(void **state)
     argus_stmt_t *stmt = create_test_stmt();
     assert_non_null(stmt);
 
-    /* Set up a data-at-execution parameter */
+    /* Set up a data-at-execution parameter. param_bindings is lazily
+     * allocated now, so create the slot through the real API before poking
+     * DAE fields directly. */
     SQLLEN dae_ind = SQL_DATA_AT_EXEC;
     char user_ptr = 'X'; /* sentinel for identification */
 
-    stmt->param_bindings[0].bound = true;
-    stmt->param_bindings[0].value_type = SQL_C_CHAR;
-    stmt->param_bindings[0].param_type = SQL_VARCHAR;
+    assert_int_equal(SQLBindParameter((SQLHSTMT)stmt, 1, SQL_PARAM_INPUT,
+                                      SQL_C_CHAR, SQL_VARCHAR, 0, 0,
+                                      &user_ptr, 1, &dae_ind), SQL_SUCCESS);
+    assert_non_null(stmt->param_bindings);
     stmt->param_bindings[0].value = &user_ptr;
     stmt->param_bindings[0].str_len_or_ind = &dae_ind;
     stmt->num_param_bindings = 1;
@@ -298,9 +303,15 @@ static void test_putdata_null(void **state)
     argus_stmt_t *stmt = create_test_stmt();
     assert_non_null(stmt);
 
+    /* Create the slot through the real API (lazy param_bindings), with no
+     * application indicator pointer — PutData must then provide one. */
+    static char dummy[2];
+    assert_int_equal(SQLBindParameter((SQLHSTMT)stmt, 1, SQL_PARAM_INPUT,
+                                      SQL_C_CHAR, SQL_VARCHAR, 0, 0,
+                                      dummy, sizeof(dummy), NULL), SQL_SUCCESS);
     stmt->dae_state = ARGUS_DAE_PUTTING;
     stmt->dae_current_param = 0;
-    stmt->param_bindings[0].bound = true;
+    stmt->param_bindings[0].str_len_or_ind = NULL;
     stmt->num_param_bindings = 1;
 
     /* Send NULL data */

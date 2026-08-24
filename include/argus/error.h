@@ -20,16 +20,26 @@ typedef struct argus_diag_record {
     SQLINTEGER native_error;
 } argus_diag_record_t;
 
-/* Collection of diagnostic records for a handle */
+/* Collection of diagnostic records for a handle.
+ *
+ * `records` is allocated lazily on the first push and grown geometrically up
+ * to ARGUS_MAX_DIAG_RECORDS. Embedding the full 64-record array by value cost
+ * ~66 KB per diag — and a statement embeds five diags (its own plus four
+ * descriptors'), ~345 KB per SQLAllocHandle(STMT) for diagnostics that are
+ * almost always empty. Handles are calloc'd, so the zero state is valid. */
 typedef struct argus_diag {
-    argus_diag_record_t records[ARGUS_MAX_DIAG_RECORDS];
+    argus_diag_record_t *records;    /* NULL until the first push */
+    int                 capacity;    /* allocated slots */
     int                 count;
     SQLCHAR             header_sqlstate[ARGUS_MAX_SQLSTATE_LEN];
     SQLRETURN           return_code;
 } argus_diag_t;
 
-/* Clear all diagnostic records */
+/* Clear all diagnostic records (keeps the allocation for reuse) */
 void argus_diag_clear(argus_diag_t *diag);
+
+/* Release the record storage (handle destruction) */
+void argus_diag_dispose(argus_diag_t *diag);
 
 /* Push a new diagnostic record */
 void argus_diag_push(argus_diag_t *diag,
