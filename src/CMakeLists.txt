@@ -78,6 +78,7 @@ if(ARGUS_BUILD_THRIFT_BACKENDS)
         backend/thrift_sasl.c
         backend/thrift_gio_transport.c
         backend/hs2_types.c
+        backend/hs2_fetch.c
         backend/hive/hive_backend.c
         backend/hive/hive_session.c
         backend/hive/hive_query.c
