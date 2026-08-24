@@ -275,14 +275,8 @@ void argus_stmt_reset(argus_stmt_t *stmt)
     if (stmt->scroll_rows) {
         int nc = saved_num_cols > 0 ? saved_num_cols
                                      : stmt->row_cache.num_cols;
-        for (size_t i = 0; i < stmt->scroll_row_count; i++) {
-            argus_row_t *row = &stmt->scroll_rows[i];
-            if (row->cells) {
-                for (int c = 0; c < nc; c++)
-                    free(row->cells[c].data);
-                free(row->cells);
-            }
-        }
+        for (size_t i = 0; i < stmt->scroll_row_count; i++)
+            argus_row_free(&stmt->scroll_rows[i], nc);
         free(stmt->scroll_rows);
         stmt->scroll_rows = NULL;
     }

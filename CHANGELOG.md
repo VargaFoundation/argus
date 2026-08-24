@@ -22,6 +22,33 @@ All notable changes to the Argus ODBC Driver project.
   actually enabled** for a connection, and the first-run notice is now also
   printed to stderr, not only the log file.
 
+### Runtime validation campaign (live engines)
+- **Kerberos/GSSAPI over binary Thrift validated against a real MIT KDC** —
+  connect + SELECT through the hand-written SASL layer
+  (`tests/integration/kerberos/`), closing the roadmap's "runtime validation
+  pending" item. The HTTP/SPNEGO transport still needs an `HTTP/` service
+  principal and a TLS-enabled Kerberized HS2 in the test stack.
+- **Spark Thrift Server and Flink SQL Gateway validated live** through the
+  hive backend (connect + query). The Flink recipe that actually works is now
+  codified in `docker-compose.yml` (java8 image, session cluster, standalone
+  metastore, sha256-pinned connector jars via
+  `tests/integration/flink-lib/fetch-jars.sh`, and an underscore-free compose
+  network — Hive's URI canonicalization rejects `_` in hostnames).
+- Full integration label green on the fresh stack: Trino (+TLS), Hive 4,
+  MySQL-wire/MariaDB, Pinot, BigQuery emulator, Spark, Flink, async,
+  failover, cursors, BI escapes — 21/22, `test_hive_http` being the SPNEGO
+  infra gap above. Phoenix is blocked by the only available PQS image
+  (PROTOBUF-only, confirmed live); Kudu's image refuses its own defaults and
+  the backend is deprecated.
+
+### Fetch memory model
+- **Single-allocation rows** (`argus_row_alloc_block`): a row's cell array
+  and all its payloads can live in one malloc block, freed with one free —
+  ~10x fewer allocations on wide results. The MySQL-wire backend (which
+  knows every column length up front) is converted; ownership-transfer
+  semantics (scroll cache) are unchanged and the classic per-cell layout
+  remains supported. Trino/HS2 conversion is the follow-up.
+
 ### Memory & threading
 - **Statement handles shrank from ~360 KB to a few hundred bytes**: the five
   embedded 64-record diagnostic arrays (~66 KB each) and the 256-entry

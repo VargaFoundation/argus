@@ -539,6 +539,10 @@ jobs:
             libthrift-c-glib-dev thrift-compiler libcmocka-dev \
             libcurl4-openssl-dev libjson-glib-dev libmariadb-dev libkrb5-dev
 
+      - name: Generate TLS certs (trino-ssl)
+        run: bash tests/integration/certs/generate.sh
+      - name: Fetch Flink gateway jars (sha256-pinned)
+        run: bash tests/integration/flink-lib/fetch-jars.sh
       - name: Start every compose service
         run: |
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
@@ -546,12 +550,15 @@ jobs:
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
             trino-ssl hiveserver2
           # Second wave: the heavy JVM services, sequenced to avoid runner
-          # overcommit. Kudu/Phoenix/Spark/Flink cover the tests the default
-          # CI job never runs.
+          # overcommit. Spark and Flink (metastore-backed) are validated
+          # recipes; Phoenix stays best-effort (the only available image
+          # serves Avatica PROTOBUF while the driver speaks JSON — confirmed
+          # live) and Kudu is deprecated (image refuses its own default
+          # unsafe flags; backend unbuildable on current distros).
+          docker compose -f tests/integration/docker-compose.yml up -d --wait \
+            spark-thrift metastore flink-sql-gateway
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
             phoenix kudu-master kudu-tserver || true
-          docker compose -f tests/integration/docker-compose.yml up -d --wait \
-            spark-thrift flink-sql-gateway || true
 
       - name: Configure
         run: cmake -B build -DBUILD_INTEGRATION_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
@@ -577,8 +584,13 @@ jobs:
           PHOENIX_HOST: "127.0.0.1"
           KUDU_HOST: "127.0.0.1"
           SPARK_HOST: "127.0.0.1"
+          SPARK_PORT: "10010"
           FLINK_HOST: "127.0.0.1"
-        run: cd build && ctest --output-on-failure -L integration
+          FLINK_PORT: "10011"
+        # Phoenix and Kudu tests are excluded until their infra blockers land
+        # (JSON-serialization PQS image; a bootable Kudu image) — see the
+        # comments in docker-compose.yml.
+        run: cd build && ctest --output-on-failure -L integration -E "phoenix|kudu"
 
       - name: Service diagnostics
         if: failure()

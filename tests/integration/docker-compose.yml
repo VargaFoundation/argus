@@ -141,26 +141,50 @@ services:
       retries: 20
       start_period: 60s
 
+  # ── Hive Metastore (standalone) ────────────────────────────────────────
+  # Required by the Flink SQL Gateway's hiveserver2 endpoint ("Embedded
+  # metastore is not allowed"). Derby-backed, throwaway.
+  metastore:
+    image: apache/hive:4.0.0
+    container_name: argus-metastore
+    environment:
+      SERVICE_NAME: metastore
+
   # ── Flink SQL Gateway (HiveServer2 endpoint) ───────────────────────────
-  # Flink's SQL Gateway can expose a HiveServer2 endpoint (FLIP-223), reached
-  # through the Hive backend. Exposed on host port 10011. NOTE: template — a
-  # production setup also requires the flink-sql-connector-hive jar on the
-  # classpath and gateway endpoint configuration; validate locally.
+  # Validated live (2026-08): SELECT executes through a real Flink job.
+  # The recipe that works, learned the hard way:
+  #   - run tests/integration/flink-lib/fetch-jars.sh ONCE to download the
+  #     hive connector + shaded-hadoop jars (mounted below);
+  #   - the -java8 image: on JDK11 the hive connector dies with the
+  #     URLClassLoader ClassCastException on the first query;
+  #   - start-cluster.sh first: the gateway alone cannot run jobs
+  #     ("Connection refused: 8081" without a JobManager);
+  #   - the metastore URI must survive Hive's DNS canonicalization, which
+  #     appends the docker network name — hence the explicit underscore-free
+  #     network below ('_' is illegal in a URI hostname).
   flink-sql-gateway:
-    image: flink:1.18
+    image: flink:1.18.1-scala_2.12-java8
     container_name: argus-flink-sql-gateway
+    depends_on:
+      - metastore
     ports:
       - "10011:10000"   # SQL Gateway hiveserver2 endpoint
+    volumes:
+      - ./flink-lib/flink-sql-connector-hive-3.1.3_2.12-1.18.1.jar:/opt/flink/lib/flink-sql-connector-hive.jar:ro
+      - ./flink-lib/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar:/opt/flink/lib/flink-shaded-hadoop-uber.jar:ro
+      - ./flink-lib/conf:/opt/flink/hive-conf:ro
     command: >-
-      bash -c "/opt/flink/bin/sql-gateway.sh start-foreground
+      bash -c "/opt/flink/bin/start-cluster.sh &&
+      /opt/flink/bin/sql-gateway.sh start-foreground
       -Dsql-gateway.endpoint.type=hiveserver2
-      -Dsql-gateway.endpoint.hiveserver2.thrift.port=10000"
+      -Dsql-gateway.endpoint.hiveserver2.thrift.port=10000
+      -Dsql-gateway.endpoint.hiveserver2.catalog.hive-conf-dir=/opt/flink/hive-conf"
     healthcheck:
       test: ["CMD", "bash", "-c", "</dev/tcp/localhost/10000"]
       interval: 15s
       timeout: 10s
       retries: 20
-      start_period: 60s
+      start_period: 90s
 
   # ── MariaDB (MySQL-wire backend) ───────────────────────────────────────
   # The MySQL-wire backend (Backend=mysql) also serves StarRocks, Doris and
@@ -242,3 +266,12 @@ services:
       timeout: 8s
       retries: 40
       start_period: 40s
+
+# Explicit, underscore-free network name: the Hive metastore client
+# canonicalizes thrift://host:port via reverse DNS, which appends the docker
+# network name — and '_' (as in the default "integration_default") is illegal
+# in a URI hostname, breaking the Flink gateway's metastore connection with
+# "URISyntaxException: Illegal character in hostname".
+networks:
+  default:
+    name: argusintegration
