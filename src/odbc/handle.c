@@ -547,20 +547,27 @@ SQLRETURN SQL_API SQLFreeStmt(
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
+    /* SQL_DROP destroys the handle (and clears its mutex), so it must NOT be
+     * performed under the lock; the other options mutate shared statement
+     * state and take it. */
+    if (Option == SQL_DROP)
+        return argus_free_stmt(stmt);
+
+    ARGUS_STMT_LOCK(stmt);
+    SQLRETURN freestmt_ret;
     switch (Option) {
     case SQL_CLOSE:
         /* Close cursor / reset for re-execution */
         argus_stmt_reset(stmt);
-        return SQL_SUCCESS;
-
-    case SQL_DROP:
-        return argus_free_stmt(stmt);
+        freestmt_ret = SQL_SUCCESS;
+        break;
 
     case SQL_UNBIND:
         if (stmt->bindings && stmt->bindings_capacity > 0)
             memset(stmt->bindings, 0,
                    (size_t)stmt->bindings_capacity * sizeof(argus_col_binding_t));
-        return SQL_SUCCESS;
+        freestmt_ret = SQL_SUCCESS;
+        break;
 
     case SQL_RESET_PARAMS:
         if (stmt->param_bindings)
@@ -568,10 +575,14 @@ SQLRETURN SQL_API SQLFreeStmt(
                    (size_t)stmt->param_bindings_capacity
                        * sizeof(*stmt->param_bindings));
         stmt->num_param_bindings = 0;
-        return SQL_SUCCESS;
+        freestmt_ret = SQL_SUCCESS;
+        break;
 
     default:
-        return argus_set_error(&stmt->diag, "HY092",
+        freestmt_ret = argus_set_error(&stmt->diag, "HY092",
                                "[Argus] Invalid option for SQLFreeStmt", 0);
+        break;
     }
+    ARGUS_STMT_UNLOCK(stmt);
+    return freestmt_ret;
 }

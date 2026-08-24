@@ -12,7 +12,7 @@ extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
 
 /* ── ODBC API: SQLSetEnvAttr ─────────────────────────────────── */
 
-SQLRETURN SQL_API SQLSetEnvAttr(
+static SQLRETURN sqlsetenvattr_impl(
     SQLHENV    EnvironmentHandle,
     SQLINTEGER Attribute,
     SQLPOINTER Value,
@@ -50,7 +50,7 @@ SQLRETURN SQL_API SQLSetEnvAttr(
 
 /* ── ODBC API: SQLGetEnvAttr ─────────────────────────────────── */
 
-SQLRETURN SQL_API SQLGetEnvAttr(
+static SQLRETURN sqlgetenvattr_impl(
     SQLHENV    EnvironmentHandle,
     SQLINTEGER Attribute,
     SQLPOINTER Value,
@@ -86,7 +86,7 @@ SQLRETURN SQL_API SQLGetEnvAttr(
 
 /* ── ODBC API: SQLSetConnectAttr ─────────────────────────────── */
 
-SQLRETURN SQL_API SQLSetConnectAttr(
+static SQLRETURN sqlsetconnectattr_impl(
     SQLHDBC    ConnectionHandle,
     SQLINTEGER Attribute,
     SQLPOINTER Value,
@@ -153,7 +153,7 @@ SQLRETURN SQL_API SQLSetConnectAttr(
 
 /* ── ODBC API: SQLGetConnectAttr ─────────────────────────────── */
 
-SQLRETURN SQL_API SQLGetConnectAttr(
+static SQLRETURN sqlgetconnectattr_impl(
     SQLHDBC    ConnectionHandle,
     SQLINTEGER Attribute,
     SQLPOINTER Value,
@@ -229,7 +229,7 @@ SQLRETURN SQL_API SQLGetConnectAttr(
 
 /* ── ODBC API: SQLSetStmtAttr ────────────────────────────────── */
 
-SQLRETURN SQL_API SQLSetStmtAttr(
+static SQLRETURN sqlsetstmtattr_impl(
     SQLHSTMT   StatementHandle,
     SQLINTEGER Attribute,
     SQLPOINTER Value,
@@ -399,7 +399,7 @@ SQLRETURN SQL_API SQLSetStmtAttr(
 
 /* ── ODBC API: SQLGetStmtAttr ────────────────────────────────── */
 
-SQLRETURN SQL_API SQLGetStmtAttr(
+static SQLRETURN sqlgetstmtattr_impl(
     SQLHSTMT   StatementHandle,
     SQLINTEGER Attribute,
     SQLPOINTER Value,
@@ -580,15 +580,18 @@ SQLRETURN SQL_API SQLEndTran(
      * the application its data was rolled back when it was not (silent commit).
      */
     argus_diag_t *diag = NULL;
+    GMutex *m = NULL;
 
     switch (HandleType) {
     case SQL_HANDLE_ENV:
         if (!argus_valid_env(Handle)) return SQL_INVALID_HANDLE;
         diag = &((argus_env_t *)Handle)->diag;
+        m = &((argus_env_t *)Handle)->mutex;
         break;
     case SQL_HANDLE_DBC:
         if (!argus_valid_dbc(Handle)) return SQL_INVALID_HANDLE;
         diag = &((argus_dbc_t *)Handle)->diag;
+        m = &((argus_dbc_t *)Handle)->mutex;
         break;
     default:
         return SQL_ERROR;
@@ -597,15 +600,18 @@ SQLRETURN SQL_API SQLEndTran(
     if (CompletionType == SQL_COMMIT)
         return SQL_SUCCESS;
 
-    return argus_set_error(diag, "HYC00",
+    g_mutex_lock(m);
+    SQLRETURN ret = argus_set_error(diag, "HYC00",
                            "[Argus] Rollback is not supported: the connection "
                            "is auto-commit only (SQL_TXN_CAPABLE=SQL_TC_NONE), "
                            "completed statements cannot be undone", 0);
+    g_mutex_unlock(m);
+    return ret;
 }
 
 /* ── ODBC API: SQLGetCursorName ──────────────────────────────── */
 
-SQLRETURN SQL_API SQLGetCursorName(
+static SQLRETURN sqlgetcursorname_impl(
     SQLHSTMT    StatementHandle,
     SQLCHAR    *CursorName,
     SQLSMALLINT BufferLength,
@@ -623,7 +629,7 @@ SQLRETURN SQL_API SQLGetCursorName(
 
 /* ── ODBC API: SQLSetCursorName ──────────────────────────────── */
 
-SQLRETURN SQL_API SQLSetCursorName(
+static SQLRETURN sqlsetcursorname_impl(
     SQLHSTMT   StatementHandle,
     SQLCHAR   *CursorName,
     SQLSMALLINT NameLength)
@@ -704,4 +710,124 @@ SQLRETURN SQL_API SQLCopyDesc(
     }
 
     return SQL_SUCCESS;
+}
+
+/* ── Thread-safety wrappers ─────────────────────────────────────
+ * ODBC requires per-handle thread safety; every entry point above
+ * runs under its handle's mutex. Bodies were renamed *_impl and
+ * must never call another locked public entry point (GMutex is
+ * non-recursive). */
+
+SQLRETURN SQL_API SQLSetEnvAttr(
+    SQLHENV    EnvironmentHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER StringLength)
+{
+    argus_env_t *env_h = (argus_env_t *)EnvironmentHandle;
+    if (!argus_valid_env(env_h)) return SQL_INVALID_HANDLE;
+    g_mutex_lock(&env_h->mutex);
+    SQLRETURN ret = sqlsetenvattr_impl(EnvironmentHandle, Attribute, Value, StringLength);
+    g_mutex_unlock(&env_h->mutex);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLGetEnvAttr(
+    SQLHENV    EnvironmentHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER BufferLength,
+    SQLINTEGER *StringLength)
+{
+    argus_env_t *env_h = (argus_env_t *)EnvironmentHandle;
+    if (!argus_valid_env(env_h)) return SQL_INVALID_HANDLE;
+    g_mutex_lock(&env_h->mutex);
+    SQLRETURN ret = sqlgetenvattr_impl(EnvironmentHandle, Attribute, Value, BufferLength, StringLength);
+    g_mutex_unlock(&env_h->mutex);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLSetConnectAttr(
+    SQLHDBC    ConnectionHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER StringLength)
+{
+    argus_dbc_t *dbc_h = (argus_dbc_t *)ConnectionHandle;
+    if (!argus_valid_dbc(dbc_h)) return SQL_INVALID_HANDLE;
+    ARGUS_DBC_LOCK(dbc_h);
+    SQLRETURN ret = sqlsetconnectattr_impl(ConnectionHandle, Attribute, Value, StringLength);
+    ARGUS_DBC_UNLOCK(dbc_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLGetConnectAttr(
+    SQLHDBC    ConnectionHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER BufferLength,
+    SQLINTEGER *StringLength)
+{
+    argus_dbc_t *dbc_h = (argus_dbc_t *)ConnectionHandle;
+    if (!argus_valid_dbc(dbc_h)) return SQL_INVALID_HANDLE;
+    ARGUS_DBC_LOCK(dbc_h);
+    SQLRETURN ret = sqlgetconnectattr_impl(ConnectionHandle, Attribute, Value, BufferLength, StringLength);
+    ARGUS_DBC_UNLOCK(dbc_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLSetStmtAttr(
+    SQLHSTMT   StatementHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER StringLength)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlsetstmtattr_impl(StatementHandle, Attribute, Value, StringLength);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLGetStmtAttr(
+    SQLHSTMT   StatementHandle,
+    SQLINTEGER Attribute,
+    SQLPOINTER Value,
+    SQLINTEGER BufferLength,
+    SQLINTEGER *StringLength)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlgetstmtattr_impl(StatementHandle, Attribute, Value, BufferLength, StringLength);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLGetCursorName(
+    SQLHSTMT    StatementHandle,
+    SQLCHAR    *CursorName,
+    SQLSMALLINT BufferLength,
+    SQLSMALLINT *NameLengthPtr)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlgetcursorname_impl(StatementHandle, CursorName, BufferLength, NameLengthPtr);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLSetCursorName(
+    SQLHSTMT   StatementHandle,
+    SQLCHAR   *CursorName,
+    SQLSMALLINT NameLength)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlsetcursorname_impl(StatementHandle, CursorName, NameLength);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
 }
