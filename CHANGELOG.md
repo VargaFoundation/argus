@@ -4,6 +4,36 @@ All notable changes to the Argus ODBC Driver project.
 
 ## [Unreleased]
 
+### Fixed: the Tableau connectors were never packageable
+The `build-tableau-connector` CI job has failed since it was added, so no
+`.taco` has ever been produced — the release workflow builds only the Power BI
+`.mez`. Four separate faults, each hiding the next:
+
+- `build.ps1` pinned `SdkRef` to `v2024.2.0`, a tag that does not exist:
+  `tableau/connector-plugin-sdk` publishes `tdvt-*` tags (plus `v1.4*` and
+  `2020.1`) and has never had a `v2024.x`. Now pinned to `tdvt-2.13.7`.
+- Every connector declared `<field name="database">`. Tableau restricts
+  connection-field names to a fixed platform list plus a `v-` vendor prefix,
+  and `database` is in neither, so the packager rejected all eight. The field
+  was redundant anyway: each `.tdr` already lists `<attr>dbname</attr>` and
+  each `connectionBuilder.js` already reads `connectionHelper.attributeDatabase`,
+  so Tableau renders its own Database input — exactly as the SDK's own
+  `postgres_odbc` sample does. The field is gone; the connection attribute is
+  unchanged.
+- The genuinely vendor-specific fields — `krbservicename` and `krbhostfqdn` on
+  Hive and Impala, `project`, `location`, `keyfile`, `accesstoken`, `endpoint`
+  and `tokenendpoint` on BigQuery — now carry the required `v-` prefix, in the
+  field list, the `.tdr` attribute list and the connection builder together.
+- The current packager no longer accepts `--package-only` or the `-a`/`-ks`
+  signing flags, and names its output from the manifest
+  (`argus_postgres-v0.1.0.taco`) rather than from the directory. `build.ps1`
+  now packages into a scratch directory and takes whatever single file appears,
+  and signs with `jarsigner` itself, mirroring what `ci.yml` already did.
+
+Verified by running the CI command itself under PowerShell 7.4.6: all eight
+connectors package, and `validate-xml.py` still reports 8/8 against Tableau's
+XSDs.
+
 ### PostgreSQL family: per-connection options and the last ODBC gaps
 - **`SHOWPARTITIONS`, `SHOWALLDATABASES`, `ROWVERSIONING`, `SSLMODE` and
   `SEARCHPATH` are connection-string and DSN keys**, not environment variables.

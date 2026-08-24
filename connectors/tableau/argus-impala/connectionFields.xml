@@ -10,10 +10,6 @@
   <field name="port" label="Port" value-type="string" category="endpoint"
          default-value="21050"/>
 
-  <!-- Hive has no catalog level: this is the Hive database (schema). -->
-  <field name="database" label="Database" value-type="string" category="general"
-         placeholder="default"/>
-
   <field name="authentication" label="Authentication" value-type="selection"
          category="authentication" default-value="auth-none">
     <selection-group>
@@ -40,14 +36,14 @@
 
   <!-- The SPN defaults to hive/<server>@<realm from krb5.conf>. Override when a
        load balancer makes the SPN host differ from the connection host. -->
-  <field name="krbservicename" label="Kerberos service name" value-type="string"
+  <field name="v-krbservicename" label="Kerberos service name" value-type="string"
          category="authentication" optional="true" placeholder="hive">
     <conditions>
       <condition field="authentication" value="auth-integrated"/>
     </conditions>
   </field>
 
-  <field name="krbhostfqdn" label="Kerberos host FQDN" value-type="string"
+  <field name="v-krbhostfqdn" label="Kerberos host FQDN" value-type="string"
          category="authentication" optional="true">
     <conditions>
       <condition field="authentication" value="auth-integrated"/>

@@ -9,12 +9,6 @@
   <field name="port" label="Port" value-type="string" category="endpoint"
          default-value="5432"/>
 
-  <!-- A PostgreSQL session cannot query across databases, so this is the one
-       database the connection can reach — not a filter over several. -->
-  <field name="database" label="Database" value-type="string" category="general">
-    <validation-rule reg-exp="^.+$"/>
-  </field>
-
   <field name="authentication" label="Authentication" value-type="selection"
          category="authentication" default-value="auth-user-pass">
     <selection-group>

@@ -7,30 +7,30 @@
     var params = {};
 
     params["BACKEND"] = "bigquery";
-    params["BQProject"] = attr["project"];
+    params["BQProject"] = attr["v-project"];
 
     var database = attr[connectionHelper.attributeDatabase];
     if (database) {
         params["DATABASE"] = database;
     }
 
-    var location = attr["location"];
+    var location = attr["v-location"];
     if (location) {
         params["BQLocation"] = location;
     }
 
     if (attr[connectionHelper.attributeAuthentication] == "auth-access-token") {
-        params["BQAccessToken"] = attr["accesstoken"];
+        params["BQAccessToken"] = attr["v-accesstoken"];
     } else {
-        params["BQKeyFile"] = attr["keyfile"];
+        params["BQKeyFile"] = attr["v-keyfile"];
     }
 
     // Sovereign cloud (S3NS) / emulator overrides; blank means public GCP.
-    var endpoint = attr["endpoint"];
+    var endpoint = attr["v-endpoint"];
     if (endpoint) {
         params["BQEndpoint"] = endpoint;
     }
-    var tokenEndpoint = attr["tokenendpoint"];
+    var tokenEndpoint = attr["v-tokenendpoint"];
     if (tokenEndpoint) {
         params["BQTokenEndpoint"] = tokenEndpoint;
     }

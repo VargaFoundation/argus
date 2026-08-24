@@ -15,8 +15,8 @@
           <attr>username</attr>
           <attr>password</attr>
           <attr>sslmode</attr>
-          <attr>krbservicename</attr>
-          <attr>krbhostfqdn</attr>
+          <attr>v-krbservicename</attr>
+          <attr>v-krbhostfqdn</attr>
         </attribute-list>
       </required-attributes>
     </connection-normalizer>
