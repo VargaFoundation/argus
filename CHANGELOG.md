@@ -22,6 +22,28 @@ All notable changes to the Argus ODBC Driver project.
   actually enabled** for a connection, and the first-run notice is now also
   printed to stderr, not only the log file.
 
+### Memory & threading
+- **Statement handles shrank from ~360 KB to a few hundred bytes**: the five
+  embedded 64-record diagnostic arrays (~66 KB each) and the 256-entry
+  parameter-binding array (~14 KB) are now lazily allocated on first use and
+  grown geometrically; storage is released on handle free.
+- **Diagnostics reads are now thread-safe**: `SQLGetDiagRec`,
+  `SQLGetDiagField` and `SQLError` lock the owning handle's mutex (records
+  being lazily reallocated made the previously-unlocked read a
+  use-after-free risk); the environment handle gained its own mutex.
+
+### Fuzzing & CI
+- **libFuzzer harnesses** (`fuzz/`, `ENABLE_FUZZING=ON` under Clang) for the
+  ODBC escape translator and the connection-string parser, with seed corpora
+  and a CI job (90 s + 60 s budget per push); initial campaign: 4.4 M
+  executions, zero findings.
+- **`integration-full` CI job** (workflow_dispatch + weekly): starts every
+  compose service — including Phoenix, Kudu, Spark and Flink, which the
+  default job never ran — and runs the complete integration label.
+- `docs/ARCHITECTURE.md` rewritten to describe the actual system (all
+  backends, dialect layer, threading and memory model, obs_hooks seam,
+  quality gates) — it previously covered 3 of 10 backends.
+
 ### Documentation honesty
 - Entry-point count corrected to **104** (the previous "107" double-counted
   the three W-descriptor functions).

@@ -1,0 +1,1 @@
+SELECT {fn UCASE(name)} FROM t WHERE d = {d '2024-01-01'}
