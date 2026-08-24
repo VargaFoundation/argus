@@ -16,6 +16,7 @@
 #include <cmocka.h>
 #include <stdlib.h>
 #include <string.h>
+#include <glib.h>
 
 #include "argus/handle.h"
 #include "argus/telemetry.h"
@@ -28,13 +29,20 @@ static void make_dbc(argus_dbc_t *dbc, bool opt_in)
     dbc->telemetry_enabled = opt_in;
 }
 
-/* Re-read env by re-initializing the telemetry subsystem for each case. */
+/*
+ * Re-read env by re-initializing the telemetry subsystem for each case.
+ *
+ * g_setenv rather than setenv: the UCRT has no POSIX setenv/unsetenv, so the
+ * MinGW build failed to compile this file. glib's version also writes through
+ * to the CRT environment, so telemetry.c's plain getenv still sees it — and
+ * test_dsn.c already reaches for g_setenv for the same reason.
+ */
 static void reinit(const char *mode_env)
 {
     if (mode_env)
-        setenv("ARGUS_TELEMETRY", mode_env, 1);
+        g_setenv("ARGUS_TELEMETRY", mode_env, TRUE);
     else
-        unsetenv("ARGUS_TELEMETRY");
+        g_unsetenv("ARGUS_TELEMETRY");
     argus_telemetry_init();
 }
 
@@ -88,8 +96,12 @@ static void test_null_dbc_off(void **state)
 
 int main(void)
 {
-    /* Keep the install-id file out of the real home directory. */
-    setenv("XDG_CONFIG_HOME", "/tmp/argus-test-cfg", 1);
+    /* Keep the install-id file out of the real home directory. Same reason as
+     * reinit() for g_setenv; g_get_tmp_dir keeps the path off a hard-coded
+     * /tmp, which does not exist on the Windows runner. */
+    char *cfg = g_build_filename(g_get_tmp_dir(), "argus-test-cfg", NULL);
+    g_setenv("XDG_CONFIG_HOME", cfg, TRUE);
+    g_free(cfg);
 
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_default_off),
