@@ -19,14 +19,33 @@ void argus_row_cache_init(argus_row_cache_t *cache)
     memset(cache, 0, sizeof(*cache));
 }
 
-static void free_row(argus_row_t *row, int num_cols)
+char *argus_row_alloc_block(argus_row_t *row, int num_cols,
+                            size_t payload_bytes)
+{
+    size_t cells_sz = (size_t)num_cols * sizeof(argus_cell_t);
+    char *blk = malloc(cells_sz + payload_bytes);
+    if (!blk) return NULL;
+    memset(blk, 0, cells_sz);
+    row->cells = (argus_cell_t *)blk;
+    row->block = true;
+    return blk + cells_sz;
+}
+
+void argus_row_free(argus_row_t *row, int num_cols)
 {
     if (!row->cells) return;
-    for (int i = 0; i < num_cols; i++) {
-        free(row->cells[i].data);
+    if (!row->block) {
+        for (int i = 0; i < num_cols; i++)
+            free(row->cells[i].data);
     }
     free(row->cells);
     row->cells = NULL;
+    row->block = false;
+}
+
+static void free_row(argus_row_t *row, int num_cols)
+{
+    argus_row_free(row, num_cols);
 }
 
 void argus_row_cache_free(argus_row_cache_t *cache)
@@ -835,13 +854,8 @@ static SQLRETURN build_scroll_cache(argus_stmt_t *stmt)
 
         if (rc != 0) {
             /* Free partially built cache */
-            for (size_t i = 0; i < total; i++) {
-                if (all_rows[i].cells) {
-                    for (int c = 0; c < stmt->num_cols; c++)
-                        free(all_rows[i].cells[c].data);
-                    free(all_rows[i].cells);
-                }
-            }
+            for (size_t i = 0; i < total; i++)
+                argus_row_free(&all_rows[i], stmt->num_cols);
             free(all_rows);
             if (stmt->diag.count == 0)
                 argus_set_error(&stmt->diag, "HY000",
@@ -862,13 +876,8 @@ static SQLRETURN build_scroll_cache(argus_stmt_t *stmt)
 
         /* Enforce the materialisation cap before growing further. */
         if (total + stmt->row_cache.num_rows > max_rows) {
-            for (size_t i = 0; i < total; i++) {
-                if (all_rows[i].cells) {
-                    for (int c = 0; c < stmt->num_cols; c++)
-                        free(all_rows[i].cells[c].data);
-                    free(all_rows[i].cells);
-                }
-            }
+            for (size_t i = 0; i < total; i++)
+                argus_row_free(&all_rows[i], stmt->num_cols);
             free(all_rows);
             char msg[192];
             snprintf(msg, sizeof(msg),
@@ -885,13 +894,8 @@ static SQLRETURN build_scroll_cache(argus_stmt_t *stmt)
             argus_row_t *new_rows = realloc(all_rows,
                                              capacity * sizeof(argus_row_t));
             if (!new_rows) {
-                for (size_t i = 0; i < total; i++) {
-                    if (all_rows[i].cells) {
-                        for (int c = 0; c < stmt->num_cols; c++)
-                            free(all_rows[i].cells[c].data);
-                        free(all_rows[i].cells);
-                    }
-                }
+                for (size_t i = 0; i < total; i++)
+                    argus_row_free(&all_rows[i], stmt->num_cols);
                 free(all_rows);
                 return argus_set_error(&stmt->diag, "HY001",
                                        "[Argus] Memory allocation failed", 0);

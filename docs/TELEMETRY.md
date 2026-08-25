@@ -26,7 +26,7 @@ Envelope (once per batch):
 |-------|---------|-------|
 | `schema_version` | `1` | Payload format version |
 | `install_id` | `efc4d961-…` | Random UUID, **not** derived from any hardware/user id; resettable (see below) |
-| `driver_version` | `0.5.9` | Driver version |
+| `driver_version` | `0.6.0` | Driver version |
 | `build_id` | `2c4166d` | Short git SHA of the build |
 | `os` | `linux` / `windows` / `darwin` | OS family |
 | `arch` | `x86_64` / `aarch64` | CPU architecture |
@@ -107,7 +107,7 @@ Request body is the envelope above with an `events` array. Example:
 {
   "schema_version": 1,
   "install_id": "efc4d961-78f2-4947-9b8e-5050731eb772",
-  "driver_version": "0.5.9",
+  "driver_version": "0.6.0",
   "build_id": "2c4166d",
   "os": "linux", "arch": "x86_64", "os_version": "5.15.0",
   "events": [

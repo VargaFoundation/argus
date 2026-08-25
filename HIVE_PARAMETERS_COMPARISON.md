@@ -1,5 +1,16 @@
 # Comparaison des Paramètres Hive ODBC
 
+> **⚠️ Document historique (juillet 2026) — partiellement périmé.** Depuis sa
+> rédaction : le transport HTTP avec SPNEGO/Kerberos et Bearer/JWT est livré,
+> la couche SASL GSSAPI (Linux/macOS) / SSPI (Windows) sur Thrift binaire est
+> implémentée (`src/backend/thrift_sasl.c`, validation runtime contre un KDC
+> réel encore à dérouler), et l'exécution asynchrone statement-level est livrée.
+> Les conclusions « pas production-ready » ci-dessous décrivent l'état
+> antérieur ; l'état courant fait foi dans le README et `docs/ROADMAP.md`.
+> Restent réellement manquants : `KrbRealm`/`KrbHostFQDN`/`KrbServiceName`
+> explicites, `DelegationUID`, `HiveServerType`, `DefaultStringColumnLength`,
+> `UseNativeQuery`.
+
 Comparaison entre Argus ODBC et les drivers commerciaux (CData, Simba/Cloudera).
 
 ## ✅ Paramètres Implémentés

@@ -17,6 +17,7 @@ SQLRETURN argus_alloc_env(argus_env_t **out)
     env->signature          = ARGUS_ENV_SIGNATURE;
     env->odbc_version       = SQL_OV_ODBC3;
     env->connection_pooling = SQL_CP_OFF;
+    g_mutex_init(&env->mutex);
     argus_diag_clear(&env->diag);
 
     *out = env;
@@ -175,6 +176,8 @@ SQLRETURN argus_free_env(argus_env_t *env)
 {
     if (!argus_valid_env(env)) return SQL_INVALID_HANDLE;
     argus_pool_cleanup();
+    argus_diag_dispose(&env->diag);
+    g_mutex_clear(&env->mutex);
     env->signature = 0;
     free(env);
     return SQL_SUCCESS;
@@ -237,6 +240,7 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     /* Free metadata cache */
     argus_metadata_cache_free(dbc);
 
+    argus_diag_dispose(&dbc->diag);
     free(dbc);
     return SQL_SUCCESS;
 }
@@ -271,14 +275,8 @@ void argus_stmt_reset(argus_stmt_t *stmt)
     if (stmt->scroll_rows) {
         int nc = saved_num_cols > 0 ? saved_num_cols
                                      : stmt->row_cache.num_cols;
-        for (size_t i = 0; i < stmt->scroll_row_count; i++) {
-            argus_row_t *row = &stmt->scroll_rows[i];
-            if (row->cells) {
-                for (int c = 0; c < nc; c++)
-                    free(row->cells[c].data);
-                free(row->cells);
-            }
-        }
+        for (size_t i = 0; i < stmt->scroll_row_count; i++)
+            argus_row_free(&stmt->scroll_rows[i], nc);
         free(stmt->scroll_rows);
         stmt->scroll_rows = NULL;
     }
@@ -307,7 +305,10 @@ void argus_stmt_reset(argus_stmt_t *stmt)
     }
 
     /* Reset parameter bindings */
-    memset(stmt->param_bindings, 0, sizeof(stmt->param_bindings));
+    if (stmt->param_bindings)
+        memset(stmt->param_bindings, 0,
+               (size_t)stmt->param_bindings_capacity
+                   * sizeof(*stmt->param_bindings));
     stmt->num_param_bindings = 0;
     stmt->paramset_size = 1;
 
@@ -353,6 +354,12 @@ SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
      * point at an explicitly-associated descriptor the application still owns
      * and will free with SQLFreeHandle(SQL_HANDLE_DESC). */
     free(stmt->implicit_bindings);
+    free(stmt->param_bindings);
+    argus_diag_dispose(&stmt->diag);
+    argus_diag_dispose(&stmt->desc_ard.diag);
+    argus_diag_dispose(&stmt->desc_apd.diag);
+    argus_diag_dispose(&stmt->desc_ird.diag);
+    argus_diag_dispose(&stmt->desc_ipd.diag);
     stmt->signature = 0;
     free(stmt);
     return SQL_SUCCESS;
@@ -399,6 +406,7 @@ SQLRETURN argus_free_desc(argus_desc_t *desc)
     }
 
     free(desc->records);
+    argus_diag_dispose(&desc->diag);
     desc->signature = 0;
     free(desc);
     return SQL_SUCCESS;
@@ -533,28 +541,42 @@ SQLRETURN SQL_API SQLFreeStmt(
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
+    /* SQL_DROP destroys the handle (and clears its mutex), so it must NOT be
+     * performed under the lock; the other options mutate shared statement
+     * state and take it. */
+    if (Option == SQL_DROP)
+        return argus_free_stmt(stmt);
+
+    ARGUS_STMT_LOCK(stmt);
+    SQLRETURN freestmt_ret;
     switch (Option) {
     case SQL_CLOSE:
         /* Close cursor / reset for re-execution */
         argus_stmt_reset(stmt);
-        return SQL_SUCCESS;
-
-    case SQL_DROP:
-        return argus_free_stmt(stmt);
+        freestmt_ret = SQL_SUCCESS;
+        break;
 
     case SQL_UNBIND:
         if (stmt->bindings && stmt->bindings_capacity > 0)
             memset(stmt->bindings, 0,
                    (size_t)stmt->bindings_capacity * sizeof(argus_col_binding_t));
-        return SQL_SUCCESS;
+        freestmt_ret = SQL_SUCCESS;
+        break;
 
     case SQL_RESET_PARAMS:
-        memset(stmt->param_bindings, 0, sizeof(stmt->param_bindings));
+        if (stmt->param_bindings)
+            memset(stmt->param_bindings, 0,
+                   (size_t)stmt->param_bindings_capacity
+                       * sizeof(*stmt->param_bindings));
         stmt->num_param_bindings = 0;
-        return SQL_SUCCESS;
+        freestmt_ret = SQL_SUCCESS;
+        break;
 
     default:
-        return argus_set_error(&stmt->diag, "HY092",
+        freestmt_ret = argus_set_error(&stmt->diag, "HY092",
                                "[Argus] Invalid option for SQLFreeStmt", 0);
+        break;
     }
+    ARGUS_STMT_UNLOCK(stmt);
+    return freestmt_ret;
 }

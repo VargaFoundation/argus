@@ -21,6 +21,22 @@ static int count_param_markers(const char *sql)
     bool in_double_quote = false;
 
     for (const char *p = sql; *p; p++) {
+        if (!in_single_quote && !in_double_quote) {
+            /* A '?' inside a comment is not a parameter marker. */
+            if (p[0] == '-' && p[1] == '-') {
+                p += 2;
+                while (*p && *p != '\n') p++;
+                if (!*p) break;
+                continue;
+            }
+            if (p[0] == '/' && p[1] == '*') {
+                p += 2;
+                while (*p && !(p[0] == '*' && p[1] == '/')) p++;
+                if (!*p) break;
+                p++; /* land on '/', loop advances past it */
+                continue;
+            }
+        }
         if (*p == '\'' && !in_double_quote) {
             in_single_quote = !in_single_quote;
         } else if (*p == '"' && !in_single_quote) {
@@ -34,7 +50,11 @@ static int count_param_markers(const char *sql)
 
 /* ── Internal: escape a string for SQL (single-quote escaping) ── */
 
-static char *sql_escape_string(const char *value, size_t len)
+/* backslash_escapes comes from the backend dialect: doubling '\' is required
+ * where it is a literal-escape character (Hive, MySQL wire, BigQuery) and
+ * corrupts the value on ANSI-literal engines (Trino, Phoenix, Pinot, Druid). */
+static char *sql_escape_string(const char *value, size_t len,
+                               bool backslash_escapes)
 {
     /* Reject embedded NUL bytes to prevent SQL injection via truncation */
     for (size_t i = 0; i < len; i++) {
@@ -44,7 +64,8 @@ static char *sql_escape_string(const char *value, size_t len)
     /* Count characters that need escaping to determine output size */
     size_t num_special = 0;
     for (size_t i = 0; i < len; i++) {
-        if (value[i] == '\'' || value[i] == '\\') num_special++;
+        if (value[i] == '\'' || (backslash_escapes && value[i] == '\\'))
+            num_special++;
     }
 
     /* Output: quote + escaped_data + quote + NUL */
@@ -58,7 +79,7 @@ static char *sql_escape_string(const char *value, size_t len)
         if (value[i] == '\'') {
             *dst++ = '\'';
             *dst++ = '\'';
-        } else if (value[i] == '\\') {
+        } else if (backslash_escapes && value[i] == '\\') {
             *dst++ = '\\';
             *dst++ = '\\';
         } else {
@@ -72,7 +93,8 @@ static char *sql_escape_string(const char *value, size_t len)
 
 /* ── Internal: render a bound parameter as a SQL literal ──────── */
 
-static char *render_param(const argus_param_binding_t *param)
+static char *render_param(const argus_param_binding_t *param,
+                          bool backslash_escapes)
 {
     if (!param->bound) return NULL;
 
@@ -91,7 +113,8 @@ static char *render_param(const argus_param_binding_t *param)
             len = (size_t)*param->str_len_or_ind;
         else
             len = strlen(str);
-        return sql_escape_string(str, len); /* NULL if embedded NUL byte */
+        return sql_escape_string(str, len, backslash_escapes);
+        /* NULL if embedded NUL byte */
     }
 
     case SQL_C_WCHAR: {
@@ -111,7 +134,8 @@ static char *render_param(const argus_param_binding_t *param)
             if (err) g_error_free(err);
             return strdup("NULL");
         }
-        char *escaped = sql_escape_string(utf8, (size_t)bytes_written);
+        char *escaped = sql_escape_string(utf8, (size_t)bytes_written,
+                                          backslash_escapes);
         g_free(utf8);
         return escaped;
     }
@@ -415,7 +439,7 @@ static char *render_param(const argus_param_binding_t *param)
         /* Treat as string */
         if (param->value) {
             const char *str = (const char *)param->value;
-            return sql_escape_string(str, strlen(str));
+            return sql_escape_string(str, strlen(str), backslash_escapes);
         }
         return strdup("NULL");
     }
@@ -426,7 +450,8 @@ static char *render_param(const argus_param_binding_t *param)
 static char *substitute_params(const char *sql,
                                 const argus_param_binding_t *params,
                                 int num_params,
-                                argus_diag_t *diag)
+                                argus_diag_t *diag,
+                                bool backslash_escapes)
 {
     int marker_count = count_param_markers(sql);
     if (marker_count == 0) return strdup(sql);
@@ -450,7 +475,7 @@ static char *substitute_params(const char *sql,
             free(rendered);
             return NULL;
         }
-        rendered[i] = render_param(&params[i]);
+        rendered[i] = render_param(&params[i], backslash_escapes);
         if (!rendered[i]) {
             argus_set_error(diag, "HYC00",
                             "[Argus] Unsupported parameter type or "
@@ -481,6 +506,23 @@ static char *substitute_params(const char *sql,
     bool in_double_quote = false;
 
     for (const char *p = sql; *p; p++) {
+        if (!in_single_quote && !in_double_quote) {
+            /* Copy comments verbatim: count_param_markers skipped them, so a
+             * '?' inside one must not consume a parameter here either. */
+            if (p[0] == '-' && p[1] == '-') {
+                while (*p && *p != '\n') *dst++ = *p++;
+                if (!*p) break;
+                *dst++ = *p;
+                continue;
+            }
+            if (p[0] == '/' && p[1] == '*') {
+                *dst++ = *p++; *dst++ = *p++;
+                while (*p && !(p[0] == '*' && p[1] == '/')) *dst++ = *p++;
+                if (!*p) break;
+                *dst++ = *p++; *dst++ = *p;
+                continue;
+            }
+        }
         if (*p == '\'' && !in_double_quote) {
             in_single_quote = !in_single_quote;
             *dst++ = *p;
@@ -671,7 +713,8 @@ static char *resolve_query(argus_stmt_t *stmt, const char *query)
 {
     if (stmt->num_param_bindings > 0) {
         return substitute_params(query, stmt->param_bindings,
-                                 stmt->num_param_bindings, &stmt->diag);
+                                 stmt->num_param_bindings, &stmt->diag,
+                                 argus_dialect_for(stmt->dbc)->backslash_escapes);
     }
     return strdup(query);
 }
@@ -1044,7 +1087,8 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT StatementHandle)
 
         char *resolved = substitute_params(
             stmt->query, row_params,
-            stmt->num_param_bindings, &stmt->diag);
+            stmt->num_param_bindings, &stmt->diag,
+            argus_dialect_for(stmt->dbc)->backslash_escapes);
         if (!resolved) {
             if (stmt->param_status_ptr)
                 stmt->param_status_ptr[r] = SQL_PARAM_ERROR;
@@ -1530,12 +1574,31 @@ SQLRETURN SQL_API SQLBindParameter(
     /* Unbind if ParameterValuePtr is NULL and not SQL_NULL_DATA */
     if (!ParameterValuePtr && !(StrLen_or_IndPtr &&
                                  *StrLen_or_IndPtr == SQL_NULL_DATA)) {
+        if (idx >= stmt->param_bindings_capacity)
+            return SQL_SUCCESS;               /* never bound: nothing to undo */
         stmt->param_bindings[idx].bound = false;
         /* Recalculate num_param_bindings */
         while (stmt->num_param_bindings > 0 &&
                !stmt->param_bindings[stmt->num_param_bindings - 1].bound)
             stmt->num_param_bindings--;
         return SQL_SUCCESS;
+    }
+
+    /* Lazy growth of the binding array (zeroing the new tail so unbound slots
+     * between sparse parameter numbers read as bound == false). */
+    if (idx >= stmt->param_bindings_capacity) {
+        int ncap = stmt->param_bindings_capacity ? stmt->param_bindings_capacity : 8;
+        while (ncap <= idx) ncap *= 2;
+        if (ncap > ARGUS_MAX_PARAMS) ncap = ARGUS_MAX_PARAMS;
+        argus_param_binding_t *p =
+            realloc(stmt->param_bindings, (size_t)ncap * sizeof(*p));
+        if (!p)
+            return argus_set_error(&stmt->diag, "HY001",
+                                   "[Argus] Memory allocation failed", 0);
+        memset(p + stmt->param_bindings_capacity, 0,
+               (size_t)(ncap - stmt->param_bindings_capacity) * sizeof(*p));
+        stmt->param_bindings = p;
+        stmt->param_bindings_capacity = ncap;
     }
 
     argus_param_binding_t *bind = &stmt->param_bindings[idx];

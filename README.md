@@ -8,7 +8,7 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 ## Features
 
 ### Core ODBC Support
-- **107 ODBC entry points** (ANSI + Unicode `W` variants) — ODBC 3.80, **Level 1 interface conformance** (`SQL_OIC_LEVEL1`, SQL-92 Entry), plus ODBC 2.x compatibility (`SQLAllocConnect`, `SQLError`, `SQLExtendedFetch`, ...). This matches the commercial Simba/Starburst drivers for these engines; stored procedures and transactions — the two OLTP features Level 1 also names — are reported absent (`SQL_PROCEDURES="N"`, `SQL_TXN_CAPABLE=SQL_TC_NONE`), as they are on Trino/BigQuery/Hive themselves.
+- **104 ODBC entry points** (ANSI + Unicode `W` variants) — ODBC 3.80, **Level 1 interface conformance** (`SQL_OIC_LEVEL1`, SQL-92 Entry), plus ODBC 2.x compatibility (`SQLAllocConnect`, `SQLError`, `SQLExtendedFetch`, ...). This matches the commercial Simba/Starburst drivers for these engines; stored procedures and transactions — the two OLTP features Level 1 also names — are reported absent (`SQL_PROCEDURES="N"`, `SQL_TXN_CAPABLE=SQL_TC_NONE`), as they are on Trino/BigQuery/Hive themselves.
 - **Statement-level asynchronous execution** (`SQL_ASYNC_MODE = SQL_AM_STATEMENT`): async `SQLExecDirect`/`SQLExecute` on a worker thread, with `SQLCompleteAsync` and `SQLCancelHandle` (ODBC 3.8).
 - **10 backends**, enabled by dependency auto-detection at configure time
 - **Cross-platform**: Linux, macOS and Windows x64
@@ -60,7 +60,11 @@ The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery
 - **Wide Char**: UTF-8 to UTF-16LE conversion
 
 #### Query Management
-- **SQLCancel**: Cancel running queries across all backends
+- **SQLCancel**: cancels in-flight queries on the async-capable backends
+  (Hive, Impala, Trino, Phoenix, BigQuery, Flight SQL, Kudu). On the
+  synchronous HTTP/wire backends (Pinot, Druid, MySQL-wire) execution has
+  already completed by the time a cancel can land, so cancel is a no-op
+  success per ODBC semantics
 - **Application Name**: Identify queries with a custom app name (`X-Trino-Source`, `hive.query.source`)
 
 #### Fetch Optimization
@@ -82,7 +86,7 @@ inspection of real Simba binaries and a live Tableau TDVT run, is in
 | Engines per driver | **10 in one binary** | one driver per engine | any, but dialect-blind |
 | Licensing | **open** (Varga Foundation) | proprietary, per-seat | bundled |
 | ODBC level | 3.8, Level 1, SQL-92 Entry | 3.8, Level 1/2 | depends on driver |
-| Exported ODBC entry points | **107** | 89 (SimbaEngine core) | n/a |
+| Exported ODBC entry points | **104** | 89 (SimbaEngine core) | n/a |
 | Unicode (`W`) | full | full | varies |
 | Async execution | **yes** (`SQL_AM_STATEMENT`) | yes | usually no |
 | Auth | Kerberos (GSSAPI+SSPI), OAuth2 (M2M + device flow), JWT, LDAP, TLS | yes | varies |
@@ -102,7 +106,7 @@ inspection of real Simba binaries and a live Tableau TDVT run, is in
 - **At parity on the contract that matters, open.** Parity is measured on the
   observable ODBC contract, not marketing: ODBC 3.8, full Unicode, Level 1
   conformance, real async, pooling, the full auth matrix, a **broader raw ODBC
-  surface (107 vs 89 entry points)**, and a **91.4% Tableau TDVT** pass rate on
+  surface (104 vs 89 entry points)**, and a **91.4% Tableau TDVT** pass rate on
   the same tests certified connectors run — with no per-seat licence.
 - **Honest capabilities.** Argus advertises only what it can do. Where an engine
   has no foreign keys, stored procedures or row-version columns, the catalog
@@ -212,7 +216,14 @@ scope for an ODBC driver.
 
 ## Windows
 
-The [NSIS installer](installer/) registers the driver and bundles its DLLs. The driver reads DSNs from the registry (user DSNs first, then system). The setup has no configuration dialog, so create DSNs from PowerShell:
+The [NSIS installer](installer/) registers the driver and bundles its DLLs. The driver reads DSNs from the registry (user DSNs first, then system).
+
+The setup now ships a **configuration dialog**: Add/Configure in
+odbcad32.exe opens a form (backend, host/port, database, credentials,
+SSL, auth mechanism) with a live **Test Connection** button that drives this
+very driver. The dialog is newly added and cross-compile-verified; until it
+has been exercised on a real Windows desktop, scripted DSN creation remains
+the recommended automated path:
 
 ```powershell
 Add-OdbcDsn -Name MyTrino -DriverName "Argus ODBC Driver" -Platform 64-bit `
@@ -274,6 +285,16 @@ export ARGUS_LOG_FILE=/tmp/argus-debug.log
 ```
 
 Log levels: 0=OFF, 1=FATAL, 2=ERROR, 3=WARN, 4=INFO, 5=DEBUG, 6=TRACE
+
+## Observability hooks (`obs_hooks`)
+
+The driver exposes eleven weak no-op tap points (`include/argus/obs_hooks.h`) —
+connection/statement observation, secret resolution, token caching, host
+selection and a connection-admission gate. In this Apache-2.0 build they are
+inert (the gate always allows). They exist so an out-of-tree add-on — including
+proprietary ones, such as a commercial enterprise edition — can link strong
+definitions in. Forks are free to ignore or remove them; nothing in the open
+driver depends on them. This is disclosed here so adopters know the seam exists.
 
 ## Telemetry & privacy
 

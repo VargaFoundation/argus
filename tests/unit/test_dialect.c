@@ -99,6 +99,27 @@ static void test_quote_chars(void **state)
     assert_string_equal(argus_dialect_by_name("druid")->quote_char, "\"");
 }
 
+/* String-literal escaping is dialect-specific: '\' must be doubled where it is
+ * an escape character (HiveQL family) and must NOT be doubled on ANSI-literal
+ * engines — doubling it there corrupts bound parameter values ('C:\path'
+ * arrives as 'C:\\path'). Guards the render_param path in execute.c. */
+static void test_backslash_escapes(void **state)
+{
+    (void)state;
+
+    assert_true(argus_dialect_by_name("hive")->backslash_escapes);
+    assert_true(argus_dialect_by_name("impala")->backslash_escapes);
+    assert_true(argus_dialect_by_name("mysql")->backslash_escapes);
+    assert_true(argus_dialect_by_name("bigquery")->backslash_escapes);
+
+    assert_false(argus_dialect_by_name("trino")->backslash_escapes);
+    assert_false(argus_dialect_by_name("phoenix")->backslash_escapes);
+    assert_false(argus_dialect_by_name("pinot")->backslash_escapes);
+    assert_false(argus_dialect_by_name("druid")->backslash_escapes);
+    assert_false(argus_dialect_by_name("flightsql")->backslash_escapes);
+    assert_false(argus_dialect_by_name("no-such-backend")->backslash_escapes);
+}
+
 /* An unknown backend must degrade to the conservative ANSI dialect, never to
  * NULL and never to another backend's grammar. */
 static void test_unknown_backend_falls_back_to_ansi(void **state)
@@ -186,6 +207,7 @@ int main(void)
         cmocka_unit_test(test_bitmaps_derive_from_fn_map),
         cmocka_unit_test(test_find_fn_is_case_insensitive),
         cmocka_unit_test(test_quote_chars),
+        cmocka_unit_test(test_backslash_escapes),
         cmocka_unit_test(test_unknown_backend_falls_back_to_ansi),
         cmocka_unit_test(test_unverified_backends_underclaim),
         cmocka_unit_test(test_pinot_dialect_reflects_probed_semantics),

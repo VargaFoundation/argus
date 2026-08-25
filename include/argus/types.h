@@ -73,10 +73,30 @@ typedef struct argus_cell {
     } native;
 } argus_cell_t;
 
-/* A row in the row cache */
+/* A row in the row cache.
+ *
+ * `block` marks a single-allocation row: the cells array and every cell's
+ * data payload live in ONE malloc'd block (see argus_row_alloc_block), so the
+ * whole row frees with a single free(cells) and a 300k x 9 result costs 300k
+ * allocations instead of ~3M. Ownership-transfer semantics (the scroll cache
+ * moving rows out of the batch cache) are unchanged — the flag travels with
+ * the struct. Rows built the classic way (calloc'd cells + malloc per cell)
+ * leave `block` false and keep per-cell frees. */
 typedef struct argus_row {
     argus_cell_t *cells;    /* array of num_cols cells */
+    bool          block;    /* cells + payloads are one allocation */
 } argus_row_t;
+
+/* Allocate a row as one contiguous block: a num_cols cell array (zeroed)
+ * followed by payload_bytes of string storage. Returns the payload cursor
+ * (NULL on allocation failure); the caller copies cell data sequentially and
+ * points cells[i].data into it. Rows built this way MUST NOT have their
+ * cell data free()d individually. */
+char *argus_row_alloc_block(argus_row_t *row, int num_cols,
+                            size_t payload_bytes);
+
+/* Free one row, honouring both layouts. */
+void argus_row_free(argus_row_t *row, int num_cols);
 
 /* Row cache - batch of fetched rows */
 typedef struct argus_row_cache {

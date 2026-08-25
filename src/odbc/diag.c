@@ -2,6 +2,8 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
 #include "argus/log.h"
+#include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -14,12 +16,37 @@ void argus_diag_clear(argus_diag_t *diag)
     diag->return_code = SQL_SUCCESS;
 }
 
+void argus_diag_dispose(argus_diag_t *diag)
+{
+    if (!diag) return;
+    free(diag->records);
+    diag->records = NULL;
+    diag->capacity = 0;
+    diag->count = 0;
+}
+
+/* Grow the lazily-allocated record array; false on allocation failure (the
+ * record is then dropped — diagnostics must never take the handle down). */
+static bool diag_reserve(argus_diag_t *diag)
+{
+    if (diag->count < diag->capacity) return true;
+    int ncap = diag->capacity ? diag->capacity * 2 : 4;
+    if (ncap > ARGUS_MAX_DIAG_RECORDS) ncap = ARGUS_MAX_DIAG_RECORDS;
+    argus_diag_record_t *p =
+        realloc(diag->records, (size_t)ncap * sizeof(*p));
+    if (!p) return false;
+    diag->records = p;
+    diag->capacity = ncap;
+    return true;
+}
+
 void argus_diag_push(argus_diag_t *diag,
                      const char *sqlstate,
                      const char *message,
                      SQLINTEGER native_error)
 {
     if (diag->count >= ARGUS_MAX_DIAG_RECORDS) return;
+    if (!diag_reserve(diag)) return;
 
     argus_diag_record_t *rec = &diag->records[diag->count];
     memset(rec, 0, sizeof(*rec));
@@ -117,6 +144,29 @@ static argus_diag_t *get_diag_for_handle(SQLSMALLINT handle_type,
     return NULL;
 }
 
+/* The handle's own mutex, so diagnostics reads are safe against a concurrent
+ * execute/fetch on another thread mutating the same diag (records now being
+ * lazily reallocated makes an unlocked read a real use-after-free risk).
+ * ODBC requires per-handle thread safety; these entry points held no lock. */
+static GMutex *get_mutex_for_handle(SQLSMALLINT handle_type, SQLHANDLE handle)
+{
+    switch (handle_type) {
+    case SQL_HANDLE_ENV:
+        if (argus_valid_env(handle))
+            return &((argus_env_t *)handle)->mutex;
+        break;
+    case SQL_HANDLE_DBC:
+        if (argus_valid_dbc(handle))
+            return &((argus_dbc_t *)handle)->mutex;
+        break;
+    case SQL_HANDLE_STMT:
+        if (argus_valid_stmt(handle))
+            return &((argus_stmt_t *)handle)->mutex;
+        break;
+    }
+    return NULL;
+}
+
 /* ── ODBC API: SQLGetDiagRec ─────────────────────────────────── */
 
 SQLRETURN SQL_API SQLGetDiagRec(
@@ -132,13 +182,18 @@ SQLRETURN SQL_API SQLGetDiagRec(
     argus_diag_t *diag = get_diag_for_handle(HandleType, Handle);
     if (!diag) return SQL_INVALID_HANDLE;
 
-    return argus_diag_get_rec(diag, RecNumber, Sqlstate, NativeError,
-                              MessageText, BufferLength, TextLength);
+    GMutex *m = get_mutex_for_handle(HandleType, Handle);
+    if (m) g_mutex_lock(m);
+    SQLRETURN ret = argus_diag_get_rec(diag, RecNumber, Sqlstate, NativeError,
+                                       MessageText, BufferLength, TextLength);
+    if (m) g_mutex_unlock(m);
+    return ret;
 }
 
 /* ── ODBC API: SQLGetDiagField ───────────────────────────────── */
 
-SQLRETURN SQL_API SQLGetDiagField(
+static SQLRETURN diag_field_locked(
+    argus_diag_t *diag,
     SQLSMALLINT HandleType,
     SQLHANDLE   Handle,
     SQLSMALLINT RecNumber,
@@ -147,9 +202,6 @@ SQLRETURN SQL_API SQLGetDiagField(
     SQLSMALLINT BufferLength,
     SQLSMALLINT *StringLength)
 {
-    argus_diag_t *diag = get_diag_for_handle(HandleType, Handle);
-    if (!diag) return SQL_INVALID_HANDLE;
-
     /* Header fields (RecNumber == 0) */
     if (RecNumber == 0) {
         switch (DiagIdentifier) {
@@ -289,6 +341,27 @@ SQLRETURN SQL_API SQLGetDiagField(
     }
 }
 
+SQLRETURN SQL_API SQLGetDiagField(
+    SQLSMALLINT HandleType,
+    SQLHANDLE   Handle,
+    SQLSMALLINT RecNumber,
+    SQLSMALLINT DiagIdentifier,
+    SQLPOINTER  DiagInfo,
+    SQLSMALLINT BufferLength,
+    SQLSMALLINT *StringLength)
+{
+    argus_diag_t *diag = get_diag_for_handle(HandleType, Handle);
+    if (!diag) return SQL_INVALID_HANDLE;
+
+    GMutex *m = get_mutex_for_handle(HandleType, Handle);
+    if (m) g_mutex_lock(m);
+    SQLRETURN ret = diag_field_locked(diag, HandleType, Handle, RecNumber,
+                                      DiagIdentifier, DiagInfo, BufferLength,
+                                      StringLength);
+    if (m) g_mutex_unlock(m);
+    return ret;
+}
+
 /* ── ODBC API: SQLError (ODBC 2.x compat) ───────────────────── */
 
 SQLRETURN SQL_API SQLError(
@@ -303,18 +376,27 @@ SQLRETURN SQL_API SQLError(
 {
     /* Find the most specific handle that's valid */
     argus_diag_t *diag = NULL;
-    if (StatementHandle && argus_valid_stmt(StatementHandle))
+    GMutex *m = NULL;
+    if (StatementHandle && argus_valid_stmt(StatementHandle)) {
         diag = &((argus_stmt_t *)StatementHandle)->diag;
-    else if (ConnectionHandle && argus_valid_dbc(ConnectionHandle))
+        m = &((argus_stmt_t *)StatementHandle)->mutex;
+    } else if (ConnectionHandle && argus_valid_dbc(ConnectionHandle)) {
         diag = &((argus_dbc_t *)ConnectionHandle)->diag;
-    else if (EnvironmentHandle && argus_valid_env(EnvironmentHandle))
+        m = &((argus_dbc_t *)ConnectionHandle)->mutex;
+    } else if (EnvironmentHandle && argus_valid_env(EnvironmentHandle)) {
         diag = &((argus_env_t *)EnvironmentHandle)->diag;
+        m = &((argus_env_t *)EnvironmentHandle)->mutex;
+    }
 
     if (!diag) return SQL_INVALID_HANDLE;
 
+    g_mutex_lock(m);
+
     /* Return first record and clear it */
-    if (diag->count == 0)
+    if (diag->count == 0) {
+        g_mutex_unlock(m);
         return SQL_NO_DATA;
+    }
 
     SQLRETURN ret = argus_diag_get_rec(diag, 1, Sqlstate, NativeError,
                                         MessageText, BufferLength, TextLength);
@@ -326,5 +408,6 @@ SQLRETURN SQL_API SQLError(
     }
     diag->count--;
 
+    g_mutex_unlock(m);
     return ret;
 }

@@ -143,7 +143,47 @@ static void druid_disconnect(argus_backend_conn_t raw)
     free(conn);
 }
 
-static bool druid_is_alive(argus_backend_conn_t raw) { return raw != NULL; }
+static size_t discard_cb(void *contents, size_t size, size_t nmemb, void *userp)
+{
+    (void)contents; (void)userp;
+    return size * nmemb;
+}
+
+/* Real liveness probe: the pool relies on this to avoid handing out
+ * connections to a dead broker, so a pointer check is not enough. The
+ * router's /status/health endpoint answers in microseconds. */
+static bool druid_is_alive(argus_backend_conn_t raw)
+{
+    druid_conn_t *conn = (druid_conn_t *)raw;
+    if (!conn || !conn->curl || !conn->base_url) return false;
+
+    char url[560];
+    snprintf(url, sizeof(url), "%s/status/health", conn->base_url);
+
+    CURL *curl = conn->curl;
+    curl_easy_reset(curl);
+    if (conn->ssl_enabled) {
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);
+    }
+    if (conn->user && *conn->user) {
+        char up[512];
+        snprintf(up, sizeof(up), "%s:%s", conn->user,
+                 conn->password ? conn->password : "");
+        curl_easy_setopt(curl, CURLOPT_HTTPAUTH, (long)CURLAUTH_BASIC);
+        curl_easy_setopt(curl, CURLOPT_USERPWD, up);
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_cb);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+
+    if (curl_easy_perform(curl) != CURLE_OK) return false;
+    long code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    return code >= 200 && code < 400;
+}
 
 /* ── Value parsing ───────────────────────────────────────────── */
 
@@ -310,6 +350,11 @@ static void druid_close_operation(argus_backend_conn_t conn,
     free(op);
 }
 
+/* Execution is synchronous over HTTP: by the time SQLCancel can reach this,
+ * the query has already completed, and cancelling a finished operation is a
+ * no-op success per ODBC. Mid-flight cancellation (Druid's
+ * DELETE /druid/v2/{queryId}) would require issuing the query asynchronously
+ * with a client-set sqlQueryId; not implemented. */
 static int druid_cancel(argus_backend_conn_t conn, argus_backend_op_t op)
 {
     (void)conn; (void)op;

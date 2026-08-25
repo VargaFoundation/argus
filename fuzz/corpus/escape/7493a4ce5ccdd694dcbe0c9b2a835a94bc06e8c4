@@ -1,0 +1,1 @@
+{oj aîLEFT OUTER JOIN bx=b.x} {tS '10:00:00'} {interval 1 DAY}

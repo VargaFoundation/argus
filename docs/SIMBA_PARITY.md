@@ -27,11 +27,11 @@ confirming it is the shared SimbaEngine core, not a per-data-store surface.
 | Axis | Simba | Argus | Verdict |
 |---|---|---|---|
 | ODBC version | 3.8 | 3.8, `SQL_OIC_LEVEL1`, SQL-92 Entry | Parity |
-| Exported ODBC entry points | 89 | **107** (was 104; +3 W-descriptor) | Argus broader |
+| Exported ODBC entry points | 89 | **104** (incl. the 3 W-descriptor functions) | Argus broader — but raw export count is a weak proxy for capability |
 | Unicode / `W` entry points | full | full (`src/odbc/unicode.c`, UTF-16↔UTF-8) | Parity |
 | Connection pooling | yes | yes (`src/odbc/pool.c`, opt-in) | Parity |
 | Auth: Kerberos/SASL/OAuth2/SSL | yes | GSSAPI + SSPI, SASL, OAuth2 (M2M + device flow), JWT, LDAP/Basic, TLS | Parity |
-| Platform / driver manager | Win / unixODBC / macOS | Win (`ConfigDSN` + NSIS + Intune), unixODBC, macOS pkg, RPM/DEB | Parity |
+| Platform / driver manager | Win / unixODBC / macOS | Win (`ConfigDSN` **with a configuration dialog + Test Connection**, plus the attribute-list scripted path, NSIS, Intune), unixODBC, macOS pkg, RPM/DEB | ~Parity — the dialog is newly added (in-memory DLGTEMPLATE, cross-compile-verified); first interactive validation on a real Windows desktop still pending |
 | Type mapping | extensive | WCHAR/NUMERIC/GUID/BINARY/INTERVAL; minor tinyint/float & interval-subtype gaps | ~Parity |
 | Bulk / array | param arrays, row arrays | row arrays + param arrays; `SQLBulkOperations`→HYC00 (Simba Spark doesn't export it either) | ~Parity |
 | Tableau TDVT | certified (>90%) | **91.4%** measured (703/769) | Parity |
@@ -95,7 +95,12 @@ data.
 
 On the axes a BI tool actually exercises — ODBC 3.8, Unicode, dialect/escape
 correctness, auth, pooling, platform coverage, and the Tableau TDVT bar — Argus
-is at parity with SimbaEngine, with a **broader raw ODBC surface (107 vs 89
-entry points) and more backends (10)**. Simba stays ahead on three things worth
-a roadmap: async execution, a couple of catalog functions, and columnar/Arrow
-result decoding for large extracts.
+is at parity with SimbaEngine, with a **broader raw ODBC surface (104 vs 89
+entry points) and more backends in one binary**. Async execution and the
+catalog functions, open when this study began, have since closed (see above).
+Simba stays ahead on two things worth a roadmap: **columnar/Arrow result
+decoding for large extracts** (Arrow serialization / Cloud Fetch), and an
+**interactive DSN configuration dialog** on Windows. The TDVT figure is
+self-measured on the Trino connector's expression suite, not a vendor
+certification — the method and overrides are documented in
+`connectors/tableau/tdvt/`.
