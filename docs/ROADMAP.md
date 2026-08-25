@@ -10,6 +10,18 @@ Druid, Pinot, TDengine, Arrow Flight SQL).
 > + dialectes/escapes ODBC ; **async statement réel** (`SQL_AM_STATEMENT`,
 > `SQLCompleteAsync`) ; descripteurs réels + accesseurs Unicode ; **décodage
 > Trino sans DOM (~65% plus rapide)** ; connecteurs Tableau + **TDVT 91,4%**.
+
+> **Mise à jour (août 2026)** — corrections livrées depuis la rédaction :
+> `SQL_ATTR_ROW_BIND_TYPE` est désormais **honoré** par tout le chemin de fetch
+> (le « défaut le plus dangereux » ci-dessous est clos) ; l'échappement des
+> paramètres liés est **par dialecte** (le backslash n'est plus doublé sur les
+> moteurs ANSI) ; `SQLEndTran` refuse honnêtement les rollbacks ;
+> `is_alive` réels sur Druid/Pinot ; diagnostics et param-bindings **alloués
+> paresseusement** (~360 Ko → quelques centaines d'octets par statement) ;
+> lectures de diagnostics verrouillées ; **fuzzing libFuzzer en CI** sur
+> l'escape translator et le parseur de connection string ; job CI
+> `integration-full` (manuel + hebdo) couvrant Phoenix/Kudu/Spark/Flink ;
+> mapping de types Hive/Impala fusionné (`backend/hs2_types.c`).
 > Reste ouvert : format filaire Arrow natif (Cloud Fetch), `SQLBulkOperations`.
 
 ## Résumé exécutif

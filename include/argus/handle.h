@@ -27,6 +27,7 @@
 typedef struct argus_env {
     unsigned int        signature;
     argus_diag_t        diag;
+    GMutex              mutex;          /* thread safety (attrs + diag) */
     SQLINTEGER          odbc_version;   /* SQL_OV_ODBC3, SQL_OV_ODBC3_80 */
     SQLINTEGER          connection_pooling;
 } argus_env_t;
@@ -238,8 +239,11 @@ struct argus_stmt {
     argus_desc_t            desc_ipd;
     argus_desc_t           *active_ard;
 
-    /* Parameter bindings */
-    argus_param_binding_t   param_bindings[ARGUS_MAX_PARAMS];
+    /* Parameter bindings — lazily allocated on the first SQLBindParameter and
+     * grown geometrically up to ARGUS_MAX_PARAMS. Embedding the full array by
+     * value cost ~14 KB on every statement handle, bound or not. */
+    argus_param_binding_t  *param_bindings;
+    int                     param_bindings_capacity;
     int                     num_param_bindings;
 
     /* Parameter metadata from the backend's describe_params hook, cached for

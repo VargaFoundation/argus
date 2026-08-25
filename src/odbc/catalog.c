@@ -98,7 +98,7 @@ static SQLRETURN catalog_failed(argus_stmt_t *stmt, const char *what);
 
 /* ── ODBC API: SQLTables ─────────────────────────────────────── */
 
-SQLRETURN SQL_API SQLTables(
+static SQLRETURN sqltables_impl(
     SQLHSTMT   StatementHandle,
     SQLCHAR   *CatalogName,  SQLSMALLINT NameLength1,
     SQLCHAR   *SchemaName,   SQLSMALLINT NameLength2,
@@ -220,7 +220,7 @@ SQLRETURN SQL_API SQLTables(
 
 /* ── ODBC API: SQLColumns ────────────────────────────────────── */
 
-SQLRETURN SQL_API SQLColumns(
+static SQLRETURN sqlcolumns_impl(
     SQLHSTMT   StatementHandle,
     SQLCHAR   *CatalogName,  SQLSMALLINT NameLength1,
     SQLCHAR   *SchemaName,   SQLSMALLINT NameLength2,
@@ -540,7 +540,7 @@ static SQLRETURN builtin_get_type_info(argus_stmt_t *stmt,
 
 /* ── ODBC API: SQLGetTypeInfo ────────────────────────────────── */
 
-SQLRETURN SQL_API SQLGetTypeInfo(
+static SQLRETURN sqlgettypeinfo_impl(
     SQLHSTMT    StatementHandle,
     SQLSMALLINT DataType)
 {
@@ -611,7 +611,7 @@ static void setup_statistics_metadata(argus_stmt_t *stmt)
 
 /* ── ODBC API: SQLStatistics ─────────────────────────────────── */
 
-SQLRETURN SQL_API SQLStatistics(
+static SQLRETURN sqlstatistics_impl(
     SQLHSTMT     StatementHandle,
     SQLCHAR     *CatalogName, SQLSMALLINT NameLength1,
     SQLCHAR     *SchemaName,  SQLSMALLINT NameLength2,
@@ -745,7 +745,7 @@ static void setup_special_columns_metadata(argus_stmt_t *stmt)
 
 /* ── ODBC API: SQLSpecialColumns (empty result set) ──────────── */
 
-SQLRETURN SQL_API SQLSpecialColumns(
+static SQLRETURN sqlspecialcolumns_impl(
     SQLHSTMT     StatementHandle,
     SQLUSMALLINT IdentifierType,
     SQLCHAR     *CatalogName, SQLSMALLINT NameLength1,
@@ -828,7 +828,7 @@ static void setup_primary_keys_metadata(argus_stmt_t *stmt)
 
 /* ── ODBC API: SQLPrimaryKeys ────────────────────────────────── */
 
-SQLRETURN SQL_API SQLPrimaryKeys(
+static SQLRETURN sqlprimarykeys_impl(
     SQLHSTMT   StatementHandle,
     SQLCHAR   *CatalogName, SQLSMALLINT NameLength1,
     SQLCHAR   *SchemaName,  SQLSMALLINT NameLength2,
@@ -922,7 +922,7 @@ static void setup_foreign_keys_metadata(argus_stmt_t *stmt)
 
 /* ── ODBC API: SQLForeignKeys (empty result set) ─────────────── */
 
-SQLRETURN SQL_API SQLForeignKeys(
+static SQLRETURN sqlforeignkeys_impl(
     SQLHSTMT   StatementHandle,
     SQLCHAR   *PKCatalogName, SQLSMALLINT NameLength1,
     SQLCHAR   *PKSchemaName,  SQLSMALLINT NameLength2,
@@ -1011,7 +1011,7 @@ static void setup_procedures_metadata(argus_stmt_t *stmt)
 
 /* ── ODBC API: SQLProcedures (empty result set) ──────────────── */
 
-SQLRETURN SQL_API SQLProcedures(
+static SQLRETURN sqlprocedures_impl(
     SQLHSTMT   StatementHandle,
     SQLCHAR   *CatalogName, SQLSMALLINT NameLength1,
     SQLCHAR   *SchemaName,  SQLSMALLINT NameLength2,
@@ -1094,7 +1094,7 @@ static void setup_procedure_columns_metadata(argus_stmt_t *stmt)
 
 /* ── ODBC API: SQLProcedureColumns (empty result set) ────────── */
 
-SQLRETURN SQL_API SQLProcedureColumns(
+static SQLRETURN sqlprocedurecolumns_impl(
     SQLHSTMT   StatementHandle,
     SQLCHAR   *CatalogName, SQLSMALLINT NameLength1,
     SQLCHAR   *SchemaName,  SQLSMALLINT NameLength2,
@@ -1176,7 +1176,7 @@ static void setup_table_privileges_metadata(argus_stmt_t *stmt)
 
 /* ── ODBC API: SQLTablePrivileges (empty result set) ─────────── */
 
-SQLRETURN SQL_API SQLTablePrivileges(
+static SQLRETURN sqltableprivileges_impl(
     SQLHSTMT   StatementHandle,
     SQLCHAR   *CatalogName, SQLSMALLINT NameLength1,
     SQLCHAR   *SchemaName,  SQLSMALLINT NameLength2,
@@ -1255,7 +1255,7 @@ static void setup_column_privileges_metadata(argus_stmt_t *stmt)
 
 /* ── ODBC API: SQLColumnPrivileges (empty result set) ────────── */
 
-SQLRETURN SQL_API SQLColumnPrivileges(
+static SQLRETURN sqlcolumnprivileges_impl(
     SQLHSTMT   StatementHandle,
     SQLCHAR   *CatalogName, SQLSMALLINT NameLength1,
     SQLCHAR   *SchemaName,  SQLSMALLINT NameLength2,
@@ -1302,4 +1302,174 @@ SQLRETURN SQL_API SQLColumnPrivileges(
     setup_column_privileges_metadata(stmt);
 
     return SQL_SUCCESS;
+}
+
+/* ── Thread-safety wrappers ─────────────────────────────────────
+ * ODBC requires per-handle thread safety; every entry point above
+ * runs under its handle's mutex. Bodies were renamed *_impl and
+ * must never call another locked public entry point (GMutex is
+ * non-recursive). */
+
+SQLRETURN SQL_API SQLTables(
+    SQLHSTMT   StatementHandle,
+    SQLCHAR   *CatalogName,  SQLSMALLINT NameLength1,
+    SQLCHAR   *SchemaName,   SQLSMALLINT NameLength2,
+    SQLCHAR   *TableName,    SQLSMALLINT NameLength3,
+    SQLCHAR   *TableType,    SQLSMALLINT NameLength4)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqltables_impl(StatementHandle, CatalogName, NameLength1, SchemaName, NameLength2, TableName, NameLength3, TableType, NameLength4);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLColumns(
+    SQLHSTMT   StatementHandle,
+    SQLCHAR   *CatalogName,  SQLSMALLINT NameLength1,
+    SQLCHAR   *SchemaName,   SQLSMALLINT NameLength2,
+    SQLCHAR   *TableName,    SQLSMALLINT NameLength3,
+    SQLCHAR   *ColumnName,   SQLSMALLINT NameLength4)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlcolumns_impl(StatementHandle, CatalogName, NameLength1, SchemaName, NameLength2, TableName, NameLength3, ColumnName, NameLength4);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLGetTypeInfo(
+    SQLHSTMT    StatementHandle,
+    SQLSMALLINT DataType)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlgettypeinfo_impl(StatementHandle, DataType);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLStatistics(
+    SQLHSTMT     StatementHandle,
+    SQLCHAR     *CatalogName, SQLSMALLINT NameLength1,
+    SQLCHAR     *SchemaName,  SQLSMALLINT NameLength2,
+    SQLCHAR     *TableName,   SQLSMALLINT NameLength3,
+    SQLUSMALLINT Unique,
+    SQLUSMALLINT Reserved)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlstatistics_impl(StatementHandle, CatalogName, NameLength1, SchemaName, NameLength2, TableName, NameLength3, Unique, Reserved);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLSpecialColumns(
+    SQLHSTMT     StatementHandle,
+    SQLUSMALLINT IdentifierType,
+    SQLCHAR     *CatalogName, SQLSMALLINT NameLength1,
+    SQLCHAR     *SchemaName,  SQLSMALLINT NameLength2,
+    SQLCHAR     *TableName,   SQLSMALLINT NameLength3,
+    SQLUSMALLINT Scope,
+    SQLUSMALLINT Nullable)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlspecialcolumns_impl(StatementHandle, IdentifierType, CatalogName, NameLength1, SchemaName, NameLength2, TableName, NameLength3, Scope, Nullable);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLPrimaryKeys(
+    SQLHSTMT   StatementHandle,
+    SQLCHAR   *CatalogName, SQLSMALLINT NameLength1,
+    SQLCHAR   *SchemaName,  SQLSMALLINT NameLength2,
+    SQLCHAR   *TableName,   SQLSMALLINT NameLength3)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlprimarykeys_impl(StatementHandle, CatalogName, NameLength1, SchemaName, NameLength2, TableName, NameLength3);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLForeignKeys(
+    SQLHSTMT   StatementHandle,
+    SQLCHAR   *PKCatalogName, SQLSMALLINT NameLength1,
+    SQLCHAR   *PKSchemaName,  SQLSMALLINT NameLength2,
+    SQLCHAR   *PKTableName,   SQLSMALLINT NameLength3,
+    SQLCHAR   *FKCatalogName, SQLSMALLINT NameLength4,
+    SQLCHAR   *FKSchemaName,  SQLSMALLINT NameLength5,
+    SQLCHAR   *FKTableName,   SQLSMALLINT NameLength6)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlforeignkeys_impl(StatementHandle, PKCatalogName, NameLength1, PKSchemaName, NameLength2, PKTableName, NameLength3, FKCatalogName, NameLength4, FKSchemaName, NameLength5, FKTableName, NameLength6);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLProcedures(
+    SQLHSTMT   StatementHandle,
+    SQLCHAR   *CatalogName, SQLSMALLINT NameLength1,
+    SQLCHAR   *SchemaName,  SQLSMALLINT NameLength2,
+    SQLCHAR   *ProcName,    SQLSMALLINT NameLength3)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlprocedures_impl(StatementHandle, CatalogName, NameLength1, SchemaName, NameLength2, ProcName, NameLength3);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLProcedureColumns(
+    SQLHSTMT   StatementHandle,
+    SQLCHAR   *CatalogName, SQLSMALLINT NameLength1,
+    SQLCHAR   *SchemaName,  SQLSMALLINT NameLength2,
+    SQLCHAR   *ProcName,    SQLSMALLINT NameLength3,
+    SQLCHAR   *ColumnName,  SQLSMALLINT NameLength4)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlprocedurecolumns_impl(StatementHandle, CatalogName, NameLength1, SchemaName, NameLength2, ProcName, NameLength3, ColumnName, NameLength4);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLTablePrivileges(
+    SQLHSTMT   StatementHandle,
+    SQLCHAR   *CatalogName, SQLSMALLINT NameLength1,
+    SQLCHAR   *SchemaName,  SQLSMALLINT NameLength2,
+    SQLCHAR   *TableName,   SQLSMALLINT NameLength3)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqltableprivileges_impl(StatementHandle, CatalogName, NameLength1, SchemaName, NameLength2, TableName, NameLength3);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLColumnPrivileges(
+    SQLHSTMT   StatementHandle,
+    SQLCHAR   *CatalogName, SQLSMALLINT NameLength1,
+    SQLCHAR   *SchemaName,  SQLSMALLINT NameLength2,
+    SQLCHAR   *TableName,   SQLSMALLINT NameLength3,
+    SQLCHAR   *ColumnName,  SQLSMALLINT NameLength4)
+{
+    argus_stmt_t *stmt_h = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt_h)) return SQL_INVALID_HANDLE;
+    ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlcolumnprivileges_impl(StatementHandle, CatalogName, NameLength1, SchemaName, NameLength2, TableName, NameLength3, ColumnName, NameLength4);
+    ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
 }

@@ -21,11 +21,26 @@ option(ARGUS_ENABLE_TELEMETRY "Compile in anonymous opt-in usage telemetry (off 
 set(ARGUS_TELEMETRY_ENDPOINT "https://telemetry.vargafoundation.org/v1/events"
     CACHE STRING "Default telemetry collector endpoint (overridable at runtime via ARGUS_TELEMETRY_ENDPOINT)")
 
+option(ENABLE_FUZZING "Build libFuzzer harnesses in fuzz/ (requires Clang)" OFF)
+
 if(ENABLE_ASAN)
     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer
                         -fno-sanitize-recover=undefined -g)
     add_link_options(-fsanitize=address,undefined)
     message(STATUS "Sanitizers: ENABLED (ASan + UBSan)")
+endif()
+
+if(ENABLE_FUZZING)
+    if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "ENABLE_FUZZING requires Clang (libFuzzer): "
+                            "configure with CC=clang CXX=clang++")
+    endif()
+    # Instrument the whole driver for coverage-guided fuzzing; the harnesses
+    # themselves add -fsanitize=fuzzer to get the libFuzzer main.
+    add_compile_options(-fsanitize=fuzzer-no-link,address
+                        -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address)
+    message(STATUS "Fuzzing: ENABLED (libFuzzer + ASan)")
 endif()
 
 # Append our cmake module path. PROJECT_SOURCE_DIR (not CMAKE_SOURCE_DIR) so
@@ -273,4 +288,9 @@ add_subdirectory(src)
 if(BUILD_TESTING)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+# libFuzzer harnesses (need the static lib from BUILD_TESTING)
+if(ENABLE_FUZZING AND BUILD_TESTING)
+    add_subdirectory(fuzz)
 endif()

@@ -155,7 +155,10 @@ static int mywire_cancel(argus_backend_conn_t conn, argus_backend_op_t op)
 {
     (void)conn;
     (void)op;
-    /* Results are fetched synchronously; there is nothing to cancel. */
+    /* Results are fetched synchronously: by the time SQLCancel can reach this
+     * the query has already completed, and cancelling a finished operation is
+     * a no-op success per ODBC. Mid-flight cancel would need KILL QUERY on a
+     * second wire connection; not implemented. */
     return 0;
 }
 
@@ -282,24 +285,28 @@ static int mywire_fetch_results(argus_backend_conn_t raw_conn,
     while (r < (size_t)batch && (row = mysql_fetch_row(op->result)) != NULL) {
         unsigned long *lengths = mysql_fetch_lengths(op->result);
 
-        cache->rows[r].cells = calloc((size_t)ncols, sizeof(argus_cell_t));
-        if (!cache->rows[r].cells) return -1;
+        /* The wire hands us every column length up front, so the whole row —
+         * cell array + payloads — is ONE allocation instead of 1+ncols. */
+        size_t payload = 0;
+        for (int c = 0; c < ncols; c++) {
+            if (!row[c]) continue;
+            payload += (lengths ? (size_t)lengths[c] : strlen(row[c])) + 1;
+        }
+        char *cursor = argus_row_alloc_block(&cache->rows[r], ncols, payload);
+        if (!cursor) return -1;
 
         for (int c = 0; c < ncols; c++) {
             argus_cell_t *cell = &cache->rows[r].cells[c];
             if (!row[c]) {
                 cell->is_null = true;
-                cell->data = NULL;
-                cell->data_len = 0;
                 continue;
             }
             size_t len = lengths ? (size_t)lengths[c] : strlen(row[c]);
-            cell->data = malloc(len + 1);
-            if (!cell->data) return -1;
-            memcpy(cell->data, row[c], len);
-            cell->data[len] = '\0';
+            memcpy(cursor, row[c], len);
+            cursor[len] = '\0';
+            cell->data = cursor;
             cell->data_len = len;
-            cell->is_null = false;
+            cursor += len + 1;
         }
         r++;
     }

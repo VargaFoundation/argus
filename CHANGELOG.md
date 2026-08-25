@@ -35,6 +35,12 @@ connectors package, and `validate-xml.py` still reports 8/8 against Tableau's
 XSDs.
 
 ### PostgreSQL family: per-connection options and the last ODBC gaps
+- **`backslash_escapes` is false for all three backends.** 0.6.0 made bound-
+  parameter escaping dialect-aware; PostgreSQL has defaulted
+  `standard_conforming_strings` to on since 9.1, so `\` in a literal is an
+  ordinary character and doubling it would deliver `C:\\path` where the
+  application bound `C:\path`. Verified live, and `test_postgres_escapes` now
+  binds a backslash and reads it back so the flag cannot be flipped silently.
 - **`SHOWPARTITIONS`, `SHOWALLDATABASES`, `ROWVERSIONING`, `SSLMODE` and
   `SEARCHPATH` are connection-string and DSN keys**, not environment variables.
   A process routinely holds connections to several servers, and a machine-wide
@@ -238,6 +244,88 @@ XSDs.
   `tests/integration/test_bi_escapes.c` gained `BI_UID`/`BI_PWD`/`BI_TABLE`/
   `BI_TABLE2`/`BI_JOIN_COL`/`BI_TEXT_COL`/`BI_TEXT_VAL` so the shared probe runs
   on any engine (defaults unchanged, so Trino runs exactly as before).
+
+## [0.6.0] — 2026-08-24
+
+Everything below ships in 0.6.0 (continues the v0.5.x line — the v0.1–v0.5.9 tags predate this changelog's revival).
+
+### Correctness
+- **Parameter escaping is now dialect-aware**: `\` is doubled only on engines
+  where it is a string-literal escape character (Hive, Impala, MySQL-wire,
+  BigQuery). On ANSI-literal engines (Trino, Phoenix, Pinot, Druid) a bound
+  value such as `C:\path` previously arrived server-side as `C:\\path`.
+- **`?` inside SQL comments** (`--`, `/* */`) is no longer counted or
+  substituted as a parameter marker.
+- **`SQLEndTran`/`SQLTransact` no longer fake rollbacks**: `SQL_COMMIT` remains
+  a vacuous success (the connection is auto-commit only,
+  `SQL_TXN_CAPABLE=SQL_TC_NONE`), but `SQL_ROLLBACK` now returns `SQL_ERROR`
+  (`HYC00`) instead of claiming work was undone that had already committed.
+- **Real liveness probes for Druid and Pinot** (`/status/health`, `/health`):
+  the connection pool no longer hands out connections to a dead broker on
+  these backends.
+- **Telemetry no longer writes a persistent `install_id` unless telemetry is
+  actually enabled** for a connection, and the first-run notice is now also
+  printed to stderr, not only the log file.
+
+### Runtime validation campaign (live engines)
+- **Kerberos/GSSAPI over binary Thrift validated against a real MIT KDC** —
+  connect + SELECT through the hand-written SASL layer
+  (`tests/integration/kerberos/`), closing the roadmap's "runtime validation
+  pending" item. The HTTP/SPNEGO transport still needs an `HTTP/` service
+  principal and a TLS-enabled Kerberized HS2 in the test stack.
+- **Spark Thrift Server and Flink SQL Gateway validated live** through the
+  hive backend (connect + query). The Flink recipe that actually works is now
+  codified in `docker-compose.yml` (java8 image, session cluster, standalone
+  metastore, sha256-pinned connector jars via
+  `tests/integration/flink-lib/fetch-jars.sh`, and an underscore-free compose
+  network — Hive's URI canonicalization rejects `_` in hostnames).
+- Full integration label green on the fresh stack: Trino (+TLS), Hive 4,
+  MySQL-wire/MariaDB, Pinot, BigQuery emulator, Spark, Flink, async,
+  failover, cursors, BI escapes — 21/22, `test_hive_http` being the SPNEGO
+  infra gap above. Phoenix is blocked by the only available PQS image
+  (PROTOBUF-only, confirmed live); Kudu's image refuses its own defaults and
+  the backend is deprecated.
+
+### Fetch memory model
+- **Single-allocation rows** (`argus_row_alloc_block`): a row's cell array
+  and all its payloads can live in one malloc block, freed with one free —
+  ~10x fewer allocations on wide results. The MySQL-wire backend (which
+  knows every column length up front) is converted; ownership-transfer
+  semantics (scroll cache) are unchanged and the classic per-cell layout
+  remains supported. Trino/HS2 conversion is the follow-up.
+
+### Memory & threading
+- **Statement handles shrank from ~360 KB to a few hundred bytes**: the five
+  embedded 64-record diagnostic arrays (~66 KB each) and the 256-entry
+  parameter-binding array (~14 KB) are now lazily allocated on first use and
+  grown geometrically; storage is released on handle free.
+- **Diagnostics reads are now thread-safe**: `SQLGetDiagRec`,
+  `SQLGetDiagField` and `SQLError` lock the owning handle's mutex (records
+  being lazily reallocated made the previously-unlocked read a
+  use-after-free risk); the environment handle gained its own mutex.
+
+### Fuzzing & CI
+- **libFuzzer harnesses** (`fuzz/`, `ENABLE_FUZZING=ON` under Clang) for the
+  ODBC escape translator and the connection-string parser, with seed corpora
+  and a CI job (90 s + 60 s budget per push); initial campaign: 4.4 M
+  executions, zero findings.
+- **`integration-full` CI job** (workflow_dispatch + weekly): starts every
+  compose service — including Phoenix, Kudu, Spark and Flink, which the
+  default job never ran — and runs the complete integration label.
+- `docs/ARCHITECTURE.md` rewritten to describe the actual system (all
+  backends, dialect layer, threading and memory model, obs_hooks seam,
+  quality gates) — it previously covered 3 of 10 backends.
+
+### Documentation honesty
+- Entry-point count corrected to **104** (the previous "107" double-counted
+  the three W-descriptor functions).
+- `SIMBA_PARITY.md`: the DSN-dialog row no longer claims parity (Argus's
+  `ConfigDSN` is deliberately UI-less), the bottom line no longer contradicts
+  the table (async and catalog have closed), and the TDVT figure is labelled
+  self-measured rather than certified.
+- The three `*_PARAMETERS_COMPARISON.md` files carry status banners correcting
+  their stale Kerberos/OAuth2/async conclusions.
+- The `obs_hooks` tap seam is now disclosed in the README.
 
 ### Telemetry (opt-in, off by default)
 - **Anonymous usage telemetry**, disabled by default and gated behind explicit

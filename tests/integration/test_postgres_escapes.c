@@ -299,6 +299,49 @@ static void test_procedure_call_escape(void **state)
           "250");
 }
 
+/*
+ * A bound parameter carrying a backslash must arrive unchanged.
+ *
+ * The dialect table's backslash_escapes decides whether the driver doubles
+ * '\' when rendering a bound value. PostgreSQL has defaulted
+ * standard_conforming_strings to on since 9.1, so '\' inside a literal is an
+ * ordinary character and doubling it would deliver 'C:\\path' where the
+ * application bound 'C:\path' — a silent corruption, not an error. This is the
+ * live check on that flag being false for the PostgreSQL family.
+ */
+static void test_bound_backslash_survives(void **state)
+{
+    (void)state;
+
+    SQLHSTMT stmt = SQL_NULL_HSTMT;
+    assert_int_equal(SQLAllocHandle(SQL_HANDLE_STMT, g_dbc, &stmt), SQL_SUCCESS);
+
+    const char *bound = "C:\\path\\to\\file";
+    SQLLEN ind = SQL_NTS;
+    assert_int_equal(
+        SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_VARCHAR,
+                         strlen(bound), 0, (SQLPOINTER)bound, 0, &ind),
+        SQL_SUCCESS);
+
+    SQLRETURN r = SQLExecDirect(stmt, (SQLCHAR *)"SELECT ?::text", SQL_NTS);
+    if (r != SQL_SUCCESS && r != SQL_SUCCESS_WITH_INFO) {
+        SQLCHAR st[6] = {0}, msg[512] = {0};
+        SQLINTEGER native = 0;
+        SQLSMALLINT len = 0;
+        SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, st, &native, msg, sizeof(msg), &len);
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+        fail_msg("bound backslash rejected: %s %s", st, msg);
+    }
+
+    assert_int_equal(SQLFetch(stmt), SQL_SUCCESS);
+    SQLCHAR got[256] = {0};
+    SQLLEN out = 0;
+    SQLGetData(stmt, 1, SQL_C_CHAR, got, sizeof(got), &out);
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+
+    assert_string_equal((char *)got, bound);
+}
+
 static void test_sql_procedures_is_now_yes(void **state)
 {
     (void)state;
@@ -317,6 +360,7 @@ int main(void)
         cmocka_unit_test(test_system_functions),
         cmocka_unit_test(test_datetime_functions),
         cmocka_unit_test(test_procedure_call_escape),
+        cmocka_unit_test(test_bound_backslash_survives),
         cmocka_unit_test(test_sql_procedures_is_now_yes),
         cmocka_unit_test(test_unadvertised_functions_are_refused),
     };

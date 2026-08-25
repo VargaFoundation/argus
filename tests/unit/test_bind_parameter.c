@@ -36,6 +36,8 @@ static void destroy_test_stmt(argus_stmt_t *stmt)
     argus_row_cache_free(&stmt->row_cache);
     free(stmt->columns);
     free(stmt->bindings);
+    free(stmt->param_bindings);
+    argus_diag_dispose(&stmt->diag);
     stmt->signature = 0;
     free(stmt);
 }
@@ -79,7 +81,10 @@ static void test_bind_parameter_rejects_output(void **state)
         &value, sizeof(value), &ind);
 
     assert_int_equal(ret, SQL_ERROR);
-    assert_false(stmt->param_bindings[0].bound);
+    /* A rejected bind never allocates the lazy binding array. */
+    assert_int_equal(stmt->num_param_bindings, 0);
+    assert_true(stmt->param_bindings == NULL ||
+                !stmt->param_bindings[0].bound);
 
     destroy_test_stmt(stmt);
 }

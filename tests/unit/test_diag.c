@@ -13,7 +13,7 @@ static void test_push_and_get(void **state)
 {
     (void)state;
 
-    argus_diag_t diag;
+    argus_diag_t diag = {0};   /* stack diag: zero-init, records allocate lazily */
     argus_diag_clear(&diag);
 
     argus_diag_push(&diag, "HY000", "Test error message", 42);
@@ -31,6 +31,7 @@ static void test_push_and_get(void **state)
     assert_int_equal(native_error, 42);
     assert_string_equal((char *)message, "Test error message");
     assert_int_equal(msg_len, 18);
+    argus_diag_dispose(&diag);
 }
 
 /* ── Test: No data for empty diagnostics ─────────────────────── */
@@ -39,13 +40,14 @@ static void test_empty_diag(void **state)
 {
     (void)state;
 
-    argus_diag_t diag;
+    argus_diag_t diag = {0};   /* stack diag: zero-init, records allocate lazily */
     argus_diag_clear(&diag);
 
     SQLCHAR sqlstate[6];
     SQLRETURN ret = argus_diag_get_rec(&diag, 1, sqlstate, NULL,
                                         NULL, 0, NULL);
     assert_int_equal(ret, SQL_NO_DATA);
+    argus_diag_dispose(&diag);
 }
 
 /* ── Test: Invalid record number ─────────────────────────────── */
@@ -54,7 +56,7 @@ static void test_invalid_rec_number(void **state)
 {
     (void)state;
 
-    argus_diag_t diag;
+    argus_diag_t diag = {0};   /* stack diag: zero-init, records allocate lazily */
     argus_diag_clear(&diag);
     argus_diag_push(&diag, "HY000", "Error", 0);
 
@@ -63,6 +65,7 @@ static void test_invalid_rec_number(void **state)
 
     ret = argus_diag_get_rec(&diag, 2, NULL, NULL, NULL, 0, NULL);
     assert_int_equal(ret, SQL_NO_DATA);
+    argus_diag_dispose(&diag);
 }
 
 /* ── Test: Multiple diagnostic records ───────────────────────── */
@@ -71,7 +74,7 @@ static void test_multiple_records(void **state)
 {
     (void)state;
 
-    argus_diag_t diag;
+    argus_diag_t diag = {0};   /* stack diag: zero-init, records allocate lazily */
     argus_diag_clear(&diag);
 
     argus_diag_push(&diag, "HY000", "First error", 1);
@@ -94,6 +97,7 @@ static void test_multiple_records(void **state)
     argus_diag_get_rec(&diag, 3, sqlstate, &native_error, NULL, 0, NULL);
     assert_string_equal((char *)sqlstate, "08001");
     assert_int_equal(native_error, 3);
+    argus_diag_dispose(&diag);
 }
 
 /* ── Test: argus_set_error clears and sets ───────────────────── */
@@ -102,7 +106,7 @@ static void test_set_error(void **state)
 {
     (void)state;
 
-    argus_diag_t diag;
+    argus_diag_t diag = {0};   /* stack diag: zero-init, records allocate lazily */
     argus_diag_clear(&diag);
 
     argus_diag_push(&diag, "HY000", "Old error", 99);
@@ -120,6 +124,7 @@ static void test_set_error(void **state)
     assert_string_equal((char *)sqlstate, "08001");
     assert_string_equal((char *)message, "New error");
     assert_int_equal(native_error, 42);
+    argus_diag_dispose(&diag);
 }
 
 /* ── Test: SQLGetDiagRec with env handle ─────────────────────── */
@@ -184,7 +189,7 @@ static void test_message_truncation(void **state)
 {
     (void)state;
 
-    argus_diag_t diag;
+    argus_diag_t diag = {0};   /* stack diag: zero-init, records allocate lazily */
     argus_diag_clear(&diag);
 
     argus_diag_push(&diag, "HY000", "This is a long error message", 0);
@@ -197,6 +202,7 @@ static void test_message_truncation(void **state)
     assert_int_equal(ret, SQL_SUCCESS);
     assert_int_equal(msg_len, 28); /* Full length */
     assert_int_equal(strlen((char *)message), 9); /* Truncated */
+    argus_diag_dispose(&diag);
 }
 
 /* ── Main ─────────────────────────────────────────────────────── */

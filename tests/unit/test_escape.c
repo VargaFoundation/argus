@@ -20,7 +20,7 @@
 /* Translate with `backend`'s dialect, asserting success. Caller g_free()s. */
 static char *xlat(const char *backend, const char *sql)
 {
-    argus_diag_t diag;
+    argus_diag_t diag = {0};   /* stack diag: zero-init, records allocate lazily */
     char        *out = NULL;
 
     argus_diag_clear(&diag);
@@ -30,6 +30,7 @@ static char *xlat(const char *backend, const char *sql)
     assert_int_equal(r, ARGUS_ESCAPE_OK);
     assert_non_null(out);
     return out;
+    argus_diag_dispose(&diag);
 }
 
 /* Translate and compare against the expected native SQL. */
@@ -45,7 +46,7 @@ static void assert_translates(const char *backend, const char *sql,
 static void assert_rejected(const char *backend, const char *sql,
                             const char *expect_sqlstate)
 {
-    argus_diag_t diag;
+    argus_diag_t diag = {0};   /* stack diag: zero-init, records allocate lazily */
     char        *out = NULL;
 
     argus_diag_clear(&diag);
@@ -55,6 +56,7 @@ static void assert_rejected(const char *backend, const char *sql,
     assert_int_equal(r, ARGUS_ESCAPE_ERROR);
     assert_true(diag.count > 0);
     assert_string_equal((const char *)diag.records[0].sqlstate, expect_sqlstate);
+    argus_diag_dispose(&diag);
 }
 
 /* Escape-free SQL must not even be copied. */
@@ -62,7 +64,7 @@ static void test_no_escape_is_left_alone(void **state)
 {
     (void)state;
 
-    argus_diag_t diag;
+    argus_diag_t diag = {0};   /* stack diag: zero-init, records allocate lazily */
     char        *out = NULL;
 
     argus_diag_clear(&diag);
@@ -71,6 +73,7 @@ static void test_no_escape_is_left_alone(void **state)
                                             &out, &diag),
                      ARGUS_ESCAPE_NONE);
     assert_null(out);
+    argus_diag_dispose(&diag);
 }
 
 /* The same escape must render differently per backend — that is the whole
@@ -273,7 +276,7 @@ static void test_arity_message_is_readable(void **state)
 {
     (void)state;
 
-    argus_diag_t diag;
+    argus_diag_t diag = {0};   /* stack diag: zero-init, records allocate lazily */
     char        *out = NULL;
 
     argus_diag_clear(&diag);
@@ -289,6 +292,7 @@ static void test_arity_message_is_readable(void **state)
                            "SELECT {fn UCASE(a, b)}", &out, &diag);
     assert_true(diag.count > 0);
     assert_non_null(strstr((const char *)diag.records[0].message, "takes 1 argument"));
+    argus_diag_dispose(&diag);
 }
 
 /*
@@ -346,7 +350,7 @@ static void test_translator_does_not_validate_sql(void **state)
 {
     (void)state;
 
-    argus_diag_t diag;
+    argus_diag_t diag = {0};   /* stack diag: zero-init, records allocate lazily */
     char        *out = NULL;
 
     argus_diag_clear(&diag);
@@ -360,6 +364,7 @@ static void test_translator_does_not_validate_sql(void **state)
                                             "THIS IS NOT SQL AT ALL", &out, &diag),
                      ARGUS_ESCAPE_NONE);
     assert_null(out);
+    argus_diag_dispose(&diag);
 }
 
 int main(void)

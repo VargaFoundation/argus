@@ -1,150 +1,123 @@
 # Architecture
 
-Argus is a two-layer ODBC driver with a pluggable backend system.
-
-## Layer 1: ODBC API Layer (`src/odbc/`)
-
-This layer implements the ODBC specification. It handles:
-
-- **Handle management** (`handle.c`): Environment, connection, and statement lifecycle with runtime signature checking
-- **Connection** (`connect.c`): Connection string parsing, backend selection, and connection lifecycle
-- **Execution** (`execute.c`): Statement preparation and execution dispatch
-- **Fetching** (`fetch.c`): Batch row cache, column binding, and type conversion
-- **Catalog** (`catalog.c`): SQLTables, SQLColumns, SQLGetTypeInfo dispatch to backend
-- **Info** (`info.c`): ~150 SQLGetInfo types for BI tool compatibility (PowerBI, Tableau)
-- **Dialect** (`dialect.c`): per-backend SQL dialect table — identifier quote char and
-  the ODBC scalar functions each backend can render. `SQLGetInfo`'s function bitmaps are
-  *derived* from it, so the driver cannot advertise what it cannot translate
-- **Escapes** (`escape.c`): translates ODBC escape sequences (`{fn}`, `{d/t/ts}`,
-  `{escape}`, `{oj}`, `{interval}`) into each backend's grammar. Required by every
-  generic-ODBC BI tool (Tableau, Excel, Qlik, Alteryx); see `docs/BI_TOOLS.md`
-- **Diagnostics** (`diag.c`): SQLSTATE error reporting and diagnostic records
-- **Attributes** (`attr.c`): Environment, connection, and statement attributes
-
-The ODBC layer never talks to a database directly. It delegates all data operations to the backend layer through the vtable interface.
-
-## Layer 2: Backend Abstraction (`src/backend/`)
-
-Each backend implements the `argus_backend_t` vtable defined in `include/argus/backend.h`:
-
-```c
-typedef struct argus_backend {
-    const char *name;
-    int (*connect)(...);
-    void (*disconnect)(...);
-    int (*execute)(...);
-    int (*fetch_results)(...);
-    int (*get_result_metadata)(...);
-    int (*get_tables)(...);
-    int (*get_columns)(...);
-    // ...
-} argus_backend_t;
-```
-
-### Hive Backend (`src/backend/hive/`)
-
-The Hive backend communicates with HiveServer2 using the TCLIService Thrift protocol:
-
-- **hive_session.c**: OpenSession/CloseSession via Thrift (protocol V10)
-- **hive_query.c**: ExecuteStatement, GetOperationStatus, CloseOperation
-- **hive_fetch.c**: FetchResults with columnar TRowSet parsing
-- **hive_metadata.c**: GetTables, GetColumns, GetSchemas, GetTypeInfo
-- **hive_types.c**: Hive type -> ODBC SQL type mapping
-
-### Impala Backend (`src/backend/impala/`)
-
-The Impala backend uses the same TCLIService Thrift protocol as Hive with key differences:
-
-- **impala_session.c**: OpenSession with protocol V6 (not V10), post-connect `USE <db>` statement
-- **impala_query.c**: Same Thrift execution pattern as Hive
-- **impala_fetch.c**: Same columnar TRowSet parsing as Hive
-- **impala_metadata.c**: Same Thrift catalog operations as Hive
-- **impala_types.c**: Same type mapping as Hive plus `REAL` type
-
-### Trino Backend (`src/backend/trino/`)
-
-The Trino backend uses a completely different protocol -- HTTP REST API with JSON:
-
-- **trino_session.c**: HTTP client (libcurl) initialization, connectivity check
-- **trino_query.c**: POST `/v1/statement`, DELETE `/v1/query/<id>` for cancel
-- **trino_fetch.c**: GET `nextUri` polling, JSON data array parsing
-- **trino_metadata.c**: Catalog operations via `information_schema` SQL queries
-- **trino_types.c**: Trino type names (lowercase) -> ODBC SQL type mapping
-
-## Data Flow
-
-### Hive/Impala (Thrift)
+How the driver is layered, where a query travels, and where to plug in. For
+adding a backend, see `ADDING_BACKENDS.md`; for the Flight SQL specifics,
+`FLIGHTSQL_DESIGN.md`; for the ADBC surface, `ADBC.md`.
 
 ```
-1. App calls SQLExecDirect("SELECT * FROM t")
-2. ODBC layer validates handle, stores query
-3. ODBC calls backend->execute() -> hive_execute()
-4. Hive backend sends TExecuteStatementReq via Thrift
-5. App calls SQLFetch()
-6. ODBC layer checks row cache, if empty:
-   a. Calls backend->fetch_results() -> hive_fetch_results()
-   b. Hive sends TFetchResultsReq, gets TRowSet (columnar)
-   c. Parses columns into row cache (1000 rows)
-7. ODBC layer reads from cache, converts to app's bound types
-8. Returns SQL_SUCCESS (or SQL_NO_DATA when exhausted)
+  Application (Tableau, Power BI, Excel, custom code)
+        │  ODBC 3.8 — 104 entry points (ANSI + W)
+        ▼
+  ┌──────────────────────── src/odbc/ ────────────────────────────┐
+  │ handle.c   env/dbc/stmt/desc lifecycle, SQLFreeStmt           │
+  │ connect.c  DSN + connection-string parsing, pool, retry,      │
+  │            multi-host, obs_hooks connect taps                 │
+  │ execute.c  prepare/execute, param render, async worker, DAE   │
+  │ escape.c   {fn}/{d}/{ts}/{oj}/{interval} → native grammar     │
+  │ dialect.c  per-backend dialect registry (quote char, literal  │
+  │            style, backslash escaping, verified fn maps)       │
+  │ fetch.c    row delivery, block/scrollable cursors, row-wise & │
+  │            column-wise binding, SQLGetData, type conversion   │
+  │ catalog.c  SQLTables/Columns/TypeInfo/PrimaryKeys/Statistics  │
+  │ attr.c     env/dbc/stmt attributes, SQLEndTran                │
+  │ desc.c     explicit + implicit descriptors                    │
+  │ diag.c     diagnostics (lazily-allocated records, per-handle  │
+  │            locking), SQLGetDiagRec/Field, SQLError            │
+  │ unicode.c  every W entry point, UTF-16LE ↔ UTF-8              │
+  │ info.c     SQLGetInfo/SQLGetFunctions (derived from dialect)  │
+  │ pool.c     opt-in connection pool (is_alive-gated reuse)      │
+  │ log.c      leveled logging   telemetry.c  opt-in telemetry    │
+  │ obs_hooks.c weak no-op tap points (see below)                 │
+  └──────────────┬────────────────────────────────────────────────┘
+                 │  argus_backend_t vtable (include/argus/backend.h)
+                 ▼
+  ┌──────────────────────── src/backend/ ─────────────────────────┐
+  │ hive/     HiveServer2 Thrift (binary + HTTP, SASL/Kerberos,   │
+  │           also Spark Thrift Server & Flink SQL Gateway)       │
+  │ impala/   Impala Thrift (shares the HS2 lineage with hive/)   │
+  │ trino/    HTTP/JSON, DOM-free page decode, spooling, OAuth2   │
+  │ phoenix/  Avatica JSON     pinot/  broker JSON                │
+  │ druid/    router SQL JSON  bigquery/ REST/JSON (+S3NS)        │
+  │ mysql/    MySQL wire via libmariadb (StarRocks/Doris/CH)      │
+  │ flightsql/ Arrow Flight SQL (C++)   kudu/ (deprecated)        │
+  │ shared: backend.c registry · thrift_gio_transport.c ·         │
+  │         thrift_sasl.c (GSSAPI/SSPI) · http_client.c           │
+  └───────────────────────────────────────────────────────────────┘
+
+  src/adbc/argus_adbc.c — Arrow ADBC driver over the same stack
 ```
 
-### Trino (REST)
+## The backend contract
 
-```
-1. App calls SQLExecDirect("SELECT * FROM t")
-2. ODBC layer validates handle, stores query
-3. ODBC calls backend->execute() -> trino_execute()
-4. Trino backend POSTs to /v1/statement, gets JSON with nextUri
-5. App calls SQLFetch()
-6. ODBC layer checks row cache, if empty:
-   a. Calls backend->fetch_results() -> trino_fetch_results()
-   b. Trino GETs nextUri, gets JSON with data array
-   c. Parses JSON arrays into row cache
-7. ODBC layer reads from cache, converts to app's bound types
-8. Returns SQL_SUCCESS (or SQL_NO_DATA when exhausted)
-```
+`include/argus/backend.h` defines `argus_backend_t`: a name plus ~19 function
+pointers (connect, execute, fetch_results, catalog getters, `cancel`,
+`is_alive`, `get_last_error`, `get_server_version`, …). Registration is
+compile-time (`#ifdef` per backend) into the registry in
+`src/backend/backend.c`; lookup is by case-insensitive name from the
+`BACKEND=` connection-string key.
 
-## Handle Hierarchy
+Two contract rules matter more than the rest:
 
-```
-SQLHENV (argus_env_t)
-  +-- SQLHDBC (argus_dbc_t)
-       |-- backend vtable pointer
-       |-- backend connection handle (opaque)
-       +-- SQLHSTMT (argus_stmt_t)
-            |-- backend operation handle (opaque)
-            |-- column descriptors
-            |-- row cache (batch)
-            +-- column bindings
-```
+- **NULL beats a lie.** A backend that cannot implement a hook leaves it NULL
+  and the ODBC layer reports "not supported" (`HYC00`); a no-op that returns
+  success is a bug class this driver has been burned by (cancel, liveness).
+- **`is_alive` gates pool reuse** (`pool.c`): it must be a real probe
+  (Druid/Pinot ping their health endpoints; MySQL pings the wire) or
+  document why a pointer check is genuinely sufficient (BigQuery: stateless
+  REST).
 
-Each handle has a 4-byte magic signature for runtime type checking, preventing invalid handle casts.
+The row cache (`argus_row_cache_t`, `include/argus/types.h`) is the fetch
+contract: backends deliver cells as strings (with an i64/f64 numeric
+fast-path); `fetch.c` converts to the application's bound C types. This is the
+known architectural ceiling for very large extracts — the planned columnar
+path is tracked in `ROADMAP.md`.
 
-## Type Mapping
+## Dialect and escape translation
 
-| Hive/Impala Type | Trino Type | ODBC SQL Type | C Default |
-|------------------|------------|---------------|-----------|
-| BOOLEAN | boolean | SQL_BIT | SQL_C_BIT |
-| TINYINT | tinyint | SQL_TINYINT | SQL_C_TINYINT |
-| SMALLINT | smallint | SQL_SMALLINT | SQL_C_SHORT |
-| INT | integer | SQL_INTEGER | SQL_C_LONG |
-| BIGINT | bigint | SQL_BIGINT | SQL_C_SBIGINT |
-| FLOAT | real | SQL_FLOAT/SQL_REAL | SQL_C_FLOAT |
-| DOUBLE | double | SQL_DOUBLE | SQL_C_DOUBLE |
-| STRING/VARCHAR | varchar | SQL_VARCHAR | SQL_C_CHAR |
-| TIMESTAMP | timestamp | SQL_TYPE_TIMESTAMP | SQL_C_CHAR |
-| DATE | date | SQL_TYPE_DATE | SQL_C_CHAR |
-| DECIMAL | decimal | SQL_DECIMAL | SQL_C_CHAR |
-| BINARY | varbinary | SQL_BINARY/SQL_VARBINARY | SQL_C_CHAR (hex) |
-| ARRAY/MAP/STRUCT | array/map/row | SQL_VARCHAR | SQL_C_CHAR (JSON) |
+`dialect.c` is the single source of truth for what each engine's SQL looks
+like: identifier quote character, temporal literal style, `{oj}` support,
+**string-literal backslash escaping** (parameter rendering consults this), and
+a per-engine scalar-function map. `SQLGetInfo`'s function bitmaps are derived
+from the same map, so the driver can never advertise a function it cannot
+translate. Unverified backends deliberately under-claim (3 functions) until
+probed against a live server.
 
-Complex types (ARRAY, MAP, STRUCT) are serialized as VARCHAR strings, matching the behavior of commercial ODBC drivers.
+## Threading model
 
-## Platform Support
+ODBC requires per-handle thread safety. The driver uses one `GMutex` per
+dbc/stmt/env; `execute.c` and `fetch.c` lock around execution and delivery,
+`diag.c` locks reads (`SQLGetDiagRec`/`SQLGetDiagField`/`SQLError`) against a
+concurrent writer. Async execution (`SQL_AM_STATEMENT`) runs on a worker
+thread; completion is published through an atomic + `g_thread_join` barrier.
+The remaining unguarded attribute paths are being closed incrementally —
+treat any new shared-state access as lock-required by default.
 
-Argus builds on Linux, macOS, and Windows:
+## Memory model
 
-- **Linux/macOS**: GCC/Clang, `__attribute__((constructor))` for initialization
-- **Windows**: MinGW (MSYS2/UCRT64), `DllMain` for initialization
-- **Portability**: `include/argus/compat.h` provides cross-platform macros for `strcasecmp`, `strdup`, `strtok_r`, `strndup`
+Handles are `calloc`'d. Diagnostics records and parameter-binding arrays are
+**lazily allocated** and grown geometrically (a statement handle costs a few
+hundred bytes until something actually errors or binds). Passwords use
+`argus_secure_free`; telemetry never sees message text, only SQLSTATEs.
+
+## The observability seam (`obs_hooks`)
+
+`include/argus/obs_hooks.h` declares eleven tap points (connect, statement,
+disconnect, secret resolution, token cache, fetch presets, statement guards,
+a connection-admission gate, host pick/result), defined as weak no-ops in
+`src/odbc/obs_hooks.c`. In this Apache-2.0 build they do nothing; an
+out-of-tree add-on may link strong definitions (see the README's
+"Observability hooks" section for the disclosure). Signatures are primitives
+only, so the driver never depends on external types. Note that
+`__attribute__((weak))` override semantics are only guaranteed for
+static/whole-archive linking on GCC/Clang — the seam is not a stable dynamic
+ABI.
+
+## Quality gates
+
+- Unit tests (cmocka) link `argus_odbc_static` with no live engine.
+- Integration tests run against real engines via
+  `tests/integration/docker-compose.yml`; the default CI job runs a fast
+  subset, the `integration-full` workflow-dispatch job runs everything.
+- ASan/UBSan/LSan over the unit suite; CodeQL on every push.
+- libFuzzer harnesses (`fuzz/`) cover the escape translator and
+  connection-string parser; `ENABLE_FUZZING=ON` under Clang.

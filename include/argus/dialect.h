@@ -70,6 +70,12 @@ typedef struct argus_dialect {
     const char             *quote_char;  /* SQL_IDENTIFIER_QUOTE_CHAR */
     argus_literal_style_t   literals;
     bool                    supports_oj; /* {oj ...} / SQL_OJ_CAPABILITIES */
+    /* Whether '\' is an escape character inside string literals. HiveQL, the
+     * MySQL wire dialect and BigQuery treat it as one, so it must be doubled
+     * when rendering a bound parameter; ANSI engines (Trino, Phoenix, Pinot,
+     * Druid, ...) treat it as an ordinary character, and doubling it there
+     * silently corrupts the value ('C:\path' arrives as 'C:\\path'). */
+    bool                    backslash_escapes;
     const argus_fn_entry_t *fn_map;      /* terminated by odbc_name == NULL */
 
     /*

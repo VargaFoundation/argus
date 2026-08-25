@@ -47,7 +47,7 @@ static int desc_ensure_records(argus_desc_t *d, int n)
 
 /* ── ODBC API: SQLGetDescField ───────────────────────────────── */
 
-SQLRETURN SQL_API SQLGetDescField(
+static SQLRETURN sqlgetdescfield_impl(
     SQLHDESC    DescriptorHandle,
     SQLSMALLINT RecNumber,
     SQLSMALLINT FieldIdentifier,
@@ -287,7 +287,7 @@ SQLRETURN SQL_API SQLGetDescField(
 
 /* ── ODBC API: SQLSetDescField ───────────────────────────────── */
 
-SQLRETURN SQL_API SQLSetDescField(
+static SQLRETURN sqlsetdescfield_impl(
     SQLHDESC    DescriptorHandle,
     SQLSMALLINT RecNumber,
     SQLSMALLINT FieldIdentifier,
@@ -386,7 +386,7 @@ SQLRETURN SQL_API SQLSetDescField(
 
 /* ── ODBC API: SQLSetDescRec ─────────────────────────────────── */
 
-SQLRETURN SQL_API SQLSetDescRec(
+static SQLRETURN sqlsetdescrec_impl(
     SQLHDESC     DescriptorHandle,
     SQLSMALLINT  RecNumber,
     SQLSMALLINT  Type,
@@ -451,7 +451,7 @@ SQLRETURN SQL_API SQLSetDescRec(
 
 /* ── ODBC API: SQLGetDescRec ─────────────────────────────────── */
 
-SQLRETURN SQL_API SQLGetDescRec(
+static SQLRETURN sqlgetdescrec_impl(
     SQLHDESC     DescriptorHandle,
     SQLSMALLINT  RecNumber,
     SQLCHAR     *Name,
@@ -494,4 +494,78 @@ SQLRETURN SQL_API SQLGetDescRec(
     if (NullablePtr)  *NullablePtr  = col->nullable;
 
     return SQL_SUCCESS;
+}
+
+/* ── Thread-safety wrappers ─────────────────────────────────────
+ * ODBC requires per-handle thread safety; every entry point above
+ * runs under its handle's mutex. Bodies were renamed *_impl and
+ * must never call another locked public entry point (GMutex is
+ * non-recursive). */
+
+SQLRETURN SQL_API SQLGetDescField(
+    SQLHDESC    DescriptorHandle,
+    SQLSMALLINT RecNumber,
+    SQLSMALLINT FieldIdentifier,
+    SQLPOINTER  Value,
+    SQLINTEGER  BufferLength,
+    SQLINTEGER *StringLength)
+{
+    argus_stmt_t *stmt_h = argus_desc_stmt(DescriptorHandle);
+    if (stmt_h) ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlgetdescfield_impl(DescriptorHandle, RecNumber, FieldIdentifier, Value, BufferLength, StringLength);
+    if (stmt_h) ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLSetDescField(
+    SQLHDESC    DescriptorHandle,
+    SQLSMALLINT RecNumber,
+    SQLSMALLINT FieldIdentifier,
+    SQLPOINTER  Value,
+    SQLINTEGER  BufferLength)
+{
+    argus_stmt_t *stmt_h = argus_desc_stmt(DescriptorHandle);
+    if (stmt_h) ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlsetdescfield_impl(DescriptorHandle, RecNumber, FieldIdentifier, Value, BufferLength);
+    if (stmt_h) ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLSetDescRec(
+    SQLHDESC     DescriptorHandle,
+    SQLSMALLINT  RecNumber,
+    SQLSMALLINT  Type,
+    SQLSMALLINT  SubType,
+    SQLLEN       Length,
+    SQLSMALLINT  Precision,
+    SQLSMALLINT  Scale,
+    SQLPOINTER   DataPtr,
+    SQLLEN      *StringLengthPtr,
+    SQLLEN      *IndicatorPtr)
+{
+    argus_stmt_t *stmt_h = argus_desc_stmt(DescriptorHandle);
+    if (stmt_h) ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlsetdescrec_impl(DescriptorHandle, RecNumber, Type, SubType, Length, Precision, Scale, DataPtr, StringLengthPtr, IndicatorPtr);
+    if (stmt_h) ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
+}
+
+SQLRETURN SQL_API SQLGetDescRec(
+    SQLHDESC     DescriptorHandle,
+    SQLSMALLINT  RecNumber,
+    SQLCHAR     *Name,
+    SQLSMALLINT  BufferLength,
+    SQLSMALLINT *StringLengthPtr,
+    SQLSMALLINT *TypePtr,
+    SQLSMALLINT *SubTypePtr,
+    SQLLEN      *LengthPtr,
+    SQLSMALLINT *PrecisionPtr,
+    SQLSMALLINT *ScalePtr,
+    SQLSMALLINT *NullablePtr)
+{
+    argus_stmt_t *stmt_h = argus_desc_stmt(DescriptorHandle);
+    if (stmt_h) ARGUS_STMT_LOCK(stmt_h);
+    SQLRETURN ret = sqlgetdescrec_impl(DescriptorHandle, RecNumber, Name, BufferLength, StringLengthPtr, TypePtr, SubTypePtr, LengthPtr, PrecisionPtr, ScalePtr, NullablePtr);
+    if (stmt_h) ARGUS_STMT_UNLOCK(stmt_h);
+    return ret;
 }

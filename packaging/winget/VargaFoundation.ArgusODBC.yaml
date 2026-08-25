@@ -1,0 +1,26 @@
+# winget version manifest for the Argus ODBC driver.
+#
+# Publish: after the first tagged release, fill InstallerUrl/InstallerSha256,
+# split into the three-file layout winget-pkgs requires
+# (version/installer/defaultLocale) with `wingetcreate new <installer-url>`,
+# and open a PR against microsoft/winget-pkgs. Users then run:
+#   winget install VargaFoundation.ArgusODBC
+PackageIdentifier: VargaFoundation.ArgusODBC
+PackageVersion: 0.6.0
+PackageLocale: en-US
+Publisher: Varga Foundation
+PackageName: Argus ODBC Driver
+License: Apache-2.0
+ShortDescription: Multi-backend ODBC driver for Hive, Impala, Trino, BigQuery, StarRocks and more
+PackageUrl: https://github.com/VargaFoundation/argus
+Installers:
+  - Architecture: x64
+    InstallerType: nullsoft
+    # TODO(release): real URL + SHA256 from the tagged release assets.
+    InstallerUrl: https://github.com/VargaFoundation/argus/releases/download/v0.6.0/argus-odbc-0.6.0-windows-x64-installer.exe
+    InstallerSha256: REPLACE_WITH_INSTALLER_SHA256
+    InstallerSwitches:
+      Silent: /S
+      SilentWithProgress: /S
+ManifestType: singleton
+ManifestVersion: 1.6.0

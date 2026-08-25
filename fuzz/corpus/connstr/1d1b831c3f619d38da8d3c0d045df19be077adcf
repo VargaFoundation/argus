@@ -1,0 +1,1 @@
+HOST=lolhost;PORT=8080;UID=u;PWD=p;BACKEND=trino;SSL=1

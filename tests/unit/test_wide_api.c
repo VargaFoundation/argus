@@ -134,6 +134,8 @@ static void free_fake_stmt(argus_stmt_t *stmt)
     free(stmt->cursor_name);
     free(stmt->columns);
     free(stmt->bindings);
+    free(stmt->param_bindings);
+    argus_diag_dispose(&stmt->diag);
     stmt->signature = 0;
     free(stmt);
 }

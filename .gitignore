@@ -1,6 +1,8 @@
 # Build output
 build/
+build-*/
 cmake-build-*/
+out/
 
 # BI connector build output (connectors/*/build.ps1)
 connector-dist/

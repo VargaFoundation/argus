@@ -1,5 +1,15 @@
 # Comparaison des Paramètres Trino ODBC
 
+> **⚠️ Document historique (juillet 2026) — partiellement périmé.** Depuis sa
+> rédaction, les flux OAuth2 interactifs sont livrés pour Trino : device code
+> (RFC 8628), authorization code + PKCE avec SSO navigateur, découverte OIDC et
+> refresh — les « reste à faire » OAuth2 ci-dessous sont caducs, et le jugement
+> « peu courant pour un driver ODBC » était erroné (le SSO navigateur est le
+> standard de la BI cloud). Restent réellement manquants : `SessionProperties`
+> arbitraires et les granularités TLS `AllowSelfSigned` /
+> `AllowHostNameCNMismatch` (seul le `SSLVerify` global existe). L'état courant
+> fait foi dans le README et `docs/ROADMAP.md`.
+
 Comparaison entre Argus ODBC et les drivers commerciaux (CData Presto, Simba Trino).
 
 **Note**: CData propose un driver Presto ODBC qui fonctionne avec Trino (Trino = PrestoSQL fork).

@@ -1,5 +1,14 @@
 # Comparaison des Paramètres Impala ODBC
 
+> **⚠️ Document historique (juillet 2026) — partiellement périmé.** Depuis sa
+> rédaction : la couche SASL GSSAPI/SSPI sur Thrift binaire est implémentée et
+> l'exécution asynchrone statement-level est livrée (les mentions « pas d'async »
+> ci-dessous sont caduques). Correction d'une incohérence interne : ce document
+> listait « Application Name » comme avantage tout en notant qu'Impala ne
+> supporte pas `hive.query.source` — l'`ApplicationName` n'est effectif que sur
+> Hive/Trino, pas sur Impala. L'état courant fait foi dans le README et
+> `docs/ROADMAP.md`.
+
 Comparaison entre Argus ODBC et les drivers commerciaux (CData, Simba/Cloudera).
 
 ## ✅ Paramètres Implémentés

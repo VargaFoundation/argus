@@ -151,8 +151,20 @@ static void load_or_create_install_id(void)
     g_free(path);
 }
 
+/* Idempotent, thread-safe lazy creation: only reached from code paths where
+ * telemetry is active for a connection, i.e. after an explicit opt-in. */
+static void ensure_install_id(void)
+{
+    static gsize once = 0;
+    if (g_once_init_enter(&once)) {
+        load_or_create_install_id();
+        g_once_init_leave(&once, 1);
+    }
+}
+
 static void maybe_emit_notice(void)
 {
+    ensure_install_id();
     char *path = config_path("telemetry_notice_shown");
     if (g_file_test(path, G_FILE_TEST_EXISTS)) {
         g_free(path);
@@ -164,6 +176,13 @@ static void maybe_emit_notice(void)
         "or query text) is sent to %s. Disable with TELEMETRY=0 or "
         "ARGUS_TELEMETRY=0. See docs/TELEMETRY.md and PRIVACY.md. Install id: %s",
         g_endpoint, g_install_id ? g_install_id : "?");
+    /* The log file may never be read; make the first-run notice visible on
+     * stderr too, as PRIVACY.md promises a user-visible notice. */
+    fprintf(stderr,
+            "[Argus] Telemetry is ON (opt-in). Anonymous usage data is sent "
+            "to %s — never hostnames, credentials or query text. Disable with "
+            "TELEMETRY=0 / ARGUS_TELEMETRY=0. See PRIVACY.md.\n",
+            g_endpoint);
 
     char *dir = g_path_get_dirname(path);
     g_mkdir_with_parents(dir, 0700);
@@ -213,6 +232,8 @@ static void flush_batch(GPtrArray *events)
 {
     if (!events || events->len == 0)
         return;
+
+    ensure_install_id();
 
     GString *body = g_string_new("{");
     g_string_append_printf(body, "\"schema_version\":%d,",
@@ -331,9 +352,10 @@ void argus_telemetry_init(void)
     detect_platform();
     g_queue = g_async_queue_new_full(g_free);
 
-    /* If hard-disabled, don't touch the filesystem at all. */
-    if (g_mode != -1)
-        load_or_create_install_id();
+    /* The install id is created lazily, on the first event of an opted-in
+     * connection (ensure_install_id) — never at library load. Writing a
+     * persistent machine identifier for users who did not opt in would
+     * contradict PRIVACY.md even if the id is never sent. */
 }
 
 void argus_telemetry_shutdown(void)

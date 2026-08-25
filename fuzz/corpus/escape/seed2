@@ -1,0 +1,1 @@
+{oj a LEFT OUTER JOIN b ON a.x=b.x} {ts '2024-01-01 10:00:00'} {interval 1 DAY}
