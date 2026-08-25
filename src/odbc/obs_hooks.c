@@ -13,8 +13,23 @@
  * to link. On Windows the definitions are therefore plain and strong: the
  * driver links and behaves identically, and a build that wants to override a
  * tap replaces this translation unit rather than out-ranking it.
+ *
+ * ARGUS_OBS_HOOKS_EXTERNAL is how such a build replaces it: defining the
+ * macro empties this file, so a sibling translation unit compiled into the
+ * same target can be the sole provider of every tap. That is required on
+ * Windows (a strong provider next to these now-strong no-ops would be a
+ * duplicate-definition link error) and works identically on ELF/Mach-O.
  */
 #include "argus/obs_hooks.h"
+
+#ifdef ARGUS_OBS_HOOKS_EXTERNAL
+
+/* Another translation unit in this link provides every tap definition.
+ * (ISO C forbids an empty translation unit — hence the typedef.) */
+typedef int argus_obs_hooks_external_marker_t;
+
+#else
+
 #include <stddef.h>
 
 #if defined(_WIN32)
@@ -110,3 +125,5 @@ int argus_obs_hook_connect_gate(const void *dbc, const char *backend,
     if (reason) *reason = NULL;
     return 1;   /* Apache-2.0 community build admits every connection */
 }
+
+#endif /* ARGUS_OBS_HOOKS_EXTERNAL */

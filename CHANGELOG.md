@@ -2,7 +2,13 @@
 
 All notable changes to the Argus ODBC Driver project.
 
-## [Unreleased]
+## [0.6.0] — 2026-08-25
+
+The first v0.6.0 tag (2026-08-24) never produced a release: the pipeline
+failed on Windows (weak-symbol DLL link) and macOS (a test asserting the
+Linux driver file name). 0.6.0 is re-cut here with those fixed, and picks up
+the PostgreSQL-family work that landed in between. Continues the v0.5.x tag
+line — the v0.1–v0.5.9 tags predate this changelog's revival.
 
 ### Fixed: the Tableau connectors were never packageable
 The `build-tableau-connector` CI job has failed since it was added, so no
@@ -111,6 +117,13 @@ XSDs.
   the same root cause as above, fixed first locally and then centrally.
 - `SQL_ATTR_TXN_ISOLATION` on a backend with no isolation hook fell off the end
   of `SQLSetConnectAttr` instead of returning HY092.
+- **The release pipeline itself**: `libargus_odbc.dll` failed to link (PE has
+  no weak-symbol override, so the `argus_obs_hook_*` no-ops are plain
+  definitions on Windows, with a new `ARGUS_OBS_HOOKS_EXTERNAL` macro that
+  empties `obs_hooks.c` for builds compiling their own strong tap definitions
+  into the driver target), and `test_info` asserted the Linux driver file name
+  on every platform (the build now hands the test the same
+  `ARGUS_DRIVER_NAME` the driver reports).
 
 ### Performance, measured
 - **PostgreSQL fetch measured against psqlODBC** on the same server, query and
@@ -245,9 +258,8 @@ XSDs.
   `BI_TABLE2`/`BI_JOIN_COL`/`BI_TEXT_COL`/`BI_TEXT_VAL` so the shared probe runs
   on any engine (defaults unchanged, so Trino runs exactly as before).
 
-## [0.6.0] — 2026-08-24
-
-Everything below ships in 0.6.0 (continues the v0.5.x line — the v0.1–v0.5.9 tags predate this changelog's revival).
+Everything below was part of the first (unreleased) 2026-08-24 cut and ships
+in 0.6.0 as well.
 
 ### Correctness
 - **Parameter escaping is now dialect-aware**: `\` is doubled only on engines
