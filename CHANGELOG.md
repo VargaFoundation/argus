@@ -2,7 +2,9 @@
 
 All notable changes to the Argus ODBC Driver project.
 
-## [Unreleased] — targeting 0.6.0
+## [0.6.0] — 2026-08-24
+
+First tagged release. Everything below ships in 0.6.0.
 
 ### Correctness
 - **Parameter escaping is now dialect-aware**: `\` is doubled only on engines
