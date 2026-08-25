@@ -109,6 +109,20 @@ struct argus_dbc {
     char        *bq_key_file;         /* service-account JSON key path */
     char        *bq_access_token;     /* pre-fetched bearer token */
 
+    /* PostgreSQL family (BACKEND=postgres/greenplum/cloudberry).
+     *
+     * These are per-connection on purpose. They started life as environment
+     * variables, which is wrong for a driver: one process routinely holds
+     * connections to several servers, and a machine-wide switch cannot say
+     * "show partition children on the staging DSN but not the production one".
+     * The environment variables are still honoured as a fallback so an
+     * operator can flip a behaviour without editing every DSN. */
+    char        *pg_sslmode;          /* verbatim libpq sslmode override */
+    char        *pg_search_path;      /* SET search_path at connect */
+    int          pg_show_partitions;  /* -1 unset, 0 hide, 1 show */
+    int          pg_show_all_databases;
+    int          pg_row_versioning;   /* expose xmin to SQLSpecialColumns */
+
     /* SQLBrowseConnect accumulated keywords */
     char        *browse_buf;
 
@@ -231,6 +245,14 @@ struct argus_stmt {
     argus_param_binding_t  *param_bindings;
     int                     param_bindings_capacity;
     int                     num_param_bindings;
+
+    /* Parameter metadata from the backend's describe_params hook, cached for
+     * the statement's current SQL: SQLDescribeParam is called once per
+     * parameter and each call would otherwise cost a server round trip.
+     * described_params < 0 means "asked and the backend declined". */
+    argus_column_desc_t    *param_descs;
+    int                     num_param_descs;
+    int                     described_params;
 
     /* SQLGetData multi-call state */
     SQLUSMALLINT            getdata_col;     /* 1-based column of last GetData, 0=none */

@@ -96,6 +96,13 @@ static void obs_resolve_secret_field(char **field)
     }
 }
 
+static int argus_parse_tristate(const char *v)
+{
+    if (!v || !*v) return -1;
+    if (*v == '1' || *v == 'y' || *v == 'Y' || *v == 't' || *v == 'T') return 1;
+    return 0;
+}
+
 /* ── Internal: perform the actual connection ─────────────────── */
 
 static SQLRETURN do_connect(argus_dbc_t *dbc)
@@ -107,6 +114,9 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
 #elif defined(ARGUS_HAS_TRINO)
     const char *default_backend = "trino";
     int default_port = 8080;
+#elif defined(ARGUS_HAS_POSTGRES)
+    const char *default_backend = "postgres";
+    int default_port = 5432;
 #else
     const char *default_backend = "";
     int default_port = 0;
@@ -210,6 +220,7 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
      * is tried at most once per round). */
     int max_attempts = 1 + (dbc->retry_count > 0 ? dbc->retry_count : 0);
     int rc = -1;
+    bool connect_warned = false;
     gint64 connect_start = g_get_monotonic_time();
     char chosen[256] = "";
     int chosen_port = port;
@@ -240,12 +251,22 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
             ARGUS_LOG_INFO("Connecting to %s backend at %s:%d (user=%s, db=%s, auth=%s) [attempt %d/%d]",
                            backend_name, hbuf, hport, user, db, auth, attempt, max_attempts);
 
+            /* Records the *successful* connect leaves behind are warnings the
+             * application has to be told about (a backend that reached a
+             * different engine than the connection string named, say). Records
+             * from earlier failed hosts are not: failover succeeded, and
+             * reporting the attempts it made as warnings would turn every
+             * failover into SQL_SUCCESS_WITH_INFO. So the count is taken per
+             * attempt, not for the whole loop. */
+            int diag_before = dbc->diag.count;
+
             rc = backend->connect(dbc, hbuf, hport, user, pass, db, auth,
                                   &dbc->backend_conn);
             argus_obs_hook_host_result(dbc, host_csv, idx, rc == 0);
             if (rc == 0) {
                 g_strlcpy(chosen, hbuf, sizeof(chosen));
                 chosen_port = hport;
+                connect_warned = (dbc->diag.count > diag_before);
                 argus_telemetry_connect(dbc, true, attempt);
             } else {
                 ARGUS_LOG_WARN("Connection failed: backend=%s, host=%s:%d, rc=%d (attempt %d/%d)",
@@ -267,7 +288,11 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
         dbc->connected_port = chosen_port;
         argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, chosen,
                                user, 1, dbc->connect_time_ms);
-        return SQL_SUCCESS;
+        /* ODBC requires SQL_SUCCESS_WITH_INFO when diagnostics accompany a
+         * successful call; returning plain SQL_SUCCESS means an application
+         * that only checks the return code never calls SQLGetDiagRec and the
+         * warning is lost. */
+        return connect_warned ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
     }
 
     /* All retry attempts exhausted */
@@ -449,6 +474,24 @@ SQLRETURN SQL_API SQLDriverConnect(
 
     v = argus_conn_params_get(&params, "HTTPPATH");
     if (v) { free(dbc->http_path); dbc->http_path = strdup(v); }
+
+    /* PostgreSQL family. Per-connection rather than machine-wide, so two DSNs
+     * in one process can disagree. */
+    v = argus_conn_params_get(&params, "SSLMODE");
+    if (v) { free(dbc->pg_sslmode); dbc->pg_sslmode = strdup(v); }
+
+    v = argus_conn_params_get(&params, "SEARCHPATH");
+    if (!v) v = argus_conn_params_get(&params, "CURRENTSCHEMA");
+    if (v) { free(dbc->pg_search_path); dbc->pg_search_path = strdup(v); }
+
+    v = argus_conn_params_get(&params, "SHOWPARTITIONS");
+    if (v) dbc->pg_show_partitions = argus_parse_tristate(v);
+
+    v = argus_conn_params_get(&params, "SHOWALLDATABASES");
+    if (v) dbc->pg_show_all_databases = argus_parse_tristate(v);
+
+    v = argus_conn_params_get(&params, "ROWVERSIONING");
+    if (v) dbc->pg_row_versioning = argus_parse_tristate(v);
 
     /* OAuth2 client-credentials (M2M) parameters (Trino) */
     v = argus_conn_params_get(&params, "OAUTH2TOKENENDPOINT");

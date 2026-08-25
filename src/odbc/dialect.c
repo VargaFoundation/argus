@@ -39,6 +39,25 @@
  *             ARGUS_LIT_CAST, not ANSI like Hive. Its integration tests use the
  *             SASL/Kerberos path, so they need a driver built with libgssapi;
  *             the dialect itself was verified through the NOSASL path.
+ *   postgres  every entry executed against a live PostgreSQL 16 and its value
+ *             checked (tests/integration/test_postgres_escapes.c, which covers
+ *             the whole table rather than the shared subset test_bi_escapes
+ *             probes). Caught round()/trunc(): PostgreSQL has the two-argument
+ *             form only for numeric, so {fn ROUND(float_col, 1)} fails with
+ *             42883 unless the template casts. Also confirmed log() is base 10
+ *             while ln() is natural, that extract(second) returns a fractional
+ *             numeric, and that to_char() blank-pads day and month names to
+ *             nine characters without the FM prefix.
+ *   greenplum, cloudberry
+ *             NOT live-verified. Both are PostgreSQL forks (Greenplum 6 is
+ *             PostgreSQL 9.4, Greenplum 7 is 12, Cloudberry is 14) and every
+ *             entry in the shared table exists in 9.4, so the table is carried
+ *             over from postgres — but neither engine has a maintained public
+ *             container image that could be brought up here, so this is
+ *             inference from lineage, which the Impala entry above shows is
+ *             not sufficient on its own. Verify before relying on it:
+ *             BI_BACKEND=greenplum BI_HOST=… ./test_bi_escapes, and
+ *             PG_BACKEND=greenplum PG_HOST=… ./test_postgres_escapes.
  *   others    ansi_fns, see below.
  *
  * To verify one: bring up the backend from tests/integration/docker-compose.yml
@@ -448,6 +467,104 @@ static const argus_fn_entry_t ansi_fns[] = {
     { NULL, 0, 0, 0, 0, NULL }
 };
 
+/* ── PostgreSQL ──────────────────────────────────────────────────
+ * Shared by the postgres, greenplum and cloudberry backends: all three are the
+ * same SQL, and every entry below exists in PostgreSQL 9.4, which is what
+ * Greenplum 6 is built on (GP7 is PG 12, Cloudberry is PG 14). The three
+ * dialects are separate registry entries all the same, so a per-engine
+ * divergence can be expressed the day one appears without moving anything.
+ *
+ * The traps this table has to get right, none of which is guessable:
+ *   ROUND/TRUNCATE  PostgreSQL only has the two-argument form for `numeric`;
+ *                   round(double precision, int) does not exist and raises
+ *                   "function round(double precision, integer) does not
+ *                   exist". Casting the first argument is what makes {fn
+ *                   ROUND(col, 2)} work on a float column. ODBC's own
+ *                   signature is two mandatory arguments, so nothing is lost.
+ *   MOD             mod() exists for integer and numeric but not for double
+ *                   precision; ODBC's MOD is specified over integers.
+ *   LOG / LOG10     PostgreSQL's one-argument log() is base 10 and ln() is
+ *                   natural — the reverse of the naming in most engines.
+ *   LOCATE          ODBC is LOCATE(needle, haystack); strpos() is
+ *                   strpos(haystack, needle). Both are 1-based and both return
+ *                   0 when absent, so the swap is the whole fix — no offset.
+ *   DAYOFWEEK       extract(dow) is 0=Sunday..6=Saturday, ODBC is
+ *                   1=Sunday..7=Saturday.
+ *   DAYNAME/MONTHNAME  to_char() blank-pads to 9 characters without the FM
+ *                   prefix, which shows up as trailing spaces in a report.
+ *   WEEK            deliberately absent: extract(week) is ISO-8601, so
+ *                   2021-01-01 is week 53 (of 2020), while ODBC's WEEK puts
+ *                   January 1st in week 1. Advertising it would silently
+ *                   produce wrong week numbers, which is worse than the
+ *                   function being refused.
+ */
+static const argus_fn_entry_t postgres_fns[] = {
+    { "CONCAT",    ARGUS_FN_GROUP_STRING, SQL_FN_STR_CONCAT,    1, ARGUS_FN_VARIADIC, "concat($*)" },
+    { "LENGTH",    ARGUS_FN_GROUP_STRING, SQL_FN_STR_LENGTH,    1, 1, "length($1)" },
+    { "SUBSTRING", ARGUS_FN_GROUP_STRING, SQL_FN_STR_SUBSTRING, 2, 3, "substring($*)" },
+    { "LTRIM",     ARGUS_FN_GROUP_STRING, SQL_FN_STR_LTRIM,     1, 1, "ltrim($1)" },
+    { "RTRIM",     ARGUS_FN_GROUP_STRING, SQL_FN_STR_RTRIM,     1, 1, "rtrim($1)" },
+    { "LCASE",     ARGUS_FN_GROUP_STRING, SQL_FN_STR_LCASE,     1, 1, "lower($1)" },
+    { "UCASE",     ARGUS_FN_GROUP_STRING, SQL_FN_STR_UCASE,     1, 1, "upper($1)" },
+    { "REPLACE",   ARGUS_FN_GROUP_STRING, SQL_FN_STR_REPLACE,   3, 3, "replace($1, $2, $3)" },
+    { "LEFT",      ARGUS_FN_GROUP_STRING, SQL_FN_STR_LEFT,      2, 2, "left($1, $2)" },
+    { "RIGHT",     ARGUS_FN_GROUP_STRING, SQL_FN_STR_RIGHT,     2, 2, "right($1, $2)" },
+    { "LOCATE",    ARGUS_FN_GROUP_STRING, SQL_FN_STR_LOCATE,    2, 2, "strpos($2, $1)" },
+    { "REPEAT",    ARGUS_FN_GROUP_STRING, SQL_FN_STR_REPEAT,    2, 2, "repeat($1, $2)" },
+    { "SPACE",     ARGUS_FN_GROUP_STRING, SQL_FN_STR_SPACE,     1, 1, "repeat(' ', $1)" },
+    { "ASCII",     ARGUS_FN_GROUP_STRING, SQL_FN_STR_ASCII,     1, 1, "ascii($1)" },
+    { "CHAR",      ARGUS_FN_GROUP_STRING, SQL_FN_STR_CHAR,      1, 1, "chr($1)" },
+
+    { "ABS",       ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_ABS,      1, 1, "abs($1)" },
+    { "CEILING",   ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_CEILING,  1, 1, "ceiling($1)" },
+    { "FLOOR",     ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_FLOOR,    1, 1, "floor($1)" },
+    { "MOD",       ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_MOD,      2, 2, "mod($1, $2)" },
+    { "ROUND",     ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_ROUND,    2, 2, "round(($1)::numeric, $2)" },
+    { "TRUNCATE",  ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_TRUNCATE, 2, 2, "trunc(($1)::numeric, $2)" },
+    { "SQRT",      ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_SQRT,     1, 1, "sqrt($1)" },
+    { "POWER",     ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_POWER,    2, 2, "power($1, $2)" },
+    { "LOG",       ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_LOG,      1, 1, "ln($1)" },
+    { "LOG10",     ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_LOG10,    1, 1, "log($1)" },
+    { "EXP",       ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_EXP,      1, 1, "exp($1)" },
+    { "SIGN",      ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_SIGN,     1, 1, "sign($1)" },
+    { "PI",        ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_PI,       0, 0, "pi()" },
+    { "RAND",      ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_RAND,     0, 0, "random()" },
+    { "ACOS",      ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_ACOS,     1, 1, "acos($1)" },
+    { "ASIN",      ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_ASIN,     1, 1, "asin($1)" },
+    { "ATAN",      ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_ATAN,     1, 1, "atan($1)" },
+    { "ATAN2",     ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_ATAN2,    2, 2, "atan2($1, $2)" },
+    { "COS",       ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_COS,      1, 1, "cos($1)" },
+    { "COT",       ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_COT,      1, 1, "cot($1)" },
+    { "SIN",       ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_SIN,      1, 1, "sin($1)" },
+    { "TAN",       ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_TAN,      1, 1, "tan($1)" },
+    { "DEGREES",   ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_DEGREES,  1, 1, "degrees($1)" },
+    { "RADIANS",   ARGUS_FN_GROUP_NUMERIC, SQL_FN_NUM_RADIANS,  1, 1, "radians($1)" },
+
+    { "IFNULL",    ARGUS_FN_GROUP_SYSTEM, SQL_FN_SYS_IFNULL,    2, 2, "coalesce($1, $2)" },
+    { "USERNAME",  ARGUS_FN_GROUP_SYSTEM, SQL_FN_SYS_USERNAME,  0, 0, "current_user" },
+    { "DBNAME",    ARGUS_FN_GROUP_SYSTEM, SQL_FN_SYS_DBNAME,    0, 0, "current_database()" },
+
+    { "NOW",               ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_NOW,               0, 0, "current_timestamp" },
+    { "CURDATE",           ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_CURDATE,           0, 0, "current_date" },
+    { "CURRENT_DATE",      ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_CURRENT_DATE,      0, 0, "current_date" },
+    { "CURTIME",           ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_CURTIME,           0, 0, "current_time" },
+    { "CURRENT_TIME",      ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_CURRENT_TIME,      0, 0, "current_time" },
+    { "CURRENT_TIMESTAMP", ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_CURRENT_TIMESTAMP, 0, 0, "current_timestamp" },
+    { "YEAR",       ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_YEAR,       1, 1, "extract(year from ($1))" },
+    { "QUARTER",    ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_QUARTER,    1, 1, "extract(quarter from ($1))" },
+    { "MONTH",      ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_MONTH,      1, 1, "extract(month from ($1))" },
+    { "DAYOFMONTH", ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_DAYOFMONTH, 1, 1, "extract(day from ($1))" },
+    { "DAYOFYEAR",  ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_DAYOFYEAR,  1, 1, "extract(doy from ($1))" },
+    { "DAYOFWEEK",  ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_DAYOFWEEK,  1, 1, "(extract(dow from ($1)) + 1)" },
+    { "HOUR",       ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_HOUR,       1, 1, "extract(hour from ($1))" },
+    { "MINUTE",     ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_MINUTE,     1, 1, "extract(minute from ($1))" },
+    { "SECOND",     ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_SECOND,     1, 1, "floor(extract(second from ($1)))" },
+    { "DAYNAME",    ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_DAYNAME,    1, 1, "to_char(($1), 'FMDay')" },
+    { "MONTHNAME",  ARGUS_FN_GROUP_TIMEDATE, SQL_FN_TD_MONTHNAME,  1, 1, "to_char(($1), 'FMMonth')" },
+
+    { NULL, 0, 0, 0, 0, NULL }
+};
+
 /* ── Dialect registry ────────────────────────────────────────────
  * The quote characters keep the values (and the reasoning) that info.c used:
  * HiveQL, the MySQL wire dialect and BigQuery quote identifiers with a
@@ -461,22 +578,43 @@ static const argus_fn_entry_t ansi_fns[] = {
  * DATE '...' yet rejects CURRENT_DATE, so an engine's SQL-92 coverage is not
  * all-or-nothing and cannot be inferred from its lineage. */
 static const argus_dialect_t argus_dialects[] = {
-    { "trino",    "\"", ARGUS_LIT_ANSI, true,  false, trino_fns },
-    { "hive",     "`",  ARGUS_LIT_ANSI, true,  true,  hive_fns },
+    { "trino",    "\"", ARGUS_LIT_ANSI, true,  false, trino_fns, NULL },
+    { "hive",     "`",  ARGUS_LIT_ANSI, true,  true,  hive_fns, NULL },
     /* Impala rejects the ANSI TIMESTAMP '…' literal (ParseException) but accepts
      * CAST('…' AS TIMESTAMP), and CAST works for DATE too — verified live. */
-    { "impala",   "`",  ARGUS_LIT_CAST, true,  true,  impala_fns },
-    { "mysql",    "`",  ARGUS_LIT_ANSI, true,  true,  mywire_fns },
-    { "bigquery", "`",  ARGUS_LIT_ANSI, true,  true,  bigquery_fns },
-    { "phoenix",  "\"", ARGUS_LIT_ANSI, false, false, ansi_fns },
-    { "pinot",    "\"", ARGUS_LIT_ANSI, false, false, pinot_fns },
-    { "druid",    "\"", ARGUS_LIT_ANSI, false, false, ansi_fns },
-    { "flightsql","\"", ARGUS_LIT_ANSI, false, false, ansi_fns },
-    { "kudu",     "\"", ARGUS_LIT_ANSI, false, false, ansi_fns },
+    { "impala",   "`",  ARGUS_LIT_CAST, true,  true,  impala_fns, NULL },
+    { "mysql",    "`",  ARGUS_LIT_ANSI, true,  true,  mywire_fns, NULL },
+    { "bigquery", "`",  ARGUS_LIT_ANSI, true,  true,  bigquery_fns, NULL },
+    { "phoenix",  "\"", ARGUS_LIT_ANSI, false, false, ansi_fns, NULL },
+    { "pinot",    "\"", ARGUS_LIT_ANSI, false, false, pinot_fns, NULL },
+    { "druid",    "\"", ARGUS_LIT_ANSI, false, false, ansi_fns, NULL },
+    { "flightsql","\"", ARGUS_LIT_ANSI, false, false, ansi_fns, NULL },
+    { "kudu",     "\"", ARGUS_LIT_ANSI, false, false, ansi_fns, NULL },
+    /* Greenplum and Cloudberry share PostgreSQL's table today; they are listed
+     * separately so a divergence can be expressed without a structural change,
+     * and so each carries its own verification provenance (see the header).
+     *
+     * backslash_escapes is false: standard_conforming_strings has defaulted to
+     * on since PostgreSQL 9.1, so '\' inside a literal is an ordinary
+     * character and doubling it would turn 'C:\path' into 'C:\\path'.
+     * Verified on PostgreSQL 16 — SHOW standard_conforming_strings is on and
+     * length('C:\path') is 7. Greenplum 6 derives from PostgreSQL 9.4 and
+     * Cloudberry from 14, so both are on the same side of that default.
+     *
+     * The call template renders {call f(a,b)} as SELECT * FROM f(a,b), which is
+     * what psqlODBC does and what an ODBC application means by it: the thing
+     * that returns a result set in PostgreSQL is a *function*. PostgreSQL 11's
+     * CALL statement is for procedures, which return nothing, and no BI tool
+     * asks for one through {call}. This is also what makes SQL_PROCEDURES
+     * answer "Y" for these backends — the info type promises the invocation
+     * syntax works, and now it does. */
+    { "postgres",  "\"", ARGUS_LIT_ANSI, true, false, postgres_fns, "SELECT * FROM $1" },
+    { "greenplum", "\"", ARGUS_LIT_ANSI, true, false, postgres_fns, "SELECT * FROM $1" },
+    { "cloudberry","\"", ARGUS_LIT_ANSI, true, false, postgres_fns, "SELECT * FROM $1" },
 };
 
 static const argus_dialect_t argus_ansi_dialect = {
-    "ansi", "\"", ARGUS_LIT_ANSI, false, false, ansi_fns
+    "ansi", "\"", ARGUS_LIT_ANSI, false, false, ansi_fns, NULL
 };
 
 #define ARGUS_DIALECT_COUNT (sizeof(argus_dialects) / sizeof(argus_dialects[0]))

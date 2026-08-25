@@ -20,7 +20,10 @@ function(argus_add_unit_test name source)
     target_link_directories(${name} PRIVATE
         ${CMOCKA_LIBRARY_DIRS}
     )
-    target_compile_definitions(${name} PRIVATE ARGUS_STATIC)
+    target_compile_definitions(${name} PRIVATE
+        ARGUS_STATIC
+        ARGUS_DRIVER_NAME="${ARGUS_DRIVER_FILE_NAME}"
+    )
     add_test(NAME ${name} COMMAND ${name})
     set_tests_properties(${name} PROPERTIES LABELS "unit")
 endfunction()
@@ -31,6 +34,7 @@ argus_add_unit_test(test_connect_string unit/test_connect_string.c)
 argus_add_unit_test(test_diag unit/test_diag.c)
 argus_add_unit_test(test_thread_safety unit/test_thread_safety.c)
 argus_add_unit_test(test_info unit/test_info.c)
+argus_add_unit_test(test_backend_caps unit/test_backend_caps.c)
 argus_add_unit_test(test_dialect unit/test_dialect.c)
 argus_add_unit_test(test_escape unit/test_escape.c)
 argus_add_unit_test(test_bind_parameter unit/test_bind_parameter.c)
@@ -80,6 +84,14 @@ if(ARGUS_BUILD_BIGQUERY)
         ${PROJECT_SOURCE_DIR}/src/backend/bigquery
         ${LIBCURL_INCLUDE_DIRS}
         ${JSON_GLIB_INCLUDE_DIRS}
+    )
+endif()
+
+if(ARGUS_BUILD_POSTGRES)
+    argus_add_unit_test(test_postgres_types unit/test_postgres_types.c)
+    target_include_directories(test_postgres_types PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/backend/pgcommon
+        ${LIBPQ_INCLUDE_DIRS}
     )
 endif()
 
@@ -177,6 +189,40 @@ if(BUILD_INTEGRATION_TESTS)
     if(ARGUS_BUILD_MYSQL)
         argus_add_integration_test(test_mysql_connect integration/test_mysql_connect.c)
         argus_add_integration_test(test_mysql_query integration/test_mysql_query.c)
+    endif()
+
+    # PostgreSQL family. Only the `postgres` service is started by default;
+    # the greenplum/cloudberry compose services are behind profiles, so their
+    # tests are opt-in via PG_HOST/PG_PORT pointed at a real cluster.
+    if(ARGUS_BUILD_POSTGRES)
+        argus_add_integration_test(test_postgres_connect integration/test_postgres_connect.c)
+        argus_add_integration_test(test_postgres_query integration/test_postgres_query.c)
+        argus_add_integration_test(test_postgres_escapes integration/test_postgres_escapes.c)
+        argus_add_integration_test(test_pg_transactions integration/test_pg_transactions.c)
+        argus_add_integration_test(test_pg_catalog_ext integration/test_pg_catalog_ext.c)
+        argus_add_integration_test(test_pg_describe_param integration/test_pg_describe_param.c)
+        argus_add_integration_test(test_pg_options integration/test_pg_options.c)
+
+        # The Greenplum/Cloudberry catalog SQL, exercised against a simulated
+        # Greenplum catalog built on plain PostgreSQL. Links the static library
+        # (and libpq directly) because it calls the fragment builders, which
+        # the shared driver does not export.
+        add_executable(test_pg_mpp_sim integration/test_pg_mpp_sim.c)
+        target_include_directories(test_pg_mpp_sim PRIVATE
+            ${PROJECT_SOURCE_DIR}/include
+            ${PROJECT_SOURCE_DIR}/src/backend/pgcommon
+            ${ODBC_INCLUDE_DIRS}
+            ${CMOCKA_INCLUDE_DIRS}
+            ${GLIB2_INCLUDE_DIRS}
+            ${LIBPQ_INCLUDE_DIRS}
+        )
+        target_link_libraries(test_pg_mpp_sim PRIVATE
+            argus_odbc_static ${CMOCKA_LIBRARIES} ${LIBPQ_LIBRARIES} stdc++)
+        target_link_directories(test_pg_mpp_sim PRIVATE
+            ${CMOCKA_LIBRARY_DIRS} ${LIBPQ_LIBRARY_DIRS})
+        target_compile_definitions(test_pg_mpp_sim PRIVATE ARGUS_STATIC)
+        add_test(NAME test_pg_mpp_sim COMMAND test_pg_mpp_sim)
+        set_tests_properties(test_pg_mpp_sim PROPERTIES LABELS "integration")
     endif()
 
     # Arrow Flight SQL backend (InfluxDB 3 service; also covers Dremio/Doris)

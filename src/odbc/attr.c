@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdio.h>
 
 extern SQLSMALLINT argus_copy_string(const char *src,
                                       SQLCHAR *dst, SQLSMALLINT dst_len);
@@ -110,9 +111,60 @@ static SQLRETURN sqlsetconnectattr_impl(
         dbc->access_mode = (SQLUINTEGER)(uintptr_t)Value;
         return SQL_SUCCESS;
 
-    case SQL_ATTR_AUTOCOMMIT:
-        dbc->autocommit = (SQLUINTEGER)(uintptr_t)Value;
+    /*
+     * Autocommit. A backend with no transaction hook keeps the historical
+     * behaviour — the value is stored and nothing else happens, which is the
+     * honest answer for an engine that has no transactions. Where the hook
+     * exists, ODBC's rule applies: switching ON commits whatever is open.
+     */
+    case SQL_ATTR_AUTOCOMMIT: {
+        SQLUINTEGER want = (SQLUINTEGER)(uintptr_t)Value;
+        if (want != SQL_AUTOCOMMIT_ON && want != SQL_AUTOCOMMIT_OFF)
+            return argus_set_error(&dbc->diag, "HY024",
+                                   "[Argus] Invalid SQL_ATTR_AUTOCOMMIT value", 0);
+
+        if (dbc->connected && dbc->backend && dbc->backend->set_autocommit) {
+            if (dbc->backend->set_autocommit(dbc->backend_conn,
+                                             want == SQL_AUTOCOMMIT_ON) != 0) {
+                char errbuf[512];
+                if (dbc->backend->get_last_error &&
+                    dbc->backend->get_last_error(dbc->backend_conn,
+                                                 errbuf, sizeof(errbuf)) &&
+                    errbuf[0]) {
+                    char msg[600];
+                    snprintf(msg, sizeof(msg), "[Argus] %s", errbuf);
+                    return argus_set_error(&dbc->diag, "HY000", msg, 0);
+                }
+                return argus_set_error(&dbc->diag, "HY000",
+                                       "[Argus] Could not change autocommit mode", 0);
+            }
+        }
+        dbc->autocommit = want;
         return SQL_SUCCESS;
+    }
+
+    /*
+     * Isolation level. Backends without the hook keep returning HY092 from the
+     * default case below, exactly as before — accepting the attribute and then
+     * ignoring it would be worse than refusing it.
+     */
+    case SQL_ATTR_TXN_ISOLATION: {
+        /* No hook: keep the HY092 the default case has always returned.
+         * Accepting the attribute and then ignoring it would be worse than
+         * refusing it — an application would believe it got the isolation
+         * level it asked for. */
+        if (!dbc->connected || !dbc->backend || !dbc->backend->set_isolation) {
+            ARGUS_LOG_DEBUG("SQLSetConnectAttr: SQL_ATTR_TXN_ISOLATION "
+                            "unsupported by this backend");
+            return argus_set_error(&dbc->diag, "HY092",
+                                   "[Argus] Invalid attribute identifier", 0);
+        }
+        SQLUINTEGER level = (SQLUINTEGER)(uintptr_t)Value;
+        if (dbc->backend->set_isolation(dbc->backend_conn, level) != 0)
+            return argus_set_error(&dbc->diag, "HYC00",
+                                   "[Argus] Unsupported transaction isolation level", 0);
+        return SQL_SUCCESS;
+    }
 
     case SQL_ATTR_CURRENT_CATALOG:
         if (Value && StringLength > 0) {
@@ -572,27 +624,70 @@ SQLRETURN SQL_API SQLEndTran(
     SQLHANDLE   Handle,
     SQLSMALLINT CompletionType)
 {
+    if (CompletionType != SQL_COMMIT && CompletionType != SQL_ROLLBACK)
+        return SQL_ERROR;
+
     /*
-     * The driver reports SQL_TXN_CAPABLE = SQL_TC_NONE: every statement is
-     * auto-committed and there is never an open transaction. A COMMIT of
-     * nothing is vacuously true; a ROLLBACK is not — the work the caller wants
-     * undone has already been committed, and answering SQL_SUCCESS would tell
-     * the application its data was rolled back when it was not (silent commit).
+     * A backend with an end_transaction hook — today the PostgreSQL family —
+     * ends a real transaction below and returns before any of this applies.
+     *
+     * For every other backend the driver reports SQL_TXN_CAPABLE = SQL_TC_NONE:
+     * every statement is auto-committed and there is never an open transaction.
+     * A COMMIT of nothing is vacuously true; a ROLLBACK is not — the work the
+     * caller wants undone has already been committed, and answering SQL_SUCCESS
+     * would tell the application its data was rolled back when it was not
+     * (silent commit).
      */
     argus_diag_t *diag = NULL;
     GMutex *m = NULL;
 
     switch (HandleType) {
     case SQL_HANDLE_ENV:
+        /* ODBC defines this as "end the transaction on every connection under
+         * this environment". argus_env_t keeps no list of its connections, and
+         * no BI tool exercises the form, so it stays a success — the deviation
+         * is documented rather than papered over with a lifetime-tracking
+         * structure nothing reads. */
         if (!argus_valid_env(Handle)) return SQL_INVALID_HANDLE;
         diag = &((argus_env_t *)Handle)->diag;
         m = &((argus_env_t *)Handle)->mutex;
         break;
-    case SQL_HANDLE_DBC:
+
+    case SQL_HANDLE_DBC: {
         if (!argus_valid_dbc(Handle)) return SQL_INVALID_HANDLE;
-        diag = &((argus_dbc_t *)Handle)->diag;
-        m = &((argus_dbc_t *)Handle)->mutex;
-        break;
+        argus_dbc_t *dbc = (argus_dbc_t *)Handle;
+
+        /* No hook: the engine has no transactions, so there is nothing to end.
+         * Fall through to the SQL_TC_NONE answer below — success for COMMIT,
+         * HYC00 for ROLLBACK. This is what every backend but the PostgreSQL
+         * family does. */
+        if (!dbc->connected || !dbc->backend || !dbc->backend->end_transaction) {
+            diag = &dbc->diag;
+            m = &dbc->mutex;
+            break;
+        }
+
+        argus_diag_clear(&dbc->diag);
+        if (dbc->backend->end_transaction(dbc->backend_conn,
+                                          CompletionType == SQL_COMMIT) != 0) {
+            char errbuf[512];
+            if (dbc->backend->get_last_error &&
+                dbc->backend->get_last_error(dbc->backend_conn,
+                                             errbuf, sizeof(errbuf)) &&
+                errbuf[0]) {
+                char msg[600];
+                snprintf(msg, sizeof(msg), "[Argus] %s", errbuf);
+                return argus_set_error(&dbc->diag, "HY000", msg, 0);
+            }
+            return argus_set_error(&dbc->diag, "HY000",
+                                   "[Argus] Could not end the transaction", 0);
+        }
+        /* Cached catalog metadata may describe objects this transaction just
+         * created or dropped. */
+        argus_metadata_cache_clear(dbc);
+        return SQL_SUCCESS;
+    }
+
     default:
         return SQL_ERROR;
     }

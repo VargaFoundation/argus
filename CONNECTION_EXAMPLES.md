@@ -19,6 +19,17 @@ HOST=impala-server;PORT=21050;UID=admin;PWD=secret;DATABASE=mydb;BACKEND=impala
 HOST=trino-server;PORT=8080;UID=admin;PWD=secret;DATABASE=hive;BACKEND=trino
 ```
 
+### PostgreSQL / Greenplum / Apache Cloudberry
+
+```
+DRIVER={Argus ODBC Driver};BACKEND=postgres;HOST=pg.example.com;PORT=5432;UID=analyst;PWD=secret;DATABASE=warehouse
+DRIVER={Argus ODBC Driver};BACKEND=greenplum;HOST=gp-coordinator;PORT=5432;UID=analyst;PWD=secret;DATABASE=warehouse
+DRIVER={Argus ODBC Driver};BACKEND=cloudberry;HOST=cbdb-coordinator;PORT=5432;UID=analyst;PWD=secret;DATABASE=warehouse
+```
+
+Omit `DATABASE` and the driver connects to `postgres`. SCRAM-SHA-256 and md5 are
+negotiated by libpq with nothing to configure.
+
 ## Production Configurations
 
 ### Hive with SSL and Logging
@@ -46,6 +57,33 @@ SSLCertFile=/etc/ssl/certs/client-cert.pem;
 SSLKeyFile=/etc/ssl/private/client-key.pem;
 BACKEND=trino;LogLevel=5;ApplicationName=Dashboard
 ```
+
+### PostgreSQL with verified TLS
+
+```
+DRIVER={Argus ODBC Driver};BACKEND=postgres;HOST=pg.example.com;PORT=5432;
+UID=analyst;PWD=secret;DATABASE=warehouse;
+SSL=1;SSLVerify=1;SSLCAFile=/etc/ssl/certs/ca.pem;
+QueryTimeout=300;FetchBufferSize=5000
+```
+
+`SSL=1` with the default `SSLVerify=1` is libpq's `sslmode=verify-full`;
+`SSLVerify=0` drops to `require` (encrypted, unauthenticated). `SSL=0` — the
+default — is a genuinely plaintext session, not libpq's `prefer`.
+`QueryTimeout` becomes a server-side `statement_timeout`.
+
+### Greenplum showing partition children
+
+```
+DRIVER={Argus ODBC Driver};BACKEND=greenplum;HOST=gp-coordinator;PORT=5432;
+UID=analyst;PWD=secret;DATABASE=warehouse;SHOWPARTITIONS=1
+```
+
+By default the driver hides partition children from `SQLTables` and
+`SQLColumns`, which is what keeps a BI connection dialog usable on a warehouse
+with tens of thousands of them; set this when you need to inspect a specific
+child. It is per connection, so a staging DSN can show them while production
+does not.
 
 ## Development/Testing
 

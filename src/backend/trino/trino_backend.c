@@ -1,4 +1,5 @@
 #include "argus/backend.h"
+#include "argus/caps.h"
 #include "argus/handle.h"
 #include <stdlib.h>
 
@@ -78,6 +79,14 @@ bool trino_get_last_error(argus_backend_conn_t conn, char *buf, size_t buflen);
 bool trino_get_server_version(argus_backend_conn_t conn, char *buf, size_t buflen);
 
 /* Trino backend vtable */
+/* Only the display name: everything else in this descriptor is left zero,
+ * which means exactly the answers SQLGetInfo gave before capabilities
+ * existed (no transactions, no procedures, a 128-character identifier
+ * limit, "database" for the schema term). */
+static const argus_backend_caps_t trino_caps = {
+    .dbms_name = "Trino",
+};
+
 static const argus_backend_t trino_backend = {
     .name                  = "trino",
     .connect               = trino_connect,
@@ -98,6 +107,7 @@ static const argus_backend_t trino_backend = {
     .get_statistics        = trino_get_statistics,
     .get_last_error        = trino_get_last_error,
     .get_server_version    = trino_get_server_version,
+    .caps                  = &trino_caps,
 };
 
 const argus_backend_t *argus_trino_backend_get(void)

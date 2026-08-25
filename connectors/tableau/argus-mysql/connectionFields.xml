@@ -11,9 +11,6 @@
   <field name="port" label="Port" value-type="string" category="endpoint"
          default-value="9030"/>
 
-  <!-- MySQL-wire engines are database.table: no catalog level. -->
-  <field name="database" label="Database" value-type="string" category="general"/>
-
   <field name="authentication" label="Authentication" value-type="selection"
          category="authentication" default-value="auth-user-pass">
     <selection-group>

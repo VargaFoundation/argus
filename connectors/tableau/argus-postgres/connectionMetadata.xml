@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  PostgreSQL has a real two-level namespace: a database is the ODBC catalog and a
+  schema is the ODBC schema. Both levels are enabled, unlike the MySQL-wire
+  connector where a database is the only level there is.
+-->
+<connection-metadata>
+  <database enabled='true'/>
+  <schema enabled='true'/>
+</connection-metadata>

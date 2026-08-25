@@ -10,6 +10,7 @@ set(ARGUS_SOURCES
     odbc/catalog.c
     odbc/info.c
     odbc/dialect.c
+    odbc/caps.c
     odbc/escape.c
     odbc/diag.c
     odbc/attr.c
@@ -47,15 +48,8 @@ set(ARGUS_COMPILE_DEFS ARGUS_BUILD_DLL SQL_NOUNICODEMAP)
 
 # SQLGetInfo must report the driver's real identity, not a literal that drifts.
 # SQL_DRIVER_VER's format is fixed by ODBC at "##.##.####" (2-digit major,
-# 2-digit minor, 4-digit build), and SQL_DRIVER_NAME is the driver's file name,
-# which differs per platform.
-if(WIN32)
-    set(ARGUS_DRIVER_FILE_NAME "argus_odbc.dll")
-elseif(APPLE)
-    set(ARGUS_DRIVER_FILE_NAME "libargus_odbc.dylib")
-else()
-    set(ARGUS_DRIVER_FILE_NAME "libargus_odbc.so")
-endif()
+# 2-digit minor, 4-digit build); SQL_DRIVER_NAME is ARGUS_DRIVER_FILE_NAME,
+# set once in the top-level CMakeLists so tests/ sees the same value.
 list(APPEND ARGUS_COMPILE_DEFS
     ARGUS_DRIVER_NAME="${ARGUS_DRIVER_FILE_NAME}"
     ARGUS_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
@@ -292,6 +286,40 @@ if(ARGUS_BUILD_MYSQL)
         ${LIBMARIADB_LIBRARY_DIRS}
     )
     list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_MYSQL)
+endif()
+
+# Conditionally add the PostgreSQL-family backends
+# (PostgreSQL / Greenplum / Apache Cloudberry — one libpq core, three vtables)
+if(ARGUS_BUILD_POSTGRES)
+    list(APPEND ARGUS_SOURCES
+        backend/pgcommon/pg_session.c
+        backend/pgcommon/pg_query.c
+        backend/pgcommon/pg_fetch.c
+        backend/pgcommon/pg_types.c
+        backend/pgcommon/pg_error.c
+        backend/pgcommon/pg_probe.c
+        backend/pgcommon/pg_meta_util.c
+        backend/pgcommon/pg_metadata_base.c
+        backend/pgcommon/pg_metadata_ext.c
+        backend/pgcommon/pg_mpp.c
+        backend/pgcommon/pg_txn.c
+        backend/pgcommon/pg_prepare.c
+        backend/pgcommon/pg_oidmap.c
+        backend/postgres/pg_backend.c
+        backend/greenplum/gp_backend.c
+        backend/cloudberry/cb_backend.c
+    )
+    list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend/pgcommon
+        ${LIBPQ_INCLUDE_DIRS}
+    )
+    list(APPEND ARGUS_LINK_LIBS
+        ${LIBPQ_LIBRARIES}
+    )
+    list(APPEND ARGUS_LINK_DIRS
+        ${LIBPQ_LIBRARY_DIRS}
+    )
+    list(APPEND ARGUS_COMPILE_DEFS ARGUS_HAS_POSTGRES)
 endif()
 
 # Conditionally add Arrow Flight SQL backend (Dremio/InfluxDB 3/Doris/StarRocks)

@@ -129,9 +129,11 @@ static argus_stmt_t *make_fake_stmt(void)
 
 static void free_fake_stmt(argus_stmt_t *stmt)
 {
+    /* The real argus_free_stmt frees this too (src/odbc/handle.c); the fake
+     * one has to as well, or SQLSetCursorName leaks in every run under ASan. */
+    free(stmt->cursor_name);
     free(stmt->columns);
     free(stmt->bindings);
-    free(stmt->cursor_name);
     free(stmt->param_bindings);
     argus_diag_dispose(&stmt->diag);
     stmt->signature = 0;

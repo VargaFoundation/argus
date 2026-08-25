@@ -10,14 +10,14 @@
            both. -->
       <required-attributes>
         <attribute-list>
-          <attr>project</attr>
+          <attr>v-project</attr>
           <attr>dbname</attr>
-          <attr>location</attr>
+          <attr>v-location</attr>
           <attr>authentication</attr>
-          <attr>keyfile</attr>
-          <attr>accesstoken</attr>
-          <attr>endpoint</attr>
-          <attr>tokenendpoint</attr>
+          <attr>v-keyfile</attr>
+          <attr>v-accesstoken</attr>
+          <attr>v-endpoint</attr>
+          <attr>v-tokenendpoint</attr>
         </attribute-list>
       </required-attributes>
     </connection-normalizer>

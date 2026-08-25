@@ -67,7 +67,14 @@ static void test_driver_name(void **state)
     SQLRETURN ret = SQLGetInfo((SQLHDBC)dbc, SQL_DRIVER_NAME,
                                 buf, sizeof(buf), &len);
     assert_int_equal(ret, SQL_SUCCESS);
-    assert_string_equal((char *)buf, "libargus_odbc.so");
+    /* The driver reports its own file name, which is .so / .dylib / .dll
+     * depending on the platform. CMake hands both the driver and this test
+     * the same ARGUS_DRIVER_NAME so the assertion cannot go stale on one of
+     * them; the fallback matches info.c's own. */
+#ifndef ARGUS_DRIVER_NAME
+#define ARGUS_DRIVER_NAME "libargus_odbc.so"
+#endif
+    assert_string_equal((char *)buf, ARGUS_DRIVER_NAME);
 
     free_test_dbc(dbc);
 }

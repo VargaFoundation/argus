@@ -35,7 +35,9 @@
 
 .PARAMETER SdkRef
   connector-plugin-sdk git ref to package with. Pinned so a packager change
-  cannot silently alter release artifacts.
+  cannot silently alter release artifacts. Must be a tag or branch that really
+  exists upstream: the repo publishes tdvt-* tags (plus v1.4* and 2020.1) and
+  has never had a v2024.x, which is what the previous pin asked for.
 
 .EXAMPLE
   pwsh connectors/tableau/build.ps1 -OutDir dist
@@ -53,8 +55,11 @@ param(
     [string]$Connector = "",
     [string]$KeystorePath = $env:TACO_KEYSTORE,
     [string]$KeystoreAlias = $env:TACO_ALIAS,
-    [string]$SdkRef = "v2024.2.0",
-    [string]$ToolsCacheDir = (Join-Path $env:TEMP "argus-tableau-sdk")
+    [string]$SdkRef = "tdvt-2.13.7",
+    # $env:TEMP only exists on Windows; under PowerShell Core on the Linux and
+    # macOS runners it is null and Join-Path throws on a null -Path. GetTempPath
+    # resolves on all three (TMPDIR, then /tmp).
+    [string]$ToolsCacheDir = (Join-Path ([System.IO.Path]::GetTempPath()) "argus-tableau-sdk")
 )
 
 $ErrorActionPreference = "Stop"
@@ -122,25 +127,42 @@ Push-Location $packager.Dir
 try {
     foreach ($p in $plugins) {
         Write-Section "Packaging $($p.Name)"
-        $taco = Join-Path $OutDir "$($p.Name).taco"
-        if (Test-Path $taco) { Remove-Item $taco -Force }
 
-        $packArgs = @("-m", "connector_packager.package", $p.FullName, "-d", $OutDir)
-        if ($signing) {
-            # jarsigner runs inside the packager; it must add a timestamp or
-            # Tableau will refuse the .taco once the certificate expires.
-            $packArgs += @("-a", $KeystoreAlias, "-ks", $KeystorePath)
-        } else {
-            $packArgs += "--package-only"
-        }
+        # The packager names the file from the manifest's class and version
+        # (argus_postgres-v0.1.0.taco), not from the directory, so package into
+        # a scratch directory and take whatever single file comes out rather
+        # than guessing the name.
+        $stage = Join-Path ([System.IO.Path]::GetTempPath()) ("argus-taco-" + $p.Name)
+        if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+        New-Item -ItemType Directory -Force $stage | Out-Null
 
-        & $packager.Python @packArgs
+        # The packager no longer signs, and no longer takes --package-only:
+        # it always emits an unsigned .taco and leaves jarsigner to the caller,
+        # which is why signing is a separate step below (and in ci.yml).
+        & $packager.Python -m connector_packager.package $p.FullName -d $stage
         if ($LASTEXITCODE -ne 0) { throw "packaging $($p.Name) failed" }
-        if (-not (Test-Path $taco)) { throw "packager produced no $taco" }
+
+        $produced = @(Get-ChildItem $stage -Filter *.taco)
+        if ($produced.Count -ne 1) {
+            throw "packaging $($p.Name) produced $($produced.Count) .taco files, expected 1"
+        }
+        $taco = Join-Path $OutDir $produced[0].Name
+        Move-Item $produced[0].FullName $taco -Force
+        Remove-Item $stage -Recurse -Force
+
+        if ($signing) {
+            # -tsa is not optional: without a timestamp Tableau refuses the
+            # .taco as soon as the certificate expires.
+            & jarsigner -tsa http://timestamp.digicert.com `
+                -keystore $KeystorePath $taco $KeystoreAlias
+            if ($LASTEXITCODE -ne 0) { throw "signing $($p.Name) failed" }
+            & jarsigner -verify -strict $taco
+            if ($LASTEXITCODE -ne 0) { throw "signature check for $($p.Name) failed" }
+        }
 
         $size = (Get-Item $taco).Length
         $state = if ($signing) { "signed" } else { "UNSIGNED" }
-        Write-Host ("   built $($p.Name).taco ({0:N0} bytes, $state)" -f $size) -ForegroundColor Green
+        Write-Host ("   built $($produced[0].Name) ({0:N0} bytes, $state)" -f $size) -ForegroundColor Green
     }
 } finally { Pop-Location }
 

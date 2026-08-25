@@ -33,6 +33,15 @@ static char *xlat(const char *backend, const char *sql)
     argus_diag_dispose(&diag);
 }
 
+/* Translate and compare against the expected native SQL. */
+static void assert_translates(const char *backend, const char *sql,
+                              const char *expect)
+{
+    char *out = xlat(backend, sql);
+    assert_string_equal(out, expect);
+    g_free(out);
+}
+
 /* Translate expecting rejection; returns the SQLSTATE. */
 static void assert_rejected(const char *backend, const char *sql,
                             const char *expect_sqlstate)
@@ -286,13 +295,37 @@ static void test_arity_message_is_readable(void **state)
     argus_diag_dispose(&diag);
 }
 
-static void test_procedure_calls_are_not_implemented(void **state)
+/*
+ * {call ...} is translated where the dialect can express it and refused where
+ * it cannot — and SQL_PROCEDURES is derived from the same field, so the two
+ * cannot disagree. The engines with no procedures still get HYC00, which is
+ * what they always got.
+ */
+static void test_procedure_calls_follow_the_dialect(void **state)
 {
     (void)state;
 
-    /* Consistent with SQLProcedures returning an empty result set. */
     assert_rejected("trino", "{call foo(1)}", "HYC00");
     assert_rejected("trino", "{?= call foo(1)}", "HYC00");
+    assert_rejected("hive",  "{call foo(1)}", "HYC00");
+
+    /* PostgreSQL: what returns a result set is a function, so this is what an
+     * ODBC application means by {call} — and what psqlODBC generates. */
+    assert_translates("postgres", "{call order_count(1)}",
+                      "SELECT * FROM order_count(1)");
+    assert_translates("greenplum", "{call f(1, 'a')}",
+                      "SELECT * FROM f(1, 'a')");
+
+    /* The ?= form binds the function's return value, which this rendering
+     * already produces, so the marker is consumed rather than refused. */
+    assert_translates("postgres", "{?= call order_count(1)}",
+                      "SELECT * FROM order_count(1)");
+
+    /* A parameter marker and a nested escape inside the argument list must
+     * survive; the body is copied through, not re-parsed as an expression. */
+    assert_translates("postgres", "{call f(?)}", "SELECT * FROM f(?)");
+    assert_translates("postgres", "{call f({fn UCASE('a')})}",
+                      "SELECT * FROM f(upper('a'))");
 }
 
 static void test_malformed_escapes_are_rejected(void **state)
@@ -348,7 +381,7 @@ int main(void)
         cmocka_unit_test(test_unsupported_function_is_rejected_not_passed_through),
         cmocka_unit_test(test_arity_is_checked),
         cmocka_unit_test(test_arity_message_is_readable),
-        cmocka_unit_test(test_procedure_calls_are_not_implemented),
+        cmocka_unit_test(test_procedure_calls_follow_the_dialect),
         cmocka_unit_test(test_malformed_escapes_are_rejected),
         cmocka_unit_test(test_translator_does_not_validate_sql),
     };

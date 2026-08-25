@@ -3,14 +3,14 @@
 [![CI](https://github.com/VargaFoundation/argus/actions/workflows/ci.yml/badge.svg)](https://github.com/VargaFoundation/argus/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/VargaFoundation/argus/actions/workflows/codeql.yml/badge.svg)](https://github.com/VargaFoundation/argus/actions/workflows/codeql.yml)
 
-Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix, Pinot, Druid, Kudu, MySQL-wire (StarRocks/Doris/ClickHouse) and Arrow Flight SQL (Dremio/InfluxDB 3) — with comprehensive logging, SSL/TLS, OAuth2 and an Arrow ADBC surface built over the same stack.
+Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix, Pinot, Druid, Kudu, MySQL-wire (StarRocks/Doris/ClickHouse), PostgreSQL, Greenplum, Apache Cloudberry and Arrow Flight SQL (Dremio/InfluxDB 3) — with comprehensive logging, SSL/TLS, OAuth2 and an Arrow ADBC surface built over the same stack.
 
 ## Features
 
 ### Core ODBC Support
 - **104 ODBC entry points** (ANSI + Unicode `W` variants) — ODBC 3.80, **Level 1 interface conformance** (`SQL_OIC_LEVEL1`, SQL-92 Entry), plus ODBC 2.x compatibility (`SQLAllocConnect`, `SQLError`, `SQLExtendedFetch`, ...). This matches the commercial Simba/Starburst drivers for these engines; stored procedures and transactions — the two OLTP features Level 1 also names — are reported absent (`SQL_PROCEDURES="N"`, `SQL_TXN_CAPABLE=SQL_TC_NONE`), as they are on Trino/BigQuery/Hive themselves.
 - **Statement-level asynchronous execution** (`SQL_ASYNC_MODE = SQL_AM_STATEMENT`): async `SQLExecDirect`/`SQLExecute` on a worker thread, with `SQLCompleteAsync` and `SQLCancelHandle` (ODBC 3.8).
-- **10 backends**, enabled by dependency auto-detection at configure time
+- **13 backends**, enabled by dependency auto-detection at configure time
 - **Cross-platform**: Linux, macOS and Windows x64
 - **Arrow ADBC driver** (`libargus_adbc`) exposing the same backends through the Arrow C Data Interface
 
@@ -26,6 +26,9 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 | `druid` | Apache Druid | HTTP/JSON | libcurl + json-glib | yes |
 | `bigquery` | Google BigQuery — incl. sovereign clouds (S3NS): every Google endpoint is configurable | REST/JSON | libcurl + json-glib (+ OpenSSL for key files) | yes |
 | `mysql` | StarRocks / Doris / ClickHouse / MySQL / MariaDB | MySQL wire | libmariadb | yes |
+| `postgres` | PostgreSQL | PostgreSQL wire | libpq | yes |
+| `greenplum` | VMware/Broadcom Greenplum 6 and 7 | PostgreSQL wire | libpq | yes |
+| `cloudberry` | Apache Cloudberry | PostgreSQL wire | libpq | yes |
 | `flightsql` | Dremio / InfluxDB 3 / any Arrow Flight SQL server | gRPC / Arrow | arrow-flight-sql (C++) | no |
 | `kudu` | Apache Kudu (deprecated — prefer `BACKEND=impala`) | kudu_client | libkudu_client | no |
 
@@ -83,7 +86,7 @@ inspection of real Simba binaries and a live Tableau TDVT run, is in
 
 | | **Argus** | Simba / Starburst (per engine) | Generic *Other Databases (ODBC)* |
 |---|---|---|---|
-| Engines per driver | **10 in one binary** | one driver per engine | any, but dialect-blind |
+| Engines per driver | **13 in one binary** | one driver per engine | any, but dialect-blind |
 | Licensing | **open** (Varga Foundation) | proprietary, per-seat | bundled |
 | ODBC level | 3.8, Level 1, SQL-92 Entry | 3.8, Level 1/2 | depends on driver |
 | Exported ODBC entry points | **104** | 89 (SimbaEngine core) | n/a |
@@ -94,6 +97,7 @@ inspection of real Simba binaries and a live Tableau TDVT run, is in
 | Tableau TDVT | **91.4%** measured | certified (>90%) | not applicable |
 | Large-result decode | DOM-free JSON (~65% faster), spooling, Arrow via ADBC | Arrow / Cloud Fetch | row-wise |
 | Dialect correctness | per-backend dialect + ODBC escape translation | per-engine | **none** — SQL passed through |
+| Transactions | **real where the engine has them** (PostgreSQL family) | per-engine | driver-dependent |
 | Arrow surface | ADBC driver + Flight SQL backend | JDBC/ODBC | no |
 
 ### Why Argus
@@ -114,7 +118,12 @@ inspection of real Simba binaries and a live Tableau TDVT run, is in
   rather than inventing metadata a BI tool would then trust.
 - **Fast where it counts.** The Trino fetch path decodes result pages without a
   JSON DOM (~65% faster on large extracts, proven byte-identical to the
-  reference path), on top of Trino spooling and a numeric fast-path.
+  reference path), on top of Trino spooling and a numeric fast-path. On
+  PostgreSQL, measured head-to-head against psqlODBC on the same server and
+  query: **~1.9× the throughput** (727 k vs 391 k rows/s on 1.5 M × 9 columns)
+  with **memory flat in the size of the result** — 50 MB where psqlODBC's
+  default configuration peaks at 629 MB. Numbers and method in
+  [tests/bench/README.md](tests/bench/README.md).
 - **Dialect-correct, unlike the generic ODBC entry.** Tableau itself warns that
   with *Other Databases (ODBC)* "compatibility is not guaranteed"; Argus ships a
   per-backend SQL dialect and translates ODBC escape sequences (`{fn …}`, `{d}`,
@@ -139,6 +148,8 @@ sudo apt-get install libthrift-c-glib-dev thrift-compiler
 sudo apt-get install libcurl4-openssl-dev libjson-glib-dev
 # MySQL-wire (optional)
 sudo apt-get install libmariadb-dev
+# PostgreSQL (optional)
+sudo apt-get install libpq-dev
 
 cmake -B build && cmake --build build
 cd build && ctest --output-on-failure -L unit
@@ -151,6 +162,7 @@ pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake \
           mingw-w64-ucrt-x86_64-glib2 mingw-w64-ucrt-x86_64-curl \
           mingw-w64-ucrt-x86_64-json-glib mingw-w64-ucrt-x86_64-openssl \
           mingw-w64-ucrt-x86_64-glib-networking mingw-w64-ucrt-x86_64-libmariadbclient \
+          mingw-w64-ucrt-x86_64-postgresql \
           mingw-w64-ucrt-x86_64-thrift mingw-w64-ucrt-x86_64-cmocka
 # thrift c_glib runtime (MSYS2 only ships the compiler):
 bash scripts/build-thrift-c-glib.sh "$PWD/thrift-c-glib-prefix" 0.23.0
@@ -159,7 +171,10 @@ PKG_CONFIG_PATH="$PWD/thrift-c-glib-prefix/lib/pkgconfig" \
 cmake --build build
 ```
 
-**macOS:** Homebrew `unixodbc glib json-glib curl` then the same CMake invocation.
+**macOS:** Homebrew `unixodbc glib json-glib curl libpq` then the same CMake
+invocation. `libpq` is keg-only, so add it to `PKG_CONFIG_PATH` first
+(`export PKG_CONFIG_PATH="$(brew --prefix libpq)/lib/pkgconfig:$PKG_CONFIG_PATH"`)
+or the PostgreSQL backend is silently left out.
 
 ## Connection String Parameters
 
@@ -177,7 +192,7 @@ HOST=localhost;PORT=10000;UID=myuser;PWD=mypass;DATABASE=default;BACKEND=hive
 | **UID** / USERNAME | Username | `admin` | `` |
 | **PWD** / PASSWORD | Password | `secret` | `` |
 | **DATABASE** / SCHEMA | Database name | `mydb` | `default` |
-| **BACKEND** | `hive`, `impala`, `trino`, `phoenix`, `pinot`, `druid`, `bigquery`, `mysql`, `flightsql`, `kudu` | `trino` | `hive` |
+| **BACKEND** | `hive`, `impala`, `trino`, `phoenix`, `pinot`, `druid`, `bigquery`, `mysql`, `postgres`, `greenplum`, `cloudberry`, `flightsql`, `kudu` | `trino` | `hive` |
 | **SSL** / UseSSL | Enable SSL | `1`, `true` | `false` |
 | **SSLCertFile** | Client certificate | `/path/cert.pem` | - |
 | **SSLKeyFile** | Client key | `/path/key.pem` | - |

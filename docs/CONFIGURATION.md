@@ -76,11 +76,16 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | KRBSERVICENAME | SERVICEPRINCIPALNAME | hive/impala | Kerberos SPN service name |
 | KRBHOSTFQDN | KRBHOST | (HOST) | Kerberos SPN host, if it differs from HOST |
 | KRBREALM | REALM | (from krb5.conf) | Explicit Kerberos realm |
-| BACKEND | DRIVER_TYPE | hive | Backend type: hive, impala, trino, phoenix, pinot, druid, bigquery, mysql, flightsql, kudu |
+| BACKEND | DRIVER_TYPE | hive | Backend type: hive, impala, trino, phoenix, pinot, druid, bigquery, mysql, postgres, greenplum, cloudberry, flightsql, kudu |
 | APPLICATIONNAME | APPNAME | (none) | Client application name reported to the backend |
 | FETCHBUFFERSIZE | | (backend default) | Rows fetched per backend round-trip |
 | SOCKETTIMEOUT | | 0 (none) | Socket I/O timeout in seconds |
 | MAXSCROLLROWS | | (driver default) | Cap on rows a static (scrollable) cursor will materialize in memory |
+| SSLMODE | | (from SSL/SSLVerify) | PostgreSQL family: libpq `sslmode`, verbatim (`prefer`, `verify-ca`, …) |
+| SEARCHPATH | CURRENTSCHEMA | (server default) | PostgreSQL family: `search_path` for the session |
+| SHOWPARTITIONS | | 0 | PostgreSQL family: list partition children in `SQLTables`/`SQLColumns` |
+| SHOWALLDATABASES | | 0 | PostgreSQL family: list every database, not just the connected one |
+| ROWVERSIONING | | 0 | PostgreSQL family: expose `xmin` to `SQLSpecialColumns(SQL_ROWVER)` |
 
 ### Default Ports by Backend
 
@@ -90,6 +95,9 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | impala | 21050 |
 | trino | 8080 |
 | mysql | 3306 |
+| postgres | 5432 |
+| greenplum | 5432 |
+| cloudberry | 5432 |
 | flightsql | 32010 |
 | pinot | 8000 |
 | druid | 8888 |
@@ -208,6 +216,143 @@ DRIVER=Argus;BACKEND=mysql;HOST=clickhouse;PORT=9004;UID=default;DATABASE=defaul
 - Catalog operations run against `information_schema`
 - `SSL=1` enables TLS (`SSLCertFile`/`SSLKeyFile`/`SSLCAFile`, `SSLVerify` honored)
 - Requires a build with libmariadb (`libmariadb-dev`); auto-detected at cmake time
+
+### PostgreSQL (BACKEND=postgres)
+
+Native PostgreSQL over the PostgreSQL wire protocol, via libpq.
+
+```
+DRIVER=Argus;BACKEND=postgres;HOST=pg.example.com;PORT=5432;UID=analyst;PWD={secret};DATABASE=warehouse
+DRIVER=Argus;BACKEND=postgres;HOST=pg.example.com;SSL=1;SSLCAFile=/etc/ssl/certs/ca.pem;UID=analyst;PWD={secret};DATABASE=warehouse
+```
+
+- Protocol: PostgreSQL wire protocol v3 (libpq)
+- Default port: **5432**
+- Namespace model: a **database is the ODBC catalog** and a **schema is the ODBC
+  schema** — the full three-level model, unlike the MySQL backend. A PostgreSQL
+  session cannot query across databases, so `SQLTables(SQL_ALL_CATALOGS)`
+  reports only the connected database; `SHOWALLDATABASES=1` lists them all
+  instead.
+- Catalog operations read `pg_catalog` directly, with every application-supplied
+  filter escaped through libpq (`PQescapeLiteral`) rather than interpolated
+- **Partition and inheritance children are hidden from `SQLTables` and
+  `SQLColumns`.** A table partitioned monthly over ten years is one entry in a
+  BI navigator, not 120. `SHOWPARTITIONS=1` lists them.
+- System schemas (`pg_catalog`, `information_schema`, `pg_toast*`, `pg_temp*`)
+  and relations the user cannot `SELECT` from are hidden unless asked for by name
+- **Rows are streamed, not buffered.** Memory is a function of `FetchBufferSize`,
+  not of the result set, so a multi-million-row extract does not have to fit in
+  client memory first
+- Numeric columns take the driver's native fast path — no value→text→value
+  round trip for `SQL_C_SLONG`/`SQL_C_DOUBLE` and friends
+- **`SQLCancel` is a real server-side cancellation** (libpq's out-of-band cancel
+  request), not a no-op
+- **Server SQLSTATEs are passed through.** A missing table reports PostgreSQL's
+  own `42P01` rather than a generic driver code
+- `QueryTimeout` becomes a server-side `statement_timeout`, so the server stops
+  doing the work rather than the client stopping to wait for it
+- TLS: `SSL=0` (the default) means a genuinely plaintext session (`sslmode=disable`);
+  `SSL=1` with `SSLVerify=1` (the default) is `sslmode=verify-full`;
+  `SSLVerify=0` downgrades to `require`. `SSLCAFile`/`SSLCertFile`/`SSLKeyFile`
+  map to `sslrootcert`/`sslcert`/`sslkey`.
+- Auth: libpq negotiates **SCRAM-SHA-256** or md5 from the server's challenge with
+  no configuration. `AUTHMECH=KERBEROS` uses libpq's own GSSAPI (SSPI on Windows);
+  `KRBSERVICENAME` sets the SPN service name, default `postgres`
+- If `DATABASE` is omitted the driver connects to `postgres`. (The ODBC layer
+  substitutes the literal `default` for an absent database, which is meaningful
+  for Hive and is not a database any PostgreSQL has.)
+- **Real transactions.** `SQL_TXN_CAPABLE` reports `SQL_TC_ALL`;
+  `SQL_ATTR_AUTOCOMMIT=SQL_AUTOCOMMIT_OFF` puts every subsequent statement in a
+  transaction and `SQLEndTran` commits or rolls it back. The `BEGIN` is sent
+  lazily with the first statement rather than when the attribute is set, so the
+  driver never leaves a session idle-in-transaction. `SQL_ATTR_TXN_ISOLATION`
+  accepts READ COMMITTED, REPEATABLE READ and SERIALIZABLE;
+  `SQL_TXN_READ_UNCOMMITTED` is accepted but not advertised, because PostgreSQL
+  silently upgrades it to READ COMMITTED.
+- **Pooled connections are cleaned before reuse** — an open transaction is
+  rolled back and `DISCARD ALL` clears session state, so the next borrower
+  never inherits a search_path, a temp table or an aborted transaction. A
+  connection that cannot be cleaned is discarded rather than reused.
+- **Real `SQLDescribeParam`** (`SQL_DESCRIBE_PARAMETER` = `"Y"`): the statement
+  is parsed and described server-side, so parameter types come from
+  PostgreSQL's own inference rather than the SQL_VARCHAR/255 guess. Execution
+  is unchanged — parameters are still rendered as literals. PostgreSQL's jsonb
+  `?` operator is indistinguishable from a parameter marker; when the describe
+  fails the driver falls back to the generic answer, and `jsonb_exists(j, 'k')`
+  is the unambiguous spelling.
+- **`SQLForeignKeys`, `SQLProcedures`, `SQLProcedureColumns`,
+  `SQLTablePrivileges`, `SQLColumnPrivileges` and `SQLSpecialColumns` return
+  real data**, read from `pg_catalog`. `SQL_BEST_ROWID` reports the primary key
+  or a fully-NOT-NULL unique index; `ctid` is deliberately not offered as a
+  fallback, because UPDATE and VACUUM FULL invalidate it.
+  `SQL_ROWVER` reports `xmin` only under `ROWVERSIONING=1` — the counter wraps.
+- **`SQLTables`' enumeration forms work**: `SQLTables("%", "", "")` lists
+  catalogs and `SQLTables("", "%", "")` lists schemas, which is how Power BI's
+  hierarchical navigator and Tableau's schema picker open.
+- **`SQLRowCount` reports rows affected** after INSERT/UPDATE/DELETE. DDL keeps
+  -1, which ODBC defines as "not available" and is not the same as 0.
+- **`{call f(a)}` is translated** to `SELECT * FROM f(a)`, so `SQL_PROCEDURES`
+  answers `"Y"` — the info type promises both that the engine has procedures and
+  that the driver accepts the invocation syntax.
+- **Domains and enums are resolved.** A column declared over
+  `CREATE DOMAIN postcode AS varchar(10)` reports SQL_VARCHAR with size 10, not
+  an unbounded string; an enum reports a bounded string, since PostgreSQL caps
+  labels at 63 bytes. The map is built once at connect.
+- Every option above is **per connection**, and the matching `ARGUS_PG_*`
+  environment variable is a machine-wide fallback for flipping a behaviour
+  without editing every DSN.
+- Requires a build with libpq (`libpq-dev`); auto-detected at cmake time
+
+### Greenplum and Apache Cloudberry (BACKEND=greenplum / BACKEND=cloudberry)
+
+Both are MPP forks of PostgreSQL and reuse the whole PostgreSQL backend above —
+same wire protocol, same streaming fetch, same type mapping, same dialect. They
+are separate backends because everything a BI tool keys on is the backend name:
+`SQL_DBMS_NAME`, the dialect entry, the Tableau connector, the Power BI backend
+list.
+
+```
+DRIVER=Argus;BACKEND=greenplum;HOST=gp-coordinator;PORT=5432;UID=analyst;PWD={secret};DATABASE=warehouse
+DRIVER=Argus;BACKEND=cloudberry;HOST=cbdb-coordinator;PORT=5432;UID=analyst;PWD={secret};DATABASE=warehouse
+```
+
+What they add over `BACKEND=postgres`:
+
+- **Partition children are hidden from `SQLTables` and `SQLColumns`,** whichever
+  way the server records them — Greenplum 6 partitions are inheritance children
+  recorded in `pg_partition_rule`, Greenplum 7 and Cloudberry use PostgreSQL's
+  declarative partitioning. This is the difference between a connection dialog
+  that opens and one that enumerates tens of thousands of child relations: a
+  fact table partitioned monthly over ten years, times two hundred tables, is
+  ~24,000 relations a driver filtering on `relkind` alone will list.
+  `SHOWPARTITIONS=1` turns the filter off.
+- **`REMARKS` carries the facts that explain query cost** — the distribution
+  policy (`[DISTRIBUTED BY (customer_id)]`, `[DISTRIBUTED RANDOMLY]`,
+  `[DISTRIBUTED REPLICATED]`), append-optimized and column-oriented storage
+  (`[AO row]`, `[AO column]`), and external-table locations
+  (`[external: gpfdist]`). Tableau and Power BI both show `REMARKS` as the table
+  description, so an analyst can see why a join shuffles.
+- External tables (gpfdist, PXF, and the FDW form Greenplum 7 and Cloudberry
+  use) are reported as `TABLE`, because that is what a BI tool can query.
+
+Which catalogs the driver reads is decided by **probing the server at connect**,
+not by the version string: one query asks whether `gp_distribution_policy`,
+`pg_appendonly`, `pg_exttable` and `pg_class.relispartition` actually exist.
+That means a catalog call can never fail with "relation gp_… does not exist",
+and pointing `BACKEND=greenplum` at a plain PostgreSQL degrades to PostgreSQL
+behaviour with a `01000` warning at connect rather than breaking `SQLTables`.
+
+> **Verification status.** Neither Greenplum nor Cloudberry has a maintained,
+> pullable public container image, so the MPP catalog SQL has **not** been run
+> against a real cluster. It is exercised against a simulated Greenplum catalog
+> built on PostgreSQL (`tests/integration/test_pg_mpp_sim.c`), which proves the
+> SQL parses and the logic is right, and the dialect tables are inherited from
+> PostgreSQL rather than independently verified — the header of
+> `src/odbc/dialect.c` records exactly this. To verify against your own cluster:
+> ```
+> PG_BACKEND=greenplum PG_HOST=coordinator PG_PORT=5432 ./test_postgres_escapes
+> BI_BACKEND=greenplum BI_HOST=coordinator BI_PORT=5432 ./test_bi_escapes
+> ```
 
 ### Arrow Flight SQL (BACKEND=flightsql)
 

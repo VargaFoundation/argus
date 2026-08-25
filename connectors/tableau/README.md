@@ -51,6 +51,9 @@ connector. Tableau ships base dialects that line up with Argus's backends:
 | `argus-impala` | `impala` | 21050 | `Impala23Dialect` |
 | `argus-mysql` | `mysql` | 9030 | `MySQL8Dialect` |
 | `argus-bigquery` | `bigquery` | — (REST) | `BigQuerySQLDialect` |
+| `argus-postgres` | `postgres` | 5432 | `PostgreSQL91Dialect` |
+| `argus-greenplum` | `greenplum` | 5432 | `PostgreSQL91Dialect` |
+| `argus-cloudberry` | `cloudberry` | 5432 | `PostgreSQL91Dialect` |
 
 `argus-hive` also serves **Spark Thrift Server** and **Flink SQL Gateway**, which
 speak HiveServer2.
@@ -62,6 +65,20 @@ Two scoping notes worth knowing before you pick one:
   `MySQL8Dialect` would generate functions it spells differently. Use the
   generic ODBC connector for ClickHouse. The same split is called out in
   `src/odbc/dialect.c`.
+- **The PostgreSQL family is three connectors, not one.** They generate the
+  same SQL, so they share a base dialect, but the driver's catalog behaviour
+  differs — the Greenplum and Cloudberry backends hide partition children from
+  the table list and report distribution policy and append-optimized storage in
+  `REMARKS` — and a `.taco` carries one backend. They are also the only Argus
+  connectors that enable **both** namespace levels and that do **not** suppress
+  transactions, `SQLStatistics` or `SQLForeignKeys`, because those are real
+  here. `PostgreSQL91Dialect` rather than a newer PostgreSQL base is deliberate:
+  Greenplum 6 is PostgreSQL 9.4, so a base assuming anything newer would
+  generate SQL the oldest supported engine rejects.
+  Neither `argus-greenplum` nor `argus-cloudberry` has been run against a real
+  cluster (no maintained public image exists for either), and none of the three
+  has been through TDVT — which is why temporary tables are left disabled in all
+  three manifests.
 - **`argus-bigquery` is the odd one out.** BigQuery is a REST service, so the
   driver ignores host and port and the dialog asks for a project instead. That
   shape is unusual for Tableau's ODBC superclass, which makes this the connector

@@ -1,4 +1,5 @@
 #include "argus/backend.h"
+#include "argus/caps.h"
 #include "argus/handle.h"
 #include <stdlib.h>
 
@@ -67,6 +68,14 @@ int impala_get_primary_keys(argus_backend_conn_t conn,
 bool impala_get_last_error(argus_backend_conn_t conn, char *buf, size_t buflen);
 
 /* Impala backend vtable */
+/* Only the display name: everything else in this descriptor is left zero,
+ * which means exactly the answers SQLGetInfo gave before capabilities
+ * existed (no transactions, no procedures, a 128-character identifier
+ * limit, "database" for the schema term). */
+static const argus_backend_caps_t impala_caps = {
+    .dbms_name = "Apache Impala",
+};
+
 static const argus_backend_t impala_backend = {
     .name                  = "impala",
     .connect               = impala_connect,
@@ -85,6 +94,7 @@ static const argus_backend_t impala_backend = {
     .get_catalogs          = impala_get_catalogs,
     .get_primary_keys      = impala_get_primary_keys,
     .get_last_error        = impala_get_last_error,
+    .caps                  = &impala_caps,
 };
 
 const argus_backend_t *argus_impala_backend_get(void)

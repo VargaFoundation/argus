@@ -622,7 +622,21 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
         if (dbc) dbc->errors_total++;
         if (stmt->diag.count == 0) {
             char errbuf[512];
-            if (dbc->backend->get_last_error &&
+            char sqlstate[6] = {0};
+            /* Prefer the backend's own SQLSTATE where it has one. PostgreSQL
+             * reports a real five-character code for every error, and
+             * collapsing 42P01 to HY000 throws away the only part of a
+             * diagnostic an application can branch on. Backends without the
+             * hook keep the HY000 they always reported. */
+            if (dbc->backend->get_last_error_ex &&
+                dbc->backend->get_last_error_ex(dbc->backend_conn, sqlstate,
+                                                errbuf, sizeof(errbuf)) &&
+                errbuf[0]) {
+                char msg[600];
+                snprintf(msg, sizeof(msg), "[Argus] %s", errbuf);
+                argus_set_error(&stmt->diag,
+                                sqlstate[0] ? sqlstate : "HY000", msg, 0);
+            } else if (dbc->backend->get_last_error &&
                 dbc->backend->get_last_error(dbc->backend_conn,
                                              errbuf, sizeof(errbuf)) &&
                 errbuf[0]) {
@@ -685,18 +699,38 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
         }
     }
 
+    /*
+     * SQLRowCount after a DML statement. Only asked of backends that can
+     * answer, and only when the statement produced no result set — for a
+     * SELECT, fetch.c fills row_count from what was actually read. Backends
+     * without the hook keep the -1 they have always reported, which ODBC
+     * defines as "not available".
+     */
+    if (dbc->backend->get_affected_rows && stmt->num_cols == 0) {
+        SQLLEN affected = -1;
+        if (dbc->backend->get_affected_rows(dbc->backend_conn, stmt->op,
+                                            &affected))
+            stmt->row_count = affected;
+    }
+
     /* Asynchronous backends (e.g. Trino) only surface a query error while the
      * result is being polled for metadata, after execute() itself returned ok.
      * If the backend now reports an error, fail the statement instead of
      * returning success and then no rows. Gated on get_last_error, so
      * synchronous backends (which already failed above) are unaffected. */
-    if (dbc->backend->get_last_error) {
+    if (dbc->backend->get_last_error || dbc->backend->get_last_error_ex) {
         char errbuf[512];
-        if (dbc->backend->get_last_error(dbc->backend_conn,
-                                         errbuf, sizeof(errbuf)) && errbuf[0]) {
+        char sqlstate[6] = {0};
+        bool have = dbc->backend->get_last_error_ex
+            ? dbc->backend->get_last_error_ex(dbc->backend_conn, sqlstate,
+                                              errbuf, sizeof(errbuf))
+            : dbc->backend->get_last_error(dbc->backend_conn,
+                                           errbuf, sizeof(errbuf));
+        if (have && errbuf[0]) {
             char msg[600];
             snprintf(msg, sizeof(msg), "[Argus] %s", errbuf);
-            argus_set_error(&stmt->diag, "HY000", msg, 0);
+            argus_set_error(&stmt->diag,
+                            sqlstate[0] ? sqlstate : "HY000", msg, 0);
             stmt->executed = false;
             stmt->errors_total++;
             if (dbc) dbc->errors_total++;
@@ -1521,6 +1555,49 @@ SQLRETURN SQL_API SQLPutData(
     return SQL_SUCCESS;
 }
 
+/* ── Internal: parameter metadata from the backend, cached ─────
+ *
+ * SQLDescribeParam is called once per parameter, and asking the server each
+ * time would cost a round trip per call. The description is fetched once for
+ * the statement's current SQL and thrown away by argus_stmt_reset when the SQL
+ * changes. described_params: 0 not asked, 1 answered, -1 declined (or no
+ * hook) — the last one is sticky so a backend that cannot describe is asked
+ * only once per statement.
+ */
+static bool stmt_describe_params(argus_stmt_t *stmt)
+{
+    if (stmt->described_params != 0)
+        return stmt->described_params > 0;
+
+    argus_dbc_t *dbc = stmt->dbc;
+    if (!dbc || !dbc->connected || !dbc->backend ||
+        !dbc->backend->describe_params || !stmt->query) {
+        stmt->described_params = -1;
+        return false;
+    }
+
+    argus_column_desc_t *descs =
+        calloc(ARGUS_MAX_PARAMS, sizeof(argus_column_desc_t));
+    if (!descs) {
+        stmt->described_params = -1;
+        return false;
+    }
+
+    int n = 0;
+    if (dbc->backend->describe_params(dbc->backend_conn, stmt->query,
+                                      descs, &n) != 0) {
+        free(descs);
+        stmt->described_params = -1;
+        return false;
+    }
+
+    free(stmt->param_descs);
+    stmt->param_descs      = descs;
+    stmt->num_param_descs  = n;
+    stmt->described_params = 1;
+    return true;
+}
+
 /* ── ODBC API: SQLNumParams ──────────────────────────────────── */
 
 SQLRETURN SQL_API SQLNumParams(
@@ -1531,7 +1608,11 @@ SQLRETURN SQL_API SQLNumParams(
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     if (ParameterCountPtr) {
-        if (stmt->query)
+        /* The server's count when it can give one — it parsed the SQL, so it
+         * is right about constructs the marker scanner has to guess at. */
+        if (stmt_describe_params(stmt))
+            *ParameterCountPtr = (SQLSMALLINT)stmt->num_param_descs;
+        else if (stmt->query)
             *ParameterCountPtr = (SQLSMALLINT)count_param_markers(stmt->query);
         else
             *ParameterCountPtr = 0;
@@ -1642,9 +1723,24 @@ SQLRETURN SQL_API SQLDescribeParam(
     }
 
     /*
-     * Return a generic description (SQL_VARCHAR) since we cannot
-     * determine parameter types without server-side prepare support.
+     * The server's answer where the backend can get one (the PostgreSQL family
+     * parses the statement and reports the inferred parameter types), and the
+     * generic SQL_VARCHAR/255 guess everywhere else — which is why
+     * SQL_DESCRIBE_PARAMETER is only "Y" for backends with the hook.
      */
+    if (stmt_describe_params(stmt)) {
+        if (ParameterNumber > stmt->num_param_descs)
+            return argus_set_error(&stmt->diag, "07009",
+                                   "[Argus] Invalid parameter number", 0);
+
+        const argus_column_desc_t *p = &stmt->param_descs[ParameterNumber - 1];
+        if (DataTypePtr)      *DataTypePtr      = p->sql_type;
+        if (ParameterSizePtr) *ParameterSizePtr = p->column_size;
+        if (DecimalDigitsPtr) *DecimalDigitsPtr = p->decimal_digits;
+        if (NullablePtr)      *NullablePtr      = p->nullable;
+        return SQL_SUCCESS;
+    }
+
     if (DataTypePtr)      *DataTypePtr      = SQL_VARCHAR;
     if (ParameterSizePtr) *ParameterSizePtr = 255;
     if (DecimalDigitsPtr) *DecimalDigitsPtr  = 0;

@@ -2,6 +2,249 @@
 
 All notable changes to the Argus ODBC Driver project.
 
+## [Unreleased]
+
+### Fixed: the Tableau connectors were never packageable
+The `build-tableau-connector` CI job has failed since it was added, so no
+`.taco` has ever been produced — the release workflow builds only the Power BI
+`.mez`. Four separate faults, each hiding the next:
+
+- `build.ps1` pinned `SdkRef` to `v2024.2.0`, a tag that does not exist:
+  `tableau/connector-plugin-sdk` publishes `tdvt-*` tags (plus `v1.4*` and
+  `2020.1`) and has never had a `v2024.x`. Now pinned to `tdvt-2.13.7`.
+- Every connector declared `<field name="database">`. Tableau restricts
+  connection-field names to a fixed platform list plus a `v-` vendor prefix,
+  and `database` is in neither, so the packager rejected all eight. The field
+  was redundant anyway: each `.tdr` already lists `<attr>dbname</attr>` and
+  each `connectionBuilder.js` already reads `connectionHelper.attributeDatabase`,
+  so Tableau renders its own Database input — exactly as the SDK's own
+  `postgres_odbc` sample does. The field is gone; the connection attribute is
+  unchanged.
+- The genuinely vendor-specific fields — `krbservicename` and `krbhostfqdn` on
+  Hive and Impala, `project`, `location`, `keyfile`, `accesstoken`, `endpoint`
+  and `tokenendpoint` on BigQuery — now carry the required `v-` prefix, in the
+  field list, the `.tdr` attribute list and the connection builder together.
+- The current packager no longer accepts `--package-only` or the `-a`/`-ks`
+  signing flags, and names its output from the manifest
+  (`argus_postgres-v0.1.0.taco`) rather than from the directory. `build.ps1`
+  now packages into a scratch directory and takes whatever single file appears,
+  and signs with `jarsigner` itself, mirroring what `ci.yml` already did.
+
+Verified by running the CI command itself under PowerShell 7.4.6: all eight
+connectors package, and `validate-xml.py` still reports 8/8 against Tableau's
+XSDs.
+
+### PostgreSQL family: per-connection options and the last ODBC gaps
+- **`backslash_escapes` is false for all three backends.** 0.6.0 made bound-
+  parameter escaping dialect-aware; PostgreSQL has defaulted
+  `standard_conforming_strings` to on since 9.1, so `\` in a literal is an
+  ordinary character and doubling it would deliver `C:\\path` where the
+  application bound `C:\path`. Verified live, and `test_postgres_escapes` now
+  binds a backslash and reads it back so the flag cannot be flipped silently.
+- **`SHOWPARTITIONS`, `SHOWALLDATABASES`, `ROWVERSIONING`, `SSLMODE` and
+  `SEARCHPATH` are connection-string and DSN keys**, not environment variables.
+  A process routinely holds connections to several servers, and a machine-wide
+  switch cannot say "show partition children on staging but not on production".
+  The `ARGUS_PG_*` variables remain as a fallback. `SSLMODE` is handed to libpq
+  verbatim, which is the only way to express `prefer` or `verify-ca`.
+- **Fixed: `SQLTables`' enumeration forms never worked.**
+  `SQLTables("%", "", "")` (list catalogs) and `SQLTables("", "%", "")` (list
+  schemas) fell through to `get_tables`, so asking for the schema list returned
+  the table list. Every backend has implemented `get_catalogs` and
+  `get_schemas` since the vtable was written and nothing called them. Power BI's
+  hierarchical navigator and Tableau's schema picker both open with one of these.
+- **`SQLRowCount` after DML** (new optional `get_affected_rows` hook): INSERT,
+  UPDATE and DELETE report rows affected instead of -1. DDL stays -1, which ODBC
+  defines as "not available" and is not the same as 0. Backends without the hook
+  are unchanged.
+- **`{call f(a)}` is translated** to `SELECT * FROM f(a)` — what psqlODBC
+  generates and what an ODBC application means, since the thing that returns a
+  result set in PostgreSQL is a function. `{?= call …}` is accepted too. Driven
+  by a new `call_tmpl` field on the dialect, and `SQL_PROCEDURES` is now
+  *derived* from it rather than from a separate flag, so it cannot claim the
+  invocation syntax works when the dialect cannot render it. Backends without a
+  template still reject `{call}` with HYC00.
+- **Domains and enums are resolved.** A column over
+  `CREATE DOMAIN postcode AS varchar(10)` reports SQL_VARCHAR size 10 rather
+  than an unbounded string, and takes the same native fast path its base type
+  would; an enum reports a bounded string, since PostgreSQL caps labels at 63
+  bytes. The map is built in one query at connect, because in streaming mode the
+  connection is busy exactly when an unknown OID first appears.
+
+### BI connectors
+- **Power BI**: `postgres`, `greenplum` and `cloudberry` added to the connector's
+  backend list. They stay out of `AnsiOffsetBackends` — PostgreSQL has accepted
+  ANSI `OFFSET…FETCH` since 8.4 and either form folds, but `LIMIT…OFFSET` is what
+  a user recognises in `pg_stat_activity`, is safe on Greenplum 6's
+  PostgreSQL 9.4-era planner, and is the better-exercised Power Query path.
+  `FractionalSecondsScale` becomes per-backend: 6 for the PostgreSQL family,
+  because reporting 3 against a `timestamp(6)` column silently truncates a
+  pushed-down predicate and folds to the wrong rows.
+- **Tableau**: three new connectors, `argus-postgres`, `argus-greenplum` and
+  `argus-cloudberry`. They are the only Argus connectors that enable both
+  namespace levels and that do **not** suppress transactions, `SQLStatistics` or
+  `SQLForeignKeys` — those are real on these backends, and the last two are how
+  Tableau discovers join keys and cardinality. Base dialect is
+  `PostgreSQL91Dialect`, deliberately not newer: Greenplum 6 is PostgreSQL 9.4.
+  Temporary tables are left disabled despite PostgreSQL supporting them, because
+  the customization could not be run through TDVT here and an untested "yes"
+  breaks a workbook at refresh time. All eight connectors validate against
+  Tableau's XSDs.
+
+### Fixed
+- **Memory leak in every backend's fetch path.** `argus_row_cache_clear()` kept
+  the row array on the theory that the next batch would reuse it, but no
+  backend ever did: each assigns `cache->rows` unconditionally on entry to
+  `fetch_results`, so the array was overwritten and leaked — one per batch,
+  8 KB at the default `FetchBufferSize`, ~8 MB per million rows. Invisible on a
+  single-batch result and steady growth in a long-lived BI process. The cache
+  now owns and releases its row array, which makes all thirteen backends
+  correct without touching any of them; the ones that grow the array with
+  realloc see NULL/0 and allocate. Found by running the PostgreSQL integration
+  suite under AddressSanitizer, and audited across every backend before the
+  shared helper was changed. Also frees `cursor_name` in the wide-API test's
+  fake statement, so the whole suite is ASan-clean.
+- **Memory leak in the PostgreSQL fetch path.** `pg_fetch_results` allocated a
+  fresh row array on every call, but `argus_row_cache_clear()` deliberately
+  keeps the array it already has — so every batch after the first leaked one
+  array (8 KB at the default `FetchBufferSize`, ~8 MB per million rows). Found
+  the same root cause as above, fixed first locally and then centrally.
+- `SQL_ATTR_TXN_ISOLATION` on a backend with no isolation hook fell off the end
+  of `SQLSetConnectAttr` instead of returning HY092.
+
+### Performance, measured
+- **PostgreSQL fetch measured against psqlODBC** on the same server, query and
+  client loop: **727 k rows/s vs 391 k** (1.5 M rows × 9 columns), with peak RSS
+  **50 MB vs 629 MB**. psqlODBC reaches bounded memory only with
+  `UseDeclareFetch=1`, which is off by default; there it is 352–378 k rows/s.
+- **A planned `COPY … (FORMAT binary)` fetch path was measured and then not
+  built.** Against raw libpq it is 9% faster than the single-row mode already in
+  use (1 289 k vs 1 179 k rows/s) and 33% *larger* on the wire for a typical
+  schema, while the driver's own gap to that ceiling — the row cache and ODBC
+  conversion — is untouched by it. Nine percent of the protocol half of the cost
+  does not justify NBASE numeric decoding and non-tuple-aligned COPY buffers.
+  The numbers, the method and the conditions under which it becomes worth
+  revisiting are in `tests/bench/README.md`.
+- `FetchBufferSize` swept 100/1 000/10 000/50 000: the default 1 000 is already
+  the best, so there is no tuning advice to give.
+
+### ODBC-layer extensions (per-backend capabilities, transactions, catalog)
+- **`argus_backend_caps_t`** (`include/argus/caps.h`): SQLGetInfo answers that
+  are properties of the engine — transaction support, what a schema is called,
+  identifier length, SQL conformance — become per-backend instead of constants.
+  Every zero or NULL field means the value SQLGetInfo returned before, so a
+  backend that declares nothing is answered exactly as it was;
+  `tests/unit/test_backend_caps.c` walks every registered backend and asserts
+  it, field by field.
+- **Real transactions for the PostgreSQL family.** `SQL_TXN_CAPABLE` reports
+  `SQL_TC_ALL`, `SQL_ATTR_AUTOCOMMIT` and `SQLEndTran` do real work, and
+  `SQL_ATTR_TXN_ISOLATION` is honoured. `BEGIN` is issued lazily with the first
+  statement, so the driver never manufactures an idle-in-transaction session.
+  The other ten backends keep `SQL_TC_NONE` and a no-op `SQLEndTran`.
+- **Pooled connections are reset before reuse** (new `reset_session` hook):
+  rollback plus `DISCARD ALL`, and a connection that cannot be cleaned is
+  discarded rather than parked. Without this a connection returned
+  mid-transaction poisons the next borrower with held locks and an aborted
+  transaction — the failure mode that makes transaction support dangerous
+  rather than merely incomplete.
+- **`SQLForeignKeys`, `SQLProcedures`, `SQLProcedureColumns`,
+  `SQLTablePrivileges`, `SQLColumnPrivileges` and `SQLSpecialColumns` are real**
+  for PostgreSQL/Greenplum/Cloudberry, via six new optional vtable hooks. A
+  NULL hook still returns the correctly-shaped empty result set, which stays the
+  right answer for engines that have no such objects. `SQL_BEST_ROWID` uses the
+  primary key or a fully-NOT-NULL unique index and deliberately does **not**
+  fall back to `ctid`, which UPDATE and VACUUM FULL invalidate.
+- **Fixed: `SQLFetch` after an empty catalog call failed on a connected
+  statement.** `SQLForeignKeys`, `SQLProcedures`, `SQLProcedureColumns` and the
+  two privilege calls never set `fetch_started`, so the fetch path went to the
+  backend with a NULL operation handle and returned SQL_ERROR instead of
+  SQL_NO_DATA. Any BI tool that called one of them and then fetched hit it.
+- **Real `SQLDescribeParam`** for the PostgreSQL family (new `describe_params`
+  hook): a server-side Parse and Describe reports the parameter types
+  PostgreSQL inferred. Metadata only — execution still renders parameters as
+  literals. `SQLNumParams` prefers the server's count. `SQL_DESCRIBE_PARAMETER`
+  is `"Y"` only where the hook exists.
+- **Server SQLSTATEs at statement level** (new `get_last_error_ex` hook):
+  `SELECT * FROM missing` now reports `42P01`, a unique violation `23505`, a
+  cancelled statement `HY008`. Backends without the hook keep reporting HY000.
+- `SQLDriverConnect` returns **`SQL_SUCCESS_WITH_INFO`** when a successful
+  connect left diagnostics, instead of dropping them.
+
+### Greenplum and Apache Cloudberry backends (`BACKEND=greenplum` / `cloudberry`)
+- **Two MPP backends over the same libpq core**, with their own vtables,
+  dialect entries and `SQL_DBMS_NAME` so a BI tool can name the engine it is
+  talking to.
+- **Partition children are hidden from `SQLTables`/`SQLColumns` on both catalog
+  layouts** — Greenplum 6's inheritance plus `pg_partition_rule`, and Greenplum
+  7 / Cloudberry's declarative partitioning. A warehouse with a few hundred
+  monthly-partitioned fact tables is tens of thousands of child relations that a
+  driver filtering on `relkind` alone puts in the connection dialog.
+- **`REMARKS` carries the distribution policy, append-optimized storage and
+  external-table location** — `[DISTRIBUTED BY (customer_id)]`, `[AO column]`,
+  `[external: gpfdist]`. Both BI tools display it as the table description.
+- **Catalog SQL is chosen by probing the server, not by its version string.**
+  One connect-time query asks whether `gp_distribution_policy`, `pg_appendonly`,
+  `pg_exttable` and `pg_class.relispartition` exist, so a catalog call can never
+  fail with "relation gp_… does not exist" and pointing `BACKEND=greenplum` at a
+  plain PostgreSQL degrades to PostgreSQL behaviour with a `01000` warning
+  rather than breaking `SQLTables`.
+- `SQLDriverConnect` now returns **`SQL_SUCCESS_WITH_INFO`** when a successful
+  connect left diagnostics, instead of swallowing them behind `SQL_SUCCESS`.
+  Scoped to records the successful attempt itself produced, so failover still
+  reports plain success.
+- **Verification status, stated plainly:** neither engine has a maintained
+  public container image, so the MPP catalog SQL has not been run against a real
+  cluster. It is exercised against a *simulated* Greenplum catalog built on
+  PostgreSQL (`tests/integration/test_pg_mpp_sim.c` — same relation and column
+  names and types), which proves the SQL parses and the logic holds, including
+  the int2vector `distkey` decoding and declaration-order distribution keys. The
+  dialect tables are inherited from PostgreSQL and marked not-live-verified in
+  the header of `src/odbc/dialect.c`. Compose services exist behind
+  `--profile greenplum` / `--profile cloudberry`.
+
+### PostgreSQL backend (`BACKEND=postgres`)
+- **New backend over the PostgreSQL wire protocol** (libpq), auto-detected at
+  configure time from `libpq-dev`. Shares a core (`src/backend/pgcommon/`) with
+  the Greenplum and Cloudberry backends that build on it.
+- **Streaming fetch.** Rows are read in bounded chunks rather than materialised
+  in client memory before the first one is visible, so peak memory follows
+  `FetchBufferSize` and not the size of the answer. Numeric columns use the row
+  cache's native typed path, skipping the value→text→value round trip.
+- **Real `SQLCancel`** — libpq's out-of-band cancel request stops the statement
+  server-side. The other synchronous backends can only return success.
+- **Server SQLSTATEs.** `PG_DIAG_SQLSTATE` is passed through instead of being
+  collapsed to a driver-invented code, so a missing relation surfaces as
+  PostgreSQL's own `42P01`.
+- **Catalog from `pg_catalog`,** with the full catalog/schema/table namespace and
+  every application-supplied filter escaped through `PQescapeLiteral` rather
+  than interpolated. `SQLTables`, `SQLColumns`, `SQLPrimaryKeys`,
+  `SQLStatistics`, `SQLGetTypeInfo` and the schema/catalog lists are all real.
+- **Partition and inheritance children are hidden** from `SQLTables` and
+  `SQLColumns` (`ARGUS_PG_SHOW_PARTITIONS=1` restores them). A ten-year monthly
+  partitioned table is one row in a BI navigator instead of 120 — the case where
+  generic PostgreSQL ODBC makes a connection dialog unusable.
+- **atttypmod is decoded**, so `varchar(20)` reports column size 20 and
+  `numeric(12,3)` reports precision 12 / scale 3 rather than driver defaults.
+- **PostgreSQL dialect** with every `{fn …}` entry executed against a live
+  PostgreSQL 16 and its value checked
+  (`tests/integration/test_postgres_escapes.c`). `ROUND`/`TRUNCATE` cast to
+  `numeric` because PostgreSQL has no two-argument form for `double precision`;
+  `WEEK` is deliberately not advertised because `extract(week)` is ISO-8601 and
+  would return wrong week numbers for ODBC's definition.
+- TLS maps `SSL`/`SSLVerify` onto `sslmode` (`disable` / `require` /
+  `verify-full`); `AUTHMECH=KERBEROS` uses libpq's own GSSAPI/SSPI;
+  `QueryTimeout` becomes a server-side `statement_timeout`.
+- An absent `DATABASE` connects to `postgres` rather than failing on the
+  literal `default` the ODBC layer substitutes.
+- `ARGUS_MAX_BACKENDS` raised to 24, and a backend dropped for want of a slot is
+  now logged instead of vanishing silently.
+- Tests: `tests/unit/test_postgres_types.c`,
+  `tests/integration/test_postgres_{connect,query,escapes}.c`, a `postgres`
+  compose service and its seed, and `libpq` added to all three CI platforms.
+  `tests/integration/test_bi_escapes.c` gained `BI_UID`/`BI_PWD`/`BI_TABLE`/
+  `BI_TABLE2`/`BI_JOIN_COL`/`BI_TEXT_COL`/`BI_TEXT_VAL` so the shared probe runs
+  on any engine (defaults unchanged, so Trino runs exactly as before).
+
 ## [0.6.0] — 2026-08-24
 
 Everything below ships in 0.6.0 (continues the v0.5.x line — the v0.1–v0.5.9 tags predate this changelog's revival).

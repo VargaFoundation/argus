@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  Inherits Tableau's PostgreSQL91Dialect: with base set, every function and
+  property defaults to the base dialect's implementation.
+
+  9.1 rather than a later PostgreSQL base on purpose. Greenplum 6 is built on
+  PostgreSQL 9.4 and Greenplum 7 on 12, so a base that assumes anything newer
+  would generate SQL the oldest supported engine rejects. Everything Tableau
+  needs from a PostgreSQL dialect exists in 9.1.
+
+  See connectors/tableau/README.md for why a base dialect is preferred here over
+  a complete definition, and run TDVT after a Tableau upgrade — the SDK warns
+  that base dialects can change between versions. Override individual functions
+  below only where PostgreSQL genuinely differs; never to work around the driver,
+  which generates no SQL of its own.
+-->
+<dialect name='ArgusPostgresDialect'
+         class='argus_postgres'
+         base='PostgreSQL91Dialect'
+         version='18.1'>
+</dialect>

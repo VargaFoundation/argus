@@ -22,11 +22,11 @@
     } else if (authentication == "auth-integrated") {
         params["AuthMech"] = "KERBEROS";
 
-        var krbService = attr["krbservicename"];
+        var krbService = attr["v-krbservicename"];
         if (krbService) {
             params["KrbServiceName"] = krbService;
         }
-        var krbHost = attr["krbhostfqdn"];
+        var krbHost = attr["v-krbhostfqdn"];
         if (krbHost) {
             params["KrbHostFQDN"] = krbHost;
         }

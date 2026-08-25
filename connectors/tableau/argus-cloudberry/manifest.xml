@@ -1,0 +1,91 @@
+<?xml version='1.0' encoding='utf-8' ?>
+
+<!--
+  Argus ODBC — Tableau connector for the Apache Cloudberry backend.
+
+  Apache Cloudberry, a fork of Greenplum 7. Same catalog behaviour as the
+  Greenplum connector; separate so SQL_DBMS_NAME and the connector name say
+  what the user is actually connected to.
+
+  Each customization states a fact about the driver or the engine. If one has to
+  paper over what SQLGetInfo reports, the bug is in the driver, not here. Several
+  of the suppressions the other Argus connectors carry are absent here, and that
+  is the point: the PostgreSQL family has the features they suppress.
+-->
+<connector-plugin class='argus_cloudberry'
+                  superclass='odbc'
+                  plugin-version='0.1.0'
+                  name='Argus (Apache Cloudberry)'
+                  version='18.1'
+                  min-version-tableau='2020.4'>
+
+  <vendor-information>
+    <company name="Varga Foundation"/>
+    <support-link url="https://github.com/VargaFoundation/argus/issues"/>
+    <driver-download-link url="https://github.com/VargaFoundation/argus/releases"/>
+  </vendor-information>
+
+  <connection-customization class="argus_cloudberry" enabled="true" version="10.0">
+    <vendor name="Varga Foundation"/>
+    <driver name="Argus ODBC Driver"/>
+    <customizations>
+      <!-- PostgreSQL spells top-N as LIMIT. -->
+      <customization name="CAP_QUERY_TOP_N" value="yes"/>
+      <customization name="CAP_QUERY_TOPSTYLE_LIMIT" value="yes"/>
+      <customization name="CAP_QUERY_TOPSTYLE_TOP" value="no"/>
+      <customization name="CAP_QUERY_TOPSTYLE_ROWNUM" value="no"/>
+      <customization name="CAP_QUERY_SUBQUERIES" value="yes"/>
+      <customization name="CAP_QUERY_GROUP_BY_DEGREE" value="yes"/>
+      <customization name="CAP_QUERY_WHERE_FALSE_METADATA" value="yes"/>
+      <customization name="CAP_QUERY_TOP_0_METADATA" value="yes"/>
+
+      <!--
+        Temporary tables are left off, and this is a deliberate asymmetry
+        rather than a statement about the engine. Apache Cloudberry supports both
+        CREATE TEMP TABLE and SELECT INTO, and turning them on would let
+        Tableau materialise large custom-SQL joins server-side. But neither
+        could be run through TDVT here, and the two failure modes are not
+        symmetric: an untested "no" costs an optimisation, an untested "yes"
+        breaks a workbook at refresh time. Enable after a TDVT run.
+      -->
+      <customization name="CAP_CREATE_TEMP_TABLES" value="no"/>
+      <customization name="CAP_SELECT_INTO" value="no"/>
+      <customization name="CAP_SELECT_TOP_INTO" value="no"/>
+
+      <!--
+        Transactions are real here. The driver reports SQL_TXN_CAPABLE =
+        SQL_TC_ALL, SQL_ATTR_AUTOCOMMIT changes behaviour and SQLEndTran
+        commits or rolls back, so the suppressions the other Argus connectors
+        carry would be telling Tableau to avoid something that works.
+      -->
+      <customization name="CAP_ODBC_TRANSACTIONS_SUPPRESS_AUTO_COMMIT" value="no"/>
+      <customization name="CAP_ODBC_TRANSACTIONS_SUPPRESS_EXPLICIT_COMMIT" value="no"/>
+
+      <!-- SQLPrepare is still client-side: parameters are rendered as literals.
+           SQLDescribeParam does answer from a server-side Describe, but that is
+           metadata, not execution. -->
+      <customization name="CAP_ODBC_METADATA_SUPPRESS_PREPARED_QUERY" value="yes"/>
+      <customization name="CAP_ODBC_CONNECTION_STATE_VERIFY_PROBE_PREPARED_QUERY" value="no"/>
+
+      <!-- SQLStatistics and SQLForeignKeys return real data from pg_catalog,
+           so Tableau should use them: they are how it discovers join keys and
+           table cardinality. -->
+      <customization name="CAP_ODBC_METADATA_SUPPRESS_SQLSTATISTICS_API" value="no"/>
+      <customization name="CAP_ODBC_METADATA_SUPPRESS_SQLFOREIGNKEYS_API" value="no"/>
+
+      <!--
+        Keep Tableau off its own information_schema queries. The driver's
+        SQLTables is the one that hides partition children and system schemas;
+        a direct information_schema scan would put every one of them back in
+        front of the user.
+      -->
+      <customization name="CAP_ODBC_SUPPRESS_INFO_SCHEMA_TABLES" value="yes"/>
+      <customization name="CAP_ODBC_SUPPRESS_INFO_SCHEMA_STORED_PROCS" value="yes"/>
+    </customizations>
+  </connection-customization>
+
+  <connection-fields file='connectionFields.xml'/>
+  <connection-metadata file='connectionMetadata.xml'/>
+  <connection-resolver file='connectionResolver.tdr'/>
+  <dialect file='dialect.tdd'/>
+</connector-plugin>

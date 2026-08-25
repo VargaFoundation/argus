@@ -14,12 +14,6 @@
   <field name="port" label="Port" value-type="string" category="endpoint"
          default-value="8080"/>
 
-  <!-- Trino addresses tables as catalog.schema.table. Tableau's "database" is
-       the catalog; the schema is chosen in the object picker afterwards (see
-       connectionMetadata.xml). -->
-  <field name="database" label="Catalog" value-type="string" category="general"
-         placeholder="e.g. hive"/>
-
   <field name="authentication" label="Authentication" value-type="selection"
          category="authentication" default-value="auth-none">
     <selection-group>

@@ -148,13 +148,23 @@ and Flink) through a connector Microsoft is not retiring.
 ### Tableau
 
 Use the `.taco` where one exists — Trino, Hive (also Spark and Flink), Impala,
-StarRocks/Doris/MySQL, and BigQuery. See
+StarRocks/Doris/MySQL, BigQuery, PostgreSQL, Greenplum and Apache Cloudberry. See
 [connectors/tableau/README.md](../connectors/tableau/README.md) for the full
 list, the build, and the signing constraint (a `.taco` is a JAR: public-CA
 code-signing certificate plus a mandatory timestamp).
 
 ClickHouse is reached with `BACKEND=mysql` but is **not** covered by the
 `argus-mysql` connector: its SQL is not MySQL's, so use generic ODBC for it.
+
+The three PostgreSQL-family connectors differ from the others in what they do
+*not* suppress. Transactions, `SQLStatistics` and `SQLForeignKeys` are real on
+these backends, so Tableau is told to use them — it discovers join keys and
+table cardinality through the last two. They also enable both namespace levels
+(a database is the catalog, a schema is the schema), unlike the MySQL-wire
+connector where a database is the only level there is. Temporary tables are
+left off despite PostgreSQL supporting them, because that customization could
+not be run through TDVT here and an untested "yes" breaks a workbook at refresh
+time where an untested "no" only forgoes an optimisation.
 
 Generic **Other Databases (ODBC)** works and is a reasonable fallback for
 backends with no `.taco` yet, but Tableau

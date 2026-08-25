@@ -1,5 +1,6 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
+#include "argus/log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -81,6 +82,20 @@ static SQLRETURN catalog_dispatch(argus_stmt_t *stmt)
     return SQL_SUCCESS;
 }
 
+/* True when the argument is present and exactly `want`. A NULL pointer is
+ * "omitted" and never matches: ODBC distinguishes an absent argument (no
+ * filter) from an empty one (no value), and SQLTables' enumeration forms are
+ * defined in terms of the empty string. */
+static bool argus_arg_is(const SQLCHAR *arg, SQLSMALLINT len, const char *want)
+{
+    if (!arg) return false;
+    size_t n = (len == SQL_NTS) ? strlen((const char *)arg) : (size_t)len;
+    return n == strlen(want) && memcmp(arg, want, n) == 0;
+}
+
+static SQLRETURN catalog_delegate(argus_stmt_t *stmt, const char *what);
+static SQLRETURN catalog_failed(argus_stmt_t *stmt, const char *what);
+
 /* ── ODBC API: SQLTables ─────────────────────────────────────── */
 
 static SQLRETURN sqltables_impl(
@@ -104,6 +119,41 @@ static SQLRETURN sqltables_impl(
 
     if (!dbc->backend->get_tables) {
         return argus_set_not_implemented(&stmt->diag, "SQLTables");
+    }
+
+    /*
+     * SQLTables' three enumeration forms.
+     *
+     * ODBC overloads SQLTables: "%" in exactly one argument with the others
+     * given as *empty strings* (not NULL — an omitted argument means "no
+     * filter", an empty one means "no value") asks for the list of catalogs or
+     * of schemas rather than for tables. Power BI's hierarchical navigator and
+     * Tableau's schema picker both open with one of these.
+     *
+     * Every backend has implemented get_catalogs and get_schemas since the
+     * vtable was written, and nothing ever called them: the special cases fell
+     * through to get_tables, so asking for the catalog list returned the table
+     * list. Routing them is the whole fix.
+     */
+    {
+        bool cat_pct = argus_arg_is(CatalogName, NameLength1, "%");
+        bool sch_pct = argus_arg_is(SchemaName,  NameLength2, "%");
+        bool cat_empty = argus_arg_is(CatalogName, NameLength1, "");
+        bool sch_empty = argus_arg_is(SchemaName,  NameLength2, "");
+        bool tab_empty = argus_arg_is(TableName,   NameLength3, "");
+
+        if (cat_pct && sch_empty && tab_empty && dbc->backend->get_catalogs) {
+            if (dbc->backend->get_catalogs(dbc->backend_conn, &stmt->op) != 0)
+                return catalog_failed(stmt, "SQLTables (catalog list)");
+            return catalog_delegate(stmt, "SQLTables (catalog list)");
+        }
+
+        if (sch_pct && cat_empty && tab_empty && dbc->backend->get_schemas) {
+            if (dbc->backend->get_schemas(dbc->backend_conn, NULL, NULL,
+                                          &stmt->op) != 0)
+                return catalog_failed(stmt, "SQLTables (schema list)");
+            return catalog_delegate(stmt, "SQLTables (schema list)");
+        }
     }
 
     SQLULEN mid = stmt->metadata_id;
@@ -618,6 +668,49 @@ static SQLRETURN sqlstatistics_impl(
     return SQL_SUCCESS;
 }
 
+/*
+ * Shared tail for a catalog function that a backend implements.
+ *
+ * Mirrors what SQLTables does: pull the column metadata through, drain the
+ * rows into the statement's cache, and mark the fetch started so SQLFetch
+ * walks the cache instead of asking the backend for a second (empty) batch.
+ * These result sets are small by construction — one row per constraint column,
+ * per privilege, per procedure argument — so eager fetching costs nothing and
+ * keeps every one of them on the same path.
+ */
+static SQLRETURN catalog_delegate(argus_stmt_t *stmt, const char *what)
+{
+    argus_dbc_t *dbc = stmt->dbc;
+
+    SQLRETURN ret = catalog_dispatch(stmt);
+    if (ret != SQL_SUCCESS) return ret;
+
+    if (dbc->backend->fetch_results) {
+        int ncols = 0;
+        dbc->backend->fetch_results(dbc->backend_conn, stmt->op, 10000,
+                                    &stmt->row_cache, stmt->columns, &ncols);
+        if (ncols > 0 && !stmt->metadata_fetched) {
+            stmt->num_cols = ncols;
+            stmt->metadata_fetched = true;
+        }
+        stmt->row_cache.exhausted = true;
+        stmt->fetch_started = true;
+    }
+    ARGUS_LOG_TRACE("%s: %zu row(s)", what, stmt->row_cache.num_rows);
+    return SQL_SUCCESS;
+}
+
+/* The error path shared by the same set of functions. */
+static SQLRETURN catalog_failed(argus_stmt_t *stmt, const char *what)
+{
+    if (stmt->diag.count == 0) {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "[Argus] %s failed", what);
+        argus_set_error(&stmt->diag, "HY000", msg, 0);
+    }
+    return SQL_ERROR;
+}
+
 /* ── Helper: setup standard SQLSpecialColumns result metadata ── */
 
 static void setup_special_columns_metadata(argus_stmt_t *stmt)
@@ -661,18 +754,40 @@ static SQLRETURN sqlspecialcolumns_impl(
     SQLUSMALLINT Scope,
     SQLUSMALLINT Nullable)
 {
-    (void)IdentifierType;
-    (void)CatalogName; (void)NameLength1;
-    (void)SchemaName;  (void)NameLength2;
-    (void)TableName;   (void)NameLength3;
-    (void)Scope;       (void)Nullable;
-
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
     argus_stmt_reset(stmt);
 
+    argus_dbc_t *dbc = stmt->dbc;
+    if (dbc && dbc->connected && dbc->backend && dbc->backend->get_special_columns) {
+        SQLULEN mid = stmt->metadata_id;
+        char *cat = catalog_arg_dup(CatalogName, NameLength1, mid);
+        char *sch = catalog_arg_dup(SchemaName,  NameLength2, mid);
+        char *tab = catalog_arg_dup(TableName,   NameLength3, mid);
+
+        int rc = dbc->backend->get_special_columns(dbc->backend_conn,
+                                                   IdentifierType,
+                                                   cat, sch, tab,
+                                                   Scope, Nullable, &stmt->op);
+        free(cat); free(sch); free(tab);
+
+        if (rc != 0) return catalog_failed(stmt, "SQLSpecialColumns");
+        return catalog_delegate(stmt, "SQLSpecialColumns");
+    }
+
+    (void)IdentifierType;
+    (void)CatalogName; (void)NameLength1;
+    (void)SchemaName;  (void)NameLength2;
+    (void)TableName;   (void)NameLength3;
+    (void)Scope;       (void)Nullable;
+
+    /* No hook: an engine with no such objects, and the empty result set with
+     * the right column shape is the correct answer. fetch_started matters —
+     * on a connected statement without it, SQLFetch would go to the backend
+     * with a NULL operation handle and fail instead of reporting
+     * SQL_NO_DATA. */
     stmt->executed = true;
     stmt->row_cache.exhausted = true;
     stmt->fetch_started = true;
@@ -816,6 +931,33 @@ static SQLRETURN sqlforeignkeys_impl(
     SQLCHAR   *FKSchemaName,  SQLSMALLINT NameLength5,
     SQLCHAR   *FKTableName,   SQLSMALLINT NameLength6)
 {
+    argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
+    if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
+
+    argus_diag_clear(&stmt->diag);
+    argus_stmt_reset(stmt);
+
+    argus_dbc_t *dbc = stmt->dbc;
+    if (dbc && dbc->connected && dbc->backend && dbc->backend->get_foreign_keys) {
+        SQLULEN mid = stmt->metadata_id;
+        char *pk_cat = catalog_arg_dup(PKCatalogName, NameLength1, mid);
+        char *pk_sch = catalog_arg_dup(PKSchemaName,  NameLength2, mid);
+        char *pk_tab = catalog_arg_dup(PKTableName,   NameLength3, mid);
+        char *fk_cat = catalog_arg_dup(FKCatalogName, NameLength4, mid);
+        char *fk_sch = catalog_arg_dup(FKSchemaName,  NameLength5, mid);
+        char *fk_tab = catalog_arg_dup(FKTableName,   NameLength6, mid);
+
+        int rc = dbc->backend->get_foreign_keys(dbc->backend_conn,
+                                                pk_cat, pk_sch, pk_tab,
+                                                fk_cat, fk_sch, fk_tab,
+                                                &stmt->op);
+        free(pk_cat); free(pk_sch); free(pk_tab);
+        free(fk_cat); free(fk_sch); free(fk_tab);
+
+        if (rc != 0) return catalog_failed(stmt, "SQLForeignKeys");
+        return catalog_delegate(stmt, "SQLForeignKeys");
+    }
+
     (void)PKCatalogName; (void)NameLength1;
     (void)PKSchemaName;  (void)NameLength2;
     (void)PKTableName;   (void)NameLength3;
@@ -823,14 +965,13 @@ static SQLRETURN sqlforeignkeys_impl(
     (void)FKSchemaName;  (void)NameLength5;
     (void)FKTableName;   (void)NameLength6;
 
-    argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
-    if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
-
-    argus_diag_clear(&stmt->diag);
-    argus_stmt_reset(stmt);
-
+    /* No hook: the engine has no foreign keys, and an empty result set with
+     * the right shape is the correct answer. fetch_started matters here — on a
+     * connected statement without it, SQLFetch would go to the backend with a
+     * NULL operation handle and fail instead of reporting SQL_NO_DATA. */
     stmt->executed = true;
     stmt->row_cache.exhausted = true;
+    stmt->fetch_started = true;
     setup_foreign_keys_metadata(stmt);
 
     return SQL_SUCCESS;
@@ -876,18 +1017,39 @@ static SQLRETURN sqlprocedures_impl(
     SQLCHAR   *SchemaName,  SQLSMALLINT NameLength2,
     SQLCHAR   *ProcName,    SQLSMALLINT NameLength3)
 {
-    (void)CatalogName; (void)NameLength1;
-    (void)SchemaName;  (void)NameLength2;
-    (void)ProcName;    (void)NameLength3;
-
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
     argus_stmt_reset(stmt);
 
+    argus_dbc_t *dbc = stmt->dbc;
+    if (dbc && dbc->connected && dbc->backend && dbc->backend->get_procedures) {
+        SQLULEN mid = stmt->metadata_id;
+        char *cat  = catalog_arg_dup(CatalogName, NameLength1, mid);
+        char *sch  = catalog_arg_dup(SchemaName,  NameLength2, mid);
+        char *proc = catalog_arg_dup(ProcName,    NameLength3, mid);
+
+        int rc = dbc->backend->get_procedures(dbc->backend_conn,
+                                              cat, sch, proc, &stmt->op);
+        free(cat); free(sch); free(proc);
+
+        if (rc != 0) return catalog_failed(stmt, "SQLProcedures");
+        return catalog_delegate(stmt, "SQLProcedures");
+    }
+
+    (void)CatalogName; (void)NameLength1;
+    (void)SchemaName;  (void)NameLength2;
+    (void)ProcName;    (void)NameLength3;
+
+    /* No hook: an engine with no such objects, and the empty result set with
+     * the right column shape is the correct answer. fetch_started matters —
+     * on a connected statement without it, SQLFetch would go to the backend
+     * with a NULL operation handle and fail instead of reporting
+     * SQL_NO_DATA. */
     stmt->executed = true;
     stmt->row_cache.exhausted = true;
+    stmt->fetch_started = true;
     setup_procedures_metadata(stmt);
 
     return SQL_SUCCESS;
@@ -939,19 +1101,43 @@ static SQLRETURN sqlprocedurecolumns_impl(
     SQLCHAR   *ProcName,    SQLSMALLINT NameLength3,
     SQLCHAR   *ColumnName,  SQLSMALLINT NameLength4)
 {
-    (void)CatalogName; (void)NameLength1;
-    (void)SchemaName;  (void)NameLength2;
-    (void)ProcName;    (void)NameLength3;
-    (void)ColumnName;  (void)NameLength4;
-
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
     argus_stmt_reset(stmt);
 
+    argus_dbc_t *dbc = stmt->dbc;
+    if (dbc && dbc->connected && dbc->backend &&
+        dbc->backend->get_procedure_columns) {
+        SQLULEN mid = stmt->metadata_id;
+        char *cat  = catalog_arg_dup(CatalogName, NameLength1, mid);
+        char *sch  = catalog_arg_dup(SchemaName,  NameLength2, mid);
+        char *proc = catalog_arg_dup(ProcName,    NameLength3, mid);
+        char *col  = catalog_arg_dup(ColumnName,  NameLength4, mid);
+
+        int rc = dbc->backend->get_procedure_columns(dbc->backend_conn,
+                                                     cat, sch, proc, col,
+                                                     &stmt->op);
+        free(cat); free(sch); free(proc); free(col);
+
+        if (rc != 0) return catalog_failed(stmt, "SQLProcedureColumns");
+        return catalog_delegate(stmt, "SQLProcedureColumns");
+    }
+
+    (void)CatalogName; (void)NameLength1;
+    (void)SchemaName;  (void)NameLength2;
+    (void)ProcName;    (void)NameLength3;
+    (void)ColumnName;  (void)NameLength4;
+
+    /* No hook: an engine with no such objects, and the empty result set with
+     * the right column shape is the correct answer. fetch_started matters —
+     * on a connected statement without it, SQLFetch would go to the backend
+     * with a NULL operation handle and fail instead of reporting
+     * SQL_NO_DATA. */
     stmt->executed = true;
     stmt->row_cache.exhausted = true;
+    stmt->fetch_started = true;
     setup_procedure_columns_metadata(stmt);
 
     return SQL_SUCCESS;
@@ -996,18 +1182,40 @@ static SQLRETURN sqltableprivileges_impl(
     SQLCHAR   *SchemaName,  SQLSMALLINT NameLength2,
     SQLCHAR   *TableName,   SQLSMALLINT NameLength3)
 {
-    (void)CatalogName; (void)NameLength1;
-    (void)SchemaName;  (void)NameLength2;
-    (void)TableName;   (void)NameLength3;
-
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
     argus_stmt_reset(stmt);
 
+    argus_dbc_t *dbc = stmt->dbc;
+    if (dbc && dbc->connected && dbc->backend &&
+        dbc->backend->get_table_privileges) {
+        SQLULEN mid = stmt->metadata_id;
+        char *cat = catalog_arg_dup(CatalogName, NameLength1, mid);
+        char *sch = catalog_arg_dup(SchemaName,  NameLength2, mid);
+        char *tab = catalog_arg_dup(TableName,   NameLength3, mid);
+
+        int rc = dbc->backend->get_table_privileges(dbc->backend_conn,
+                                                    cat, sch, tab, &stmt->op);
+        free(cat); free(sch); free(tab);
+
+        if (rc != 0) return catalog_failed(stmt, "SQLTablePrivileges");
+        return catalog_delegate(stmt, "SQLTablePrivileges");
+    }
+
+    (void)CatalogName; (void)NameLength1;
+    (void)SchemaName;  (void)NameLength2;
+    (void)TableName;   (void)NameLength3;
+
+    /* No hook: an engine with no such objects, and the empty result set with
+     * the right column shape is the correct answer. fetch_started matters —
+     * on a connected statement without it, SQLFetch would go to the backend
+     * with a NULL operation handle and fail instead of reporting
+     * SQL_NO_DATA. */
     stmt->executed = true;
     stmt->row_cache.exhausted = true;
+    stmt->fetch_started = true;
     setup_table_privileges_metadata(stmt);
 
     return SQL_SUCCESS;
@@ -1054,19 +1262,43 @@ static SQLRETURN sqlcolumnprivileges_impl(
     SQLCHAR   *TableName,   SQLSMALLINT NameLength3,
     SQLCHAR   *ColumnName,  SQLSMALLINT NameLength4)
 {
-    (void)CatalogName; (void)NameLength1;
-    (void)SchemaName;  (void)NameLength2;
-    (void)TableName;   (void)NameLength3;
-    (void)ColumnName;  (void)NameLength4;
-
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
     argus_stmt_reset(stmt);
 
+    argus_dbc_t *dbc = stmt->dbc;
+    if (dbc && dbc->connected && dbc->backend &&
+        dbc->backend->get_column_privileges) {
+        SQLULEN mid = stmt->metadata_id;
+        char *cat = catalog_arg_dup(CatalogName, NameLength1, mid);
+        char *sch = catalog_arg_dup(SchemaName,  NameLength2, mid);
+        char *tab = catalog_arg_dup(TableName,   NameLength3, mid);
+        char *col = catalog_arg_dup(ColumnName,  NameLength4, mid);
+
+        int rc = dbc->backend->get_column_privileges(dbc->backend_conn,
+                                                     cat, sch, tab, col,
+                                                     &stmt->op);
+        free(cat); free(sch); free(tab); free(col);
+
+        if (rc != 0) return catalog_failed(stmt, "SQLColumnPrivileges");
+        return catalog_delegate(stmt, "SQLColumnPrivileges");
+    }
+
+    (void)CatalogName; (void)NameLength1;
+    (void)SchemaName;  (void)NameLength2;
+    (void)TableName;   (void)NameLength3;
+    (void)ColumnName;  (void)NameLength4;
+
+    /* No hook: an engine with no such objects, and the empty result set with
+     * the right column shape is the correct answer. fetch_started matters —
+     * on a connected statement without it, SQLFetch would go to the backend
+     * with a NULL operation handle and fail instead of reporting
+     * SQL_NO_DATA. */
     stmt->executed = true;
     stmt->row_cache.exhausted = true;
+    stmt->fetch_started = true;
     setup_column_privileges_metadata(stmt);
 
     return SQL_SUCCESS;

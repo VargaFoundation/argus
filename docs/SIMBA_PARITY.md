@@ -81,15 +81,60 @@ confirming it is the shared SimbaEngine core, not a per-data-store surface.
 
 ## Note on catalog "completeness"
 
-The empty `SQLForeignKeys`, `SQLProcedures`, `SQLColumnPrivileges`,
-`SQLTablePrivileges`, and `SQLSpecialColumns` results are **correct** for Argus's
-target engines, not a deficiency: Trino, Hive, Impala, Spark, Pinot, Druid and
-BigQuery have no foreign keys, stored procedures, per-column privileges in the
-ODBC sense, or row-version/rowid columns. Simba's own ODBC drivers for these
-same engines return empty here too. A driver must not invent metadata the engine
-does not have, so these stay empty by design; `SQLTables`, `SQLColumns`,
-`SQLGetTypeInfo` and `SQLPrimaryKeys` (where the engine has keys) carry the real
-data.
+`SQLForeignKeys`, `SQLProcedures`, `SQLProcedureColumns`, `SQLColumnPrivileges`,
+`SQLTablePrivileges` and `SQLSpecialColumns` are **answered where the engine has
+the objects and empty where it does not** — the driver reports what is there
+rather than a fixed answer either way.
+
+Empty is the correct result for Trino, Hive, Impala, Spark, Pinot, Druid and
+BigQuery: they have no foreign keys, no stored procedures, no per-column
+privileges in the ODBC sense and no row-version or rowid columns. Simba's own
+drivers for those engines return empty here too, and a driver must not invent
+metadata a BI tool would then trust.
+
+The PostgreSQL family has all of them, and reports them from `pg_catalog`:
+foreign keys with their update and delete rules and deferrability, functions and
+their argument modes and types, table and column privileges expanded through
+role membership, and a best-row-id drawn from the primary key or a
+fully-NOT-NULL unique index. Two deliberate omissions there, for the same reason
+the empty results are deliberate elsewhere: `ctid` is **not** offered as a
+`SQL_BEST_ROWID` fallback (it is invalidated by UPDATE and VACUUM FULL, so it
+does not identify a row for any scope ODBC defines), and `SQL_PROCEDURES` still
+answers `"N"` because that info type also promises the driver accepts ODBC's
+`{call ...}` syntax, which `escape.c` does not yet translate.
+
+Transactions moved the same way. `SQL_TXN_CAPABLE` is per-backend: `SQL_TC_NONE`
+for the analytics engines, which have no transactions, and `SQL_TC_ALL` for the
+PostgreSQL family, where `SQL_ATTR_AUTOCOMMIT` and `SQLEndTran` do real work and
+a pooled connection is rolled back and `DISCARD ALL`-ed before it is reused.
+`SQL_TXN_READ_UNCOMMITTED` is not advertised even though PostgreSQL accepts the
+syntax: it silently gives READ COMMITTED, so claiming it would be a promise the
+server does not keep.
+
+## PostgreSQL: measured against psqlODBC
+
+The PostgreSQL-family backends have a directly comparable incumbent, so they
+were measured against it rather than argued about. Same server, same query,
+same client loop, same driver manager; 1.5 M rows × 9 columns; best of three.
+
+| | rows/s | peak RSS |
+|---|---|---|
+| **Argus** | **727 000** | **50 MB** |
+| psqlODBC, defaults | 391 000 | 629 MB |
+| psqlODBC, `UseDeclareFetch=1` | 352 000–378 000 | 12–15 MB |
+
+~1.9× the throughput in every psqlODBC configuration, with memory flat in the
+size of the result. psqlODBC reaches bounded memory only with
+`UseDeclareFetch=1`, which is off by default.
+
+The same exercise killed a planned feature. A `COPY … (FORMAT binary)` fetch
+path was measured before being built: against raw libpq it is 9% faster than
+the single-row mode the driver already uses (1 289 k vs 1 179 k rows/s) and
+33% *larger* on the wire for a typical schema, while the driver's own gap to
+that ceiling — the row cache and ODBC conversion — is untouched by it. Nine
+percent of the protocol half, in exchange for NBASE numeric decoding and
+non-tuple-aligned COPY buffers, is a bad trade. The numbers and the reasoning
+are in `tests/bench/README.md`.
 
 ## Bottom line
 
