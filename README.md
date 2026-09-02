@@ -135,6 +135,27 @@ inspection of real Simba binaries and a live Tableau TDVT run, is in
 - **Arrow-native.** The same backends are exposed through an Arrow ADBC driver,
   and Arrow Flight SQL is a first-class backend.
 
+## Verifying a download
+
+Every release ships a `SHA256SUMS` manifest signed with the Argus release key
+(`KEYS` at the repo root, fingerprint `2384 A3E9 EF70 FE47 AAC9  205A 8AB3 E9B5
+23E4 61A7`):
+
+```bash
+gpg --import KEYS
+gpg --verify SHA256SUMS.asc SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+The `.rpm` also carries an embedded signature (`sudo rpm --import KEYS && rpm -K
+argus-odbc-*.rpm`), and the `.deb` and Linux tarball ship a detached
+`.asc` alongside them. The Windows installer is Authenticode-signed — Windows
+verifies it on launch, or check it explicitly:
+
+```powershell
+Get-AuthenticodeSignature argus-odbc-*-windows-x64-installer.exe
+```
+
 ## Building
 
 See [docs/BUILDING.md](docs/BUILDING.md) for the full matrix.

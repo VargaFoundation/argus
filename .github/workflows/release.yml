@@ -12,6 +12,13 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
 
+    # Package signing runs only when the GPG secret is configured. Like the
+    # Windows Azure signing and the Apple notarization, the steps below are
+    # continue-on-error, so a missing or expired key degrades to unsigned
+    # packages instead of blocking the release.
+    env:
+      GPG_SIGN_ENABLED: ${{ secrets.GPG_PRIVATE_KEY }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -54,12 +61,6 @@ jobs:
           cp README.md staging/argus-odbc/
           tar -czf argus-odbc-${VERSION}-linux-x64.tar.gz -C staging argus-odbc
 
-      - name: Upload tar.gz
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-linux
-          path: argus-odbc-*-linux-x64.tar.gz
-
       - name: Install RPM tools
         run: sudo apt-get -o Acquire::Retries=5 install -y rpm
 
@@ -69,11 +70,70 @@ jobs:
       - name: Package .rpm
         run: bash packaging/build-rpm.sh "${GITHUB_REF_NAME#v}"
 
+      - name: Import GPG signing key
+        if: env.GPG_SIGN_ENABLED != ''
+        continue-on-error: true
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          umask 077
+          printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/gpg-pass"
+          gpg --list-secret-keys --keyid-format=long
+
+      # rpmsign embeds a V4 RSA header signature. That is what `rpm -K` and
+      # dnf/yum's gpgcheck validate; the header carries the payload digest, so
+      # signing the header covers the payload too.
+      - name: Sign .rpm
+        if: env.GPG_SIGN_ENABLED != ''
+        continue-on-error: true
+        env:
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          cat > "$HOME/.rpmmacros" <<MACROS
+          %_gpg_name $GPG_KEY_ID
+          %__gpg /usr/bin/gpg
+          %_gpg_digest_algo sha256
+          %__gpg_sign_cmd %{__gpg} gpg --batch --no-verbose --no-armor --pinentry-mode loopback --passphrase-file $RUNNER_TEMP/gpg-pass --digest-algo sha256 -u "%{_gpg_name}" -sbo %{__signature_filename} %{__plaintext_filename}
+          MACROS
+          rpmsign --addsign argus-odbc-*.rpm
+          gpg --armor --export "$GPG_KEY_ID" > "$RUNNER_TEMP/argus-pub.asc"
+          sudo rpm --import "$RUNNER_TEMP/argus-pub.asc"
+          rpm -K -v argus-odbc-*.rpm
+
+      # Debian dropped dpkg-sig after bullseye and apt has never verified
+      # signatures embedded in a .deb -- repository InRelease signing is the
+      # supported trust path there. For a direct download we ship a detached
+      # signature beside each artifact instead, verifiable with `gpg --verify`.
+      - name: Sign .deb and tarball (detached)
+        if: env.GPG_SIGN_ENABLED != ''
+        continue-on-error: true
+        env:
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          for f in argus-odbc_*.deb argus-odbc-*-linux-x64.tar.gz; do
+            gpg --batch --yes --pinentry-mode loopback \
+                --passphrase-file "$RUNNER_TEMP/gpg-pass" \
+                -u "$GPG_KEY_ID" --armor --detach-sign "$f"
+            gpg --verify "$f.asc" "$f"
+          done
+
+      - name: Upload tar.gz
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: |
+            argus-odbc-*-linux-x64.tar.gz
+            argus-odbc-*-linux-x64.tar.gz.asc
+
       - name: Upload .deb
         uses: actions/upload-artifact@v4
         with:
           name: release-deb
-          path: argus-odbc_*.deb
+          path: |
+            argus-odbc_*.deb
+            argus-odbc_*.deb.asc
 
       - name: Upload .rpm
         uses: actions/upload-artifact@v4
@@ -385,6 +445,33 @@ jobs:
       - name: List artifacts
         run: ls -la artifacts/
 
+      # One signed manifest covering every published file. This is the
+      # verification path that works the same on every platform, including the
+      # ones whose native signing is unavailable (an unsigned .pkg still gets a
+      # checksum a user can verify against this signature).
+      - name: Checksum and sign the manifest
+        env:
+          GPG_SIGN_ENABLED: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        continue-on-error: true
+        run: |
+          cd artifacts
+          # Checksum the payloads, not the detached signatures beside them.
+          find . -maxdepth 1 -type f ! -name '*.asc' ! -name 'SHA256SUMS*' \
+            -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS
+          cat SHA256SUMS
+          if [ -n "$GPG_SIGN_ENABLED" ]; then
+            printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+            umask 077
+            printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/gpg-pass"
+            gpg --batch --yes --pinentry-mode loopback \
+                --passphrase-file "$RUNNER_TEMP/gpg-pass" \
+                -u "$GPG_KEY_ID" --armor --detach-sign SHA256SUMS
+            gpg --verify SHA256SUMS.asc SHA256SUMS
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -397,3 +484,5 @@ jobs:
             artifacts/Argus.mez
             artifacts/Argus.pqx
             artifacts/Argus.pqx.thumbprint.txt
+            artifacts/SHA256SUMS
+            artifacts/SHA256SUMS.asc

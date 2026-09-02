@@ -22,7 +22,13 @@ first tag, then publish in this order.
   git tag; nothing is hand-edited per channel.
 - The deb/rpm scripts compute real shared-library dependencies
   (`dpkg-shlibdeps`); keep it that way when adding backends.
-- Linux artifacts must gain a detached GPG signature when the apt/yum repos
-  go live — a repo without signing is worse than none.
+- Linux artifacts are GPG-signed by the release workflow: an embedded header
+  signature in the .rpm (`rpm -K`), a detached `.asc` beside the .deb and the
+  tarball, and a signed `SHA256SUMS` covering every published file. The public
+  key is in `KEYS` at the repo root. The apt/yum repos, when they go live,
+  reuse that same key to sign their metadata.
+- Signing is gated on the `GPG_PRIVATE_KEY` secret and every step is
+  `continue-on-error`, matching the Windows and macOS signing: a missing or
+  expired key degrades to unsigned packages instead of blocking a release.
 - ARM64: macOS arm64 comes free via Homebrew on Apple Silicon; add a
   `ubuntu-24.04-arm` build job when the first Linux arm64 request lands.

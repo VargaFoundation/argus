@@ -1,0 +1,55 @@
+Argus ODBC release signing key
+==============================
+
+Release artifacts published on https://github.com/VargaFoundation/argus/releases
+are signed with the key below.
+
+    pub   rsa4096 2026-09-01 [SC] [expires: 2029-08-31]
+          2384 A3E9 EF70 FE47 AAC9  205A 8AB3 E9B5 23E4 61A7
+    uid   Varga Foundation (Argus ODBC release signing) <vdevillers76@gmail.com>
+
+Import it, then verify a download:
+
+    gpg --import KEYS
+    gpg --verify SHA256SUMS.asc SHA256SUMS
+    sha256sum -c SHA256SUMS --ignore-missing
+
+The .rpm additionally carries an embedded header signature:
+
+    sudo rpm --import KEYS
+    rpm -K -v argus-odbc-*.rpm
+
+The .deb ships a detached signature (apt verifies repository InRelease
+metadata, not signatures inside a .deb):
+
+    gpg --verify argus-odbc_*.deb.asc argus-odbc_*.deb
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQINBGqXKIcBEACdAYTg5KFhH50oeonTjDFmITc1pqgLnCQng2ueHBld73ZdYKzR
+0O17hzgNxsXB4zjleBneb2ZQ6jwkRBBOrF6Z9ayWAmztzjvdDGcOSMj2r4ra1hDx
+Udt6AjdmObkNPlP0iUAR7y/lQNTgZoerA4p01F4WOqWaMxG2CF9Dc4bnwLhE3GZO
+OH+IMhSEXwp7VN/EWhECkW9Ps9Q3+sJD2sXMqeEaoWOUtmm99BwU0j8qESz1cUVp
+AxhBJGZov2P03VU6Y9x24tlVWAAJIOeM8aqpMnr5WtzkzBV00j3+T0SO9ZFHUFuO
+bbv4kj5ycnvPCPWKVgyP3XJOuekicHmVDxuAnEj9IIJzuZJ9/JR082/K9jLPlW6A
+ia1/+EZZPmzoKpicgmjSStE1IQjnmRfalh6H1jRVFEbcKrBkEJR3yaq1beqLT2OF
+NrVOdgppZEh13DeFelMapCCg5Du4qP8ZrmdkwlcvYvRuSJ1wNcpHj+0NLzyeqxw9
+JCTYjlKC3k8X4kWxQFy7pZENFCeFIeI67zVdO7+O+6+3j+s+/k3a0f1r6GoT3ahS
+kHh6/+8IAxWEF76xNEBzce72uJTEfR+fSVFDvrLzLFVTnSTlCMs84COv0US1uhip
+ZSEjaZiQAT5X5GVkJhaG+5Yz/dy6L7SpqJpxgABddFjlClAAZVuJpd6tjQARAQAB
+tEZWYXJnYSBGb3VuZGF0aW9uIChBcmd1cyBPREJDIHJlbGVhc2Ugc2lnbmluZykg
+PHZkZXZpbGxlcnM3NkBnbWFpbC5jb20+iQJUBBMBCgA+FiEEI4Sj6e9w/keqySBa
+irPptSPkYacFAmqXKIcCGwMFCQWjmoAFCwkIBwIGFQoJCAsCBBYCAwECHgECF4AA
+CgkQirPptSPkYafk+w/9FEgrVQb+k2emWQHMzT8uETdf7Ci17y4LxcA/xrcj4Mar
+OLWtl9G92fDQk9UFy8fjxSBIRy+JQqTq9tArduLg7CYqF3ojzDnzjkLu0coguNoW
+QpAbWXWbw64UScSgmZHcHBBdrmppqk7fLP7b/YRpddAHcDgpjL6DkrETQ+o2mlFZ
+5jKO0GTtZ0q8fwfdI4m7jCv9yHAglxM8iPrTsyYrvKtl627kN28qtPUXIsVyo6CW
+anhJdcIjjIXrjska6in4K1UsAz8lJZgs4XHTX5P+E8oLo95DqorqrHDUv4aFvxMX
+4Fir7EQxOy5FOxltki06qQ8L2BHcqmVCo0zigCMuLCOckMlGNx9bzmvgmUyCie6C
+a8r84ASV0vs2208BbrHRIbR32iz+FuHLfS2alaBKtXFqyB4BPhlpBrU54DcZUlDb
+vjEzG8A/0qIJYy4nqlP/pieDnt29wB52ExnW6J5HtNNpVrxRjJvRfy7zHCQF8gxh
+saDty+2R4MnNUjp4vk6C09nX5FttgQrUW7VfFq4UwBWZR4TnCbi8h8Sm/BMecDcW
+B01Juj6KyjOL0cL44MLpw7u3vdeZKL/BH4jpHFe2DCnrUfxxuLOdhNi8BzIHxA9P
+ZyoysbsvzUdhtK+f8QkQQAg5kbpSmBtTNfl6WXS333K5jL/1WbwRPfiykPb0Ylo=
+=JUV3
+-----END PGP PUBLIC KEY BLOCK-----
