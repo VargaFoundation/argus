@@ -140,6 +140,10 @@ static argus_diag_t *get_diag_for_handle(SQLSMALLINT handle_type,
         if (argus_valid_stmt(handle))
             return &((argus_stmt_t *)handle)->diag;
         break;
+    case SQL_HANDLE_DESC:
+        if (argus_valid_desc(handle))
+            return &((argus_desc_t *)handle)->diag;
+        break;
     }
     return NULL;
 }
@@ -162,6 +166,13 @@ static GMutex *get_mutex_for_handle(SQLSMALLINT handle_type, SQLHANDLE handle)
     case SQL_HANDLE_STMT:
         if (argus_valid_stmt(handle))
             return &((argus_stmt_t *)handle)->mutex;
+        break;
+    case SQL_HANDLE_DESC:
+        /* A descriptor shares the lock of the statement it views; an
+         * explicit one not associated with any statement has no
+         * concurrent writer. */
+        if (argus_valid_desc(handle) && ((argus_desc_t *)handle)->stmt)
+            return &((argus_desc_t *)handle)->stmt->mutex;
         break;
     }
     return NULL;

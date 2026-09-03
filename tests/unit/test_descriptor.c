@@ -298,6 +298,45 @@ static void test_explicit_descriptor_alloc_free(void **state)
     destroy_real_stmt(stmt);
 }
 
+/* The four implicit descriptors are part of the statement: SQLFreeHandle on
+ * one is HY017 (it used to free() a pointer into the statement), readable
+ * through SQLGetDiagRec on the descriptor handle, and the statement still
+ * works afterwards. */
+static void test_free_implicit_descriptor_is_hy017(void **state)
+{
+    (void)state;
+    argus_stmt_t *stmt = create_real_stmt();
+    static const SQLINTEGER attrs[] = {
+        SQL_ATTR_APP_ROW_DESC, SQL_ATTR_APP_PARAM_DESC,
+        SQL_ATTR_IMP_ROW_DESC, SQL_ATTR_IMP_PARAM_DESC,
+    };
+
+    for (size_t i = 0; i < sizeof(attrs) / sizeof(attrs[0]); i++) {
+        SQLHDESC desc = NULL;
+        assert_int_equal(SQLGetStmtAttr(stmt, attrs[i], &desc, 0, NULL),
+                         SQL_SUCCESS);
+        assert_non_null(desc);
+        assert_int_equal(SQLFreeHandle(SQL_HANDLE_DESC, desc), SQL_ERROR);
+
+        SQLCHAR sqlstate[6] = {0}, msg[128];
+        SQLINTEGER native = 0;
+        SQLSMALLINT len = 0;
+        assert_int_equal(SQLGetDiagRec(SQL_HANDLE_DESC, desc, 1, sqlstate,
+                                       &native, msg, sizeof(msg), &len),
+                         SQL_SUCCESS);
+        assert_string_equal((const char *)sqlstate, "HY017");
+    }
+
+    /* Still a live statement with intact descriptors. */
+    SQLHDESC ard = NULL;
+    assert_int_equal(SQLGetStmtAttr(stmt, SQL_ATTR_APP_ROW_DESC, &ard, 0, NULL),
+                     SQL_SUCCESS);
+    int marker = 0;
+    assert_int_equal(SQLSetDescField(ard, 1, SQL_DESC_DATA_PTR, &marker, 0),
+                     SQL_SUCCESS);
+    destroy_real_stmt(stmt);
+}
+
 /* Associating an explicit ARD must make it the statement's active row
  * descriptor: SQLGetStmtAttr then returns the explicit handle, and freeing the
  * descriptor detaches it cleanly (no dangling stmt->bindings). */
@@ -404,6 +443,7 @@ int main(void)
         cmocka_unit_test(test_get_desc_rec_no_data),
         cmocka_unit_test(test_four_descriptors_are_distinct),
         cmocka_unit_test(test_explicit_descriptor_alloc_free),
+        cmocka_unit_test(test_free_implicit_descriptor_is_hy017),
         cmocka_unit_test(test_explicit_ard_association),
         cmocka_unit_test(test_free_associated_descriptor_detaches),
         cmocka_unit_test(test_copy_desc),

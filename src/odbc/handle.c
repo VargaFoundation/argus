@@ -417,6 +417,14 @@ SQLRETURN argus_free_desc(argus_desc_t *desc)
 {
     if (!argus_valid_desc(desc)) return SQL_INVALID_HANDLE;
 
+    /* The implicit descriptors are embedded in their statement (handed out
+     * by SQLGetStmtAttr) and go away with it: ODBC answers HY017 here
+     * rather than freeing a pointer into the middle of the statement. */
+    if (!desc->is_explicit)
+        return argus_set_error(&desc->diag, "HY017",
+                               "[Argus] Invalid use of an automatically "
+                               "allocated descriptor handle", 0);
+
     /* If this descriptor is still associated with a statement as its active
      * ARD, detach it first so the statement reverts to its own implicit array
      * rather than reading freed memory. */
