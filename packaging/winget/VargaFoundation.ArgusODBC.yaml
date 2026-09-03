@@ -1,10 +1,13 @@
 # winget version manifest for the Argus ODBC driver.
 #
-# Publish: after the first tagged release, fill InstallerUrl/InstallerSha256,
-# split into the three-file layout winget-pkgs requires
-# (version/installer/defaultLocale) with `wingetcreate new <installer-url>`,
-# and open a PR against microsoft/winget-pkgs. Users then run:
+# Publish: split this singleton into the three-file layout winget-pkgs
+# requires (version/installer/defaultLocale) with
+# `wingetcreate new <installer-url>`, then open a PR against
+# microsoft/winget-pkgs. Users then run:
 #   winget install VargaFoundation.ArgusODBC
+#
+# On each release, bump PackageVersion + InstallerUrl and recompute the hash:
+#   winget hash <installer.exe>   (or: sha256sum, uppercased)
 PackageIdentifier: VargaFoundation.ArgusODBC
 PackageVersion: 0.6.0
 PackageLocale: en-US
@@ -16,9 +19,8 @@ PackageUrl: https://github.com/VargaFoundation/argus
 Installers:
   - Architecture: x64
     InstallerType: nullsoft
-    # TODO(release): real URL + SHA256 from the tagged release assets.
     InstallerUrl: https://github.com/VargaFoundation/argus/releases/download/v0.6.0/argus-odbc-0.6.0-windows-x64-installer.exe
-    InstallerSha256: REPLACE_WITH_INSTALLER_SHA256
+    InstallerSha256: B44B0862D6D0C637E333FB66691162FE0361356D6E8EB70C05A6FA0F27E00FF1
     InstallerSwitches:
       Silent: /S
       SilentWithProgress: /S
