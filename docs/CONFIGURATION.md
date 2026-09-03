@@ -34,6 +34,29 @@ AUTHMECH = NOSASL
 BACKEND = hive
 ```
 
+### Connection pooling
+
+The driver does not pool connections itself; the Driver Manager does, and
+every `SQLDriverConnect` authenticates against the server. To pool with
+unixODBC, enable it in `odbcinst.ini` and give the driver entry a timeout:
+
+```ini
+[ODBC]
+Pooling = Yes
+
+[Argus]
+Driver    = /usr/local/lib/libargus_odbc.so
+CPTimeout = 120
+```
+
+Before a parked connection is reused the Driver Manager asks the driver
+whether it is still alive (`SQL_ATTR_CONNECTION_DEAD`, answered by a real
+probe on the backends that have one) and, on Windows, has the session reset
+first (`SQL_ATTR_RESET_CONNECTION`: an open transaction is rolled back and
+session state is cleared where the backend supports it). On Windows, pooling
+is enabled per driver in the ODBC Data Source Administrator's *Connection
+Pooling* tab.
+
 ## Registering on Windows
 
 The [NSIS installer](../installer/) copies the driver with its bundled DLLs and
@@ -274,10 +297,12 @@ DRIVER=Argus;BACKEND=postgres;HOST=pg.example.com;SSL=1;SSLCAFile=/etc/ssl/certs
   accepts READ COMMITTED, REPEATABLE READ and SERIALIZABLE;
   `SQL_TXN_READ_UNCOMMITTED` is accepted but not advertised, because PostgreSQL
   silently upgrades it to READ COMMITTED.
-- **Pooled connections are cleaned before reuse** — an open transaction is
-  rolled back and `DISCARD ALL` clears session state, so the next borrower
-  never inherits a search_path, a temp table or an aborted transaction. A
-  connection that cannot be cleaned is discarded rather than reused.
+- **Pooled connections are cleaned before reuse** — when the Driver
+  Manager's pool parks a connection (`SQL_ATTR_RESET_CONNECTION`, ODBC 3.8),
+  an open transaction is rolled back and `DISCARD ALL` clears session state,
+  so the next borrower never inherits a search_path, a temp table or an
+  aborted transaction. A connection that cannot be cleaned is reported as
+  such and the Driver Manager discards it rather than reusing it.
 - **Real `SQLDescribeParam`** (`SQL_DESCRIBE_PARAMETER` = `"Y"`): the statement
   is parsed and described server-side, so parameter types come from
   PostgreSQL's own inference rather than the SQL_VARCHAR/255 guess. Execution

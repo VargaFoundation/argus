@@ -1,6 +1,5 @@
 /*
  * Unit tests for P2 features:
- *   - Configurable pool limits
  *   - SQLBrowseConnect
  *   - Async execution state machine
  *   - SQLParamData / SQLPutData (data-at-execution)
@@ -60,46 +59,6 @@ static void free_test_stmt(argus_stmt_t *stmt)
     g_mutex_clear(&stmt->mutex);
     stmt->signature = 0;
     free(stmt);
-}
-
-/* ──────────────────────────────────────────────────────────────
- * P2-1: Pool limits
- * ────────────────────────────────────────────────────────────── */
-
-static void test_pool_default_config(void **state)
-{
-    (void)state;
-
-    int mpk = 0, mt = 0, idle = 0, ttl = 0;
-    argus_pool_get_config(&mpk, &mt, &idle, &ttl);
-
-    assert_true(mpk > 0);
-    assert_true(mt > 0);
-    assert_true(idle > 0);
-    assert_true(ttl > 0);
-}
-
-static void test_pool_configure(void **state)
-{
-    (void)state;
-
-    /* Save original values */
-    int orig_mpk, orig_mt, orig_idle, orig_ttl;
-    argus_pool_get_config(&orig_mpk, &orig_mt, &orig_idle, &orig_ttl);
-
-    /* Configure new values */
-    argus_pool_configure(4, 32, 120, 1800);
-
-    int mpk = 0, mt = 0, idle = 0, ttl = 0;
-    argus_pool_get_config(&mpk, &mt, &idle, &ttl);
-
-    assert_int_equal(mpk, 4);
-    assert_int_equal(mt, 32);
-    assert_int_equal(idle, 120);
-    assert_int_equal(ttl, 1800);
-
-    /* Restore original values */
-    argus_pool_configure(orig_mpk, orig_mt, orig_idle, orig_ttl);
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -508,8 +467,6 @@ int main(void)
 {
     const struct CMUnitTest tests[] = {
         /* P2-1: Pool limits */
-        cmocka_unit_test(test_pool_default_config),
-        cmocka_unit_test(test_pool_configure),
         /* P2-2: SQLBrowseConnect */
         cmocka_unit_test(test_browse_connect_need_data),
         cmocka_unit_test(test_browse_connect_iterative),

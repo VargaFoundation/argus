@@ -29,7 +29,7 @@ confirming it is the shared SimbaEngine core, not a per-data-store surface.
 | ODBC version | 3.8 | 3.8, `SQL_OIC_LEVEL1`, SQL-92 Entry | Parity |
 | Exported ODBC entry points | 89 | **104** (incl. the 3 W-descriptor functions) | Argus broader — but raw export count is a weak proxy for capability |
 | Unicode / `W` entry points | full | full (`src/odbc/unicode.c`, UTF-16↔UTF-8) | Parity |
-| Connection pooling | yes | yes (`src/odbc/pool.c`, opt-in) | Parity |
+| Connection pooling | yes | Driver Manager pooling, with the two hooks it needs from the driver: a backend-probed `SQL_ATTR_CONNECTION_DEAD` and `SQL_ATTR_RESET_CONNECTION` (ODBC 3.8) | Parity — the driver deliberately does not pool on its own (a driver-side pool keyed on host/user could hand a caller with the wrong password an authenticated session) |
 | Auth: Kerberos/SASL/OAuth2/SSL | yes | GSSAPI + SSPI, SASL, OAuth2 (M2M + device flow), JWT, LDAP/Basic, TLS | Parity |
 | Platform / driver manager | Win / unixODBC / macOS | Win (`ConfigDSN` **with a configuration dialog + Test Connection**, plus the attribute-list scripted path, NSIS, Intune), unixODBC, macOS pkg, RPM/DEB | ~Parity — the dialog is newly added (in-memory DLGTEMPLATE, cross-compile-verified); first interactive validation on a real Windows desktop still pending |
 | Type mapping | extensive | WCHAR/NUMERIC/GUID/BINARY/INTERVAL; minor tinyint/float & interval-subtype gaps | ~Parity |
@@ -106,7 +106,8 @@ answers `"N"` because that info type also promises the driver accepts ODBC's
 Transactions moved the same way. `SQL_TXN_CAPABLE` is per-backend: `SQL_TC_NONE`
 for the analytics engines, which have no transactions, and `SQL_TC_ALL` for the
 PostgreSQL family, where `SQL_ATTR_AUTOCOMMIT` and `SQLEndTran` do real work and
-a pooled connection is rolled back and `DISCARD ALL`-ed before it is reused.
+a connection the Driver Manager's pool is about to park is rolled back and
+`DISCARD ALL`-ed (`SQL_ATTR_RESET_CONNECTION`) before it is reused.
 `SQL_TXN_READ_UNCOMMITTED` is not advertised even though PostgreSQL accepts the
 syntax: it silently gives READ COMMITTED, so claiming it would be a promise the
 server does not keep.

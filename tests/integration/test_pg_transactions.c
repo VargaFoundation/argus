@@ -306,53 +306,44 @@ static void test_isolation_level_round_trip(void **state)
 /*
  * The pooling hazard.
  *
- * A connection returned to the pool with a transaction still open, or with a
- * modified search_path, poisons the next borrower. With pooling enabled, open
- * a transaction, leave it open, disconnect, then borrow again and check the
- * connection is clean: no uncommitted rows visible, no leftover session state,
- * and a statement that simply works.
+ * A connection handed back to a pool with a transaction still open, or with a
+ * modified search_path, poisons the next borrower. The Driver Manager's pool
+ * asks the driver to clean a connection before parking it with
+ * SQL_ATTR_RESET_CONNECTION (ODBC 3.8). Dirty the session, ask for the reset,
+ * and check the connection is clean: no uncommitted rows, no leftover session
+ * state, and a statement that simply works.
  */
-static void test_pooled_connection_is_reset(void **state)
+#ifndef SQL_ATTR_RESET_CONNECTION
+#define SQL_ATTR_RESET_CONNECTION 116
+#define SQL_RESET_CONNECTION_YES  1UL
+#endif
+
+static void test_reset_connection_cleans_the_session(void **state)
 {
     (void)state;
     clear_probe();
 
     SQLHENV env = SQL_NULL_HENV;
-    assert_int_equal(SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &env),
-                     SQL_SUCCESS);
-    SQLSetEnvAttr(env, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
-    SQLSetEnvAttr(env, SQL_ATTR_CONNECTION_POOLING,
-                  (SQLPOINTER)SQL_CP_ONE_PER_DRIVER, 0);
-
-    char cs[512];
-    conn_str(cs, sizeof(cs));
-
-    /* Borrow, dirty, and hand back without cleaning up. */
     SQLHDBC dbc = SQL_NULL_HDBC;
-    assert_int_equal(SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc), SQL_SUCCESS);
-    assert_true(SQLDriverConnect(dbc, NULL, (SQLCHAR *)cs, SQL_NTS,
-                                 NULL, 0, NULL, SQL_DRIVER_NOPROMPT)
-                != SQL_ERROR);
+    open_conn(&env, &dbc);
+
+    /* Dirty the session the way an application returning a connection to
+     * the pool mid-work would. */
     set_autocommit(dbc, SQL_AUTOCOMMIT_OFF);
     exec_ok(dbc, "INSERT INTO argus_test.txn_probe VALUES (42)");
     exec_ok(dbc, "SET search_path TO pg_catalog");
-    SQLDisconnect(dbc);
-    SQLFreeHandle(SQL_HANDLE_DBC, dbc);
 
-    /* Borrow again. */
-    SQLHDBC dbc2 = SQL_NULL_HDBC;
-    assert_int_equal(SQLAllocHandle(SQL_HANDLE_DBC, env, &dbc2), SQL_SUCCESS);
-    assert_true(SQLDriverConnect(dbc2, NULL, (SQLCHAR *)cs, SQL_NTS,
-                                 NULL, 0, NULL, SQL_DRIVER_NOPROMPT)
-                != SQL_ERROR);
+    assert_int_equal(SQLSetConnectAttr(dbc, SQL_ATTR_RESET_CONNECTION,
+                                       (SQLPOINTER)SQL_RESET_CONNECTION_YES, 0),
+                     SQL_SUCCESS);
 
     /* The uncommitted insert was rolled back, not inherited. */
-    assert_int_equal(scalar(dbc2, "SELECT count(*) FROM argus_test.txn_probe"), 0);
+    assert_int_equal(scalar(dbc, "SELECT count(*) FROM argus_test.txn_probe"), 0);
 
     /* And the session state went with it: search_path is back to the default,
      * so an unqualified name resolves the way the next application expects. */
     SQLHSTMT stmt = SQL_NULL_HSTMT;
-    assert_int_equal(SQLAllocHandle(SQL_HANDLE_STMT, dbc2, &stmt), SQL_SUCCESS);
+    assert_int_equal(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt), SQL_SUCCESS);
     assert_int_equal(SQLExecDirect(stmt, (SQLCHAR *)"SHOW search_path", SQL_NTS),
                      SQL_SUCCESS);
     assert_int_equal(SQLFetch(stmt), SQL_SUCCESS);
@@ -361,9 +352,11 @@ static void test_pooled_connection_is_reset(void **state)
     assert_null(strstr(sp, "pg_catalog,"));
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 
-    SQLDisconnect(dbc2);
-    SQLFreeHandle(SQL_HANDLE_DBC, dbc2);
-    SQLFreeHandle(SQL_HANDLE_ENV, env);
+    /* Autocommit is back on: a statement commits by itself. */
+    exec_ok(dbc, "INSERT INTO argus_test.txn_probe VALUES (7)");
+    assert_int_equal(scalar(dbc, "SELECT count(*) FROM argus_test.txn_probe"), 1);
+
+    close_conn(env, dbc);
 }
 
 int main(void)
@@ -377,7 +370,7 @@ int main(void)
         cmocka_unit_test(test_aborted_transaction_recovers),
         cmocka_unit_test(test_end_tran_without_transaction),
         cmocka_unit_test(test_isolation_level_round_trip),
-        cmocka_unit_test(test_pooled_connection_is_reset),
+        cmocka_unit_test(test_reset_connection_cleans_the_session),
     };
     return cmocka_run_group_tests(tests, setup, teardown);
 }

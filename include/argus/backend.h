@@ -179,9 +179,10 @@ typedef struct argus_backend {
     int (*end_transaction)(argus_backend_conn_t conn, bool commit);
     int (*set_isolation)(argus_backend_conn_t conn, SQLUINTEGER odbc_isolation);
 
-    /* Return a pooled connection to a clean state before it is parked.
-     * Returns false when it cannot be cleaned and must be discarded instead.
-     * NULL → the connection is parked as-is, as today. */
+    /* Return a connection to a clean state before the Driver Manager's pool
+     * parks it (SQL_ATTR_RESET_CONNECTION). Returns false when it cannot be
+     * cleaned and must be discarded instead. NULL → nothing to clear; the
+     * connection is parked as-is. */
     bool (*reset_session)(argus_backend_conn_t conn);
 
     /* Real parameter metadata for SQLDescribeParam. Pure metadata: it does not

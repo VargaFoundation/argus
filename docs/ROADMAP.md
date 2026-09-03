@@ -35,7 +35,7 @@ PostgreSQL via libpq), Arrow Flight SQL (Dremio/InfluxDB 3) et Kudu (client C++
 natif, déprécié — préférer `BACKEND=impala`). Une surface Arrow ADBC est bâtie sur la
 même pile.
 
-L'ingénierie est solide (multi-plateforme, packaging signé, CI, pooling, Unicode complet,
+L'ingénierie est solide (multi-plateforme, packaging signé, CI, Unicode complet,
 logging structuré) et le **positionnement est unique** : aucun driver ODBC open-source
 natif et cross-platform ne couvre aujourd'hui Hive + Impala + Trino, et Trino n'a pas de
 driver ODBC officiel.
@@ -54,8 +54,8 @@ sécurisés et sur la BI cloud. C'est la priorité absolue de la roadmap.
   + 2 optionnelles. `connect()` reçoit `argus_dbc_t*`, donc un backend peut déjà lire des
   attributs de connexion étendus — point d'entrée naturel pour une authentification riche.
 - **Ingénierie produit** au-dessus de la moyenne open-source : packaging natif signé
-  (deb/rpm/pkg/NSIS), CI GitHub Actions multi-OS + Codecov, pooling de connexions
-  configurable, support Unicode W-suffix complet, logging 7 niveaux.
+  (deb/rpm/pkg/NSIS), CI GitHub Actions multi-OS + Codecov, support Unicode
+  W-suffix complet, logging 7 niveaux.
 - **Créneau réel et peu disputé** : le seul concurrent OSS natif (`trinodb/trino-odbc`)
   est Windows-only, read-only et de conformance partielle.
 

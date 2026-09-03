@@ -20,7 +20,6 @@ set(ARGUS_SOURCES
     odbc/desc.c
     odbc/dsn.c
     odbc/metadata_cache.c
-    odbc/pool.c
     backend/backend.c
 )
 

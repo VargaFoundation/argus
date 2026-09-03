@@ -93,7 +93,7 @@ inspection of real Simba binaries and a live Tableau TDVT run, is in
 | Unicode (`W`) | full | full | varies |
 | Async execution | **yes** (`SQL_AM_STATEMENT`) | yes | usually no |
 | Auth | Kerberos (GSSAPI+SSPI), OAuth2 (M2M + device flow), JWT, LDAP, TLS | yes | varies |
-| Connection pooling | yes | yes | driver-manager only |
+| Connection pooling | driver-manager (`SQL_ATTR_CONNECTION_DEAD` probe, `SQL_ATTR_RESET_CONNECTION` cleanup) | yes | driver-manager only |
 | Tableau TDVT | **91.4%** measured | certified (>90%) | not applicable |
 | Large-result decode | DOM-free JSON (~65% faster), spooling, Arrow via ADBC | Arrow / Cloud Fetch | row-wise |
 | Dialect correctness | per-backend dialect + ODBC escape translation | per-engine | **none** — SQL passed through |

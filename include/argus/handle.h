@@ -41,7 +41,6 @@ struct argus_dbc {
     const argus_backend_t  *backend;
     argus_backend_conn_t    backend_conn;
     bool                    connected;
-    bool                    pooled;     /* true if connection came from pool */
 
     /* Connection attributes */
     SQLUINTEGER  login_timeout;
@@ -138,7 +137,7 @@ struct argus_dbc {
     char        *obs_connstr;
 
     /* The host actually connected to. HOST may be a comma-separated failover
-     * list; the pool key and the taps need the concrete choice. */
+     * list; the taps need the concrete choice. */
     char        *connected_host;
     int          connected_port;
 
@@ -349,27 +348,6 @@ SQLRETURN argus_free_desc(argus_desc_t *desc);
  * associated. Descriptor API entry points accept a real descriptor handle or,
  * for Driver-Manager backward compatibility, a raw statement handle. */
 argus_stmt_t *argus_desc_stmt(SQLHANDLE handle);
-
-/* Connection pool */
-argus_backend_conn_t argus_pool_acquire(
-    const char *host, int port,
-    const char *backend_name,
-    const char *username,
-    const argus_backend_t **out_backend);
-
-void argus_pool_release(
-    const char *host, int port,
-    const char *backend_name,
-    const char *username,
-    const argus_backend_t *backend,
-    argus_backend_conn_t conn);
-
-void argus_pool_cleanup(void);
-void argus_pool_evict_idle(int max_idle_sec);
-void argus_pool_configure(int max_per_key, int max_total,
-                           int idle_timeout_sec, int ttl_sec);
-void argus_pool_get_config(int *max_per_key, int *max_total,
-                            int *idle_timeout_sec, int *ttl_sec);
 
 /* Metadata cache */
 void argus_metadata_cache_init(argus_dbc_t *dbc);

@@ -99,8 +99,8 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
     dbc->backend = backend;
 
     /* ── Connection admission gate (tap; the open build's weak stub returns 1) ──
-     * Placed right after backend resolution and before the pool fast-path below,
-     * so a tap provider may veto any connection exactly once. The open,
+     * Placed right after backend resolution and before any host is tried, so
+     * a tap provider may veto any connection exactly once. The open,
      * Apache-2.0 driver leaves the weak no-op and admits every connection. */
     {
         char *gate_reason = NULL;
@@ -151,32 +151,6 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
         g_strfreev(hosts);
         hosts = g_strsplit("localhost", ",", -1);
         nhosts = 1;
-    }
-
-    /* Try pool first if connection pooling is enabled (first host's key) */
-    if (dbc->env && dbc->env->connection_pooling != SQL_CP_OFF) {
-        char phost[256];
-        int pport = port;
-        split_host_port(hosts[0], phost, sizeof(phost), &pport);
-        const argus_backend_t *pooled_backend = NULL;
-        argus_backend_conn_t pooled_conn = argus_pool_acquire(
-            phost, pport, backend_name, user, &pooled_backend);
-        if (pooled_conn) {
-            dbc->backend_conn = pooled_conn;
-            dbc->backend = pooled_backend;
-            dbc->connected = true;
-            dbc->pooled = true;
-            dbc->connect_time_ms = 0.0;
-            free(dbc->connected_host);
-            dbc->connected_host = strdup(phost);
-            dbc->connected_port = pport;
-            ARGUS_LOG_INFO("Acquired pooled connection to %s:%d", phost, pport);
-            argus_obs_hook_connect(dbc, dbc->obs_connstr, backend_name, phost,
-                                   user, 1, dbc->connect_time_ms);
-            argus_telemetry_connect(dbc, true, 1);
-            g_strfreev(hosts);
-            return SQL_SUCCESS;
-        }
     }
 
     /* Retry logic: up to (1 + retry_count) rounds; within a round, fail over
@@ -533,21 +507,6 @@ SQLRETURN SQL_API SQLDriverConnect(
             dbc->trino_protocol_version = 1;
     }
 
-    /* Pool configuration keywords */
-    {
-        int pool_mpk = -1, pool_mt = -1, pool_it = -1, pool_ttl = -1;
-        v = argus_conn_params_get(&params, "POOLMAXPERKEY");
-        if (v) pool_mpk = atoi(v);
-        v = argus_conn_params_get(&params, "POOLMAXTOTAL");
-        if (v) pool_mt = atoi(v);
-        v = argus_conn_params_get(&params, "POOLIDLETIMEOUT");
-        if (v) pool_it = atoi(v);
-        v = argus_conn_params_get(&params, "POOLTTL");
-        if (v) pool_ttl = atoi(v);
-        if (pool_mpk > 0 || pool_mt > 0 || pool_it >= 0 || pool_ttl >= 0)
-            argus_pool_configure(pool_mpk, pool_mt, pool_it, pool_ttl);
-    }
-
     /* Apply logging settings if specified */
     if (dbc->log_level >= 0) {
         argus_log_set_level(dbc->log_level);
@@ -655,28 +614,12 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC ConnectionHandle)
     argus_obs_hook_disconnect(dbc);
     argus_telemetry_session_end(dbc);
 
-    if (dbc->backend && dbc->backend_conn) {
-        /* Return to pool if pooling is enabled */
-        if (dbc->env && dbc->env->connection_pooling != SQL_CP_OFF) {
-            /* Release under the key the connection was acquired with: HOST
-             * may be a failover list, so use the concrete connected host. */
-            const char *host = dbc->connected_host ? dbc->connected_host
-                               : (dbc->host ? dbc->host : "localhost");
-            int port = dbc->connected_port > 0 ? dbc->connected_port
-                                               : dbc->port;
-            const char *user = dbc->username ? dbc->username : "";
-            const char *bname = dbc->backend_name ? dbc->backend_name : "";
-            argus_pool_release(host, port, bname, user,
-                               dbc->backend, dbc->backend_conn);
-        } else {
-            dbc->backend->disconnect(dbc->backend_conn);
-        }
-    }
+    if (dbc->backend && dbc->backend_conn)
+        dbc->backend->disconnect(dbc->backend_conn);
 
     dbc->backend_conn = NULL;
     dbc->backend      = NULL;
     dbc->connected    = false;
-    dbc->pooled       = false;
 
     ARGUS_LOG_DEBUG("Disconnected successfully");
     return SQL_SUCCESS;

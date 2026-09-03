@@ -7,6 +7,12 @@
 #include <stdint.h>
 #include <stdio.h>
 
+/* ODBC 3.8 pooling attribute; absent from headers built with ODBCVER < 3.8. */
+#ifndef SQL_ATTR_RESET_CONNECTION
+#define SQL_ATTR_RESET_CONNECTION 116
+#define SQL_RESET_CONNECTION_YES  1UL
+#endif
+
 extern SQLSMALLINT argus_copy_string(const char *src,
                                       SQLCHAR *dst, SQLSMALLINT dst_len);
 extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
@@ -177,6 +183,29 @@ static SQLRETURN sqlsetconnectattr_impl(
         }
         return SQL_SUCCESS;
 
+    /*
+     * ODBC 3.8 pooling contract: the Driver Manager sets this on a connection
+     * it is about to park, so the next borrower does not inherit an open
+     * transaction, a search_path or a temp table. Backends with a reset hook
+     * do the work; a reset that fails makes the connection unfit for reuse,
+     * and SQL_ERROR is how the Driver Manager is told to discard it. Backends
+     * without the hook have no session state the driver knows how to clear,
+     * and say so with success — the same answer they gave before.
+     */
+    case SQL_ATTR_RESET_CONNECTION: {
+        if ((SQLUINTEGER)(uintptr_t)Value != SQL_RESET_CONNECTION_YES)
+            return argus_set_error(&dbc->diag, "HY024",
+                                   "[Argus] Invalid SQL_ATTR_RESET_CONNECTION value", 0);
+        if (!dbc->connected || !dbc->backend || !dbc->backend_conn)
+            return argus_set_error(&dbc->diag, "08003",
+                                   "[Argus] Connection not open", 0);
+        if (dbc->backend->reset_session &&
+            !dbc->backend->reset_session(dbc->backend_conn))
+            return argus_set_error(&dbc->diag, "HY000",
+                                   "[Argus] Connection could not be reset for reuse", 0);
+        return SQL_SUCCESS;
+    }
+
     case SQL_ATTR_ANSI_APP:
         /* The unixODBC Driver Manager sets this on a Unicode-capable driver to
          * announce whether the application is ANSI. We support both the ANSI
@@ -248,11 +277,21 @@ static SQLRETURN sqlgetconnectattr_impl(
         return SQL_SUCCESS;
     }
 
-    case SQL_ATTR_CONNECTION_DEAD:
-        if (Value) *(SQLUINTEGER *)Value = dbc->connected
-                                            ? SQL_CD_FALSE : SQL_CD_TRUE;
+    /*
+     * The Driver Manager's connection pool asks this before handing a parked
+     * connection to the next borrower, so the answer has to come from the
+     * backend, not from a flag the driver set at connect time: a session the
+     * server closed while it sat in the pool is dead whatever the flag says.
+     * Backends without a probe keep the flag-only answer.
+     */
+    case SQL_ATTR_CONNECTION_DEAD: {
+        bool alive = dbc->connected && dbc->backend && dbc->backend_conn;
+        if (alive && dbc->backend->is_alive)
+            alive = dbc->backend->is_alive(dbc->backend_conn);
+        if (Value) *(SQLUINTEGER *)Value = alive ? SQL_CD_FALSE : SQL_CD_TRUE;
         if (StringLength) *StringLength = sizeof(SQLUINTEGER);
         return SQL_SUCCESS;
+    }
 
     /* Driver-specific metrics */
     case ARGUS_ATTR_CONNECT_TIME_MS:

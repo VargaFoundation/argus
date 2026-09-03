@@ -10,7 +10,7 @@ adding a backend, see `ADDING_BACKENDS.md`; for the Flight SQL specifics,
         ▼
   ┌──────────────────────── src/odbc/ ────────────────────────────┐
   │ handle.c   env/dbc/stmt/desc lifecycle, SQLFreeStmt           │
-  │ connect.c  DSN + connection-string parsing, pool, retry,      │
+  │ connect.c  DSN + connection-string parsing, retry,            │
   │            multi-host, obs_hooks connect taps                 │
   │ execute.c  prepare/execute, param render, async worker, DAE   │
   │ escape.c   {fn}/{d}/{ts}/{oj}/{interval} → native grammar     │
@@ -25,7 +25,6 @@ adding a backend, see `ADDING_BACKENDS.md`; for the Flight SQL specifics,
   │            locking), SQLGetDiagRec/Field, SQLError            │
   │ unicode.c  every W entry point, UTF-16LE ↔ UTF-8              │
   │ info.c     SQLGetInfo/SQLGetFunctions (derived from dialect)  │
-  │ pool.c     opt-in connection pool (is_alive-gated reuse)      │
   │ log.c      leveled logging   telemetry.c  opt-in telemetry    │
   │ obs_hooks.c weak no-op tap points (see below)                 │
   └──────────────┬────────────────────────────────────────────────┘
@@ -61,10 +60,15 @@ Two contract rules matter more than the rest:
 - **NULL beats a lie.** A backend that cannot implement a hook leaves it NULL
   and the ODBC layer reports "not supported" (`HYC00`); a no-op that returns
   success is a bug class this driver has been burned by (cancel, liveness).
-- **`is_alive` gates pool reuse** (`pool.c`): it must be a real probe
-  (Druid/Pinot ping their health endpoints; MySQL pings the wire) or
-  document why a pointer check is genuinely sufficient (BigQuery: stateless
-  REST).
+- **`is_alive` answers `SQL_ATTR_CONNECTION_DEAD`**, which is what the
+  Driver Manager's connection pool checks before handing a parked connection
+  to the next borrower: it must be a real probe (Druid/Pinot ping their
+  health endpoints; MySQL pings the wire) or document why a pointer check is
+  genuinely sufficient (BigQuery: stateless REST). `reset_session` is the
+  other half of that contract (`SQL_ATTR_RESET_CONNECTION`). The driver does
+  not pool connections itself: pooling is the Driver Manager's job, and a
+  driver-side pool keyed on host and user cannot tell a caller with the
+  wrong password from the one who opened the session.
 
 The row cache (`argus_row_cache_t`, `include/argus/types.h`) is the fetch
 contract: backends deliver cells as strings (with an i64/f64 numeric

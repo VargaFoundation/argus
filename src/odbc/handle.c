@@ -180,7 +180,6 @@ int argus_stmt_ensure_bindings(argus_stmt_t *stmt, int ncols)
 SQLRETURN argus_free_env(argus_env_t *env)
 {
     if (!argus_valid_env(env)) return SQL_INVALID_HANDLE;
-    argus_pool_cleanup();
     argus_diag_dispose(&env->diag);
     g_mutex_clear(&env->mutex);
     env->signature = 0;
