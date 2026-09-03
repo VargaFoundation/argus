@@ -610,11 +610,23 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC ConnectionHandle)
     argus_dbc_t *dbc = (argus_dbc_t *)ConnectionHandle;
     if (!argus_valid_dbc(dbc)) return SQL_INVALID_HANDLE;
 
+    ARGUS_DBC_LOCK(dbc);
     argus_diag_clear(&dbc->diag);
 
     if (!dbc->connected) {
-        return argus_set_error(&dbc->diag, "08003",
-                               "[Argus] Not connected", 0);
+        SQLRETURN ret = argus_set_error(&dbc->diag, "08003",
+                                        "[Argus] Not connected", 0);
+        ARGUS_DBC_UNLOCK(dbc);
+        return ret;
+    }
+
+    /* The statements (and explicit descriptors) allocated on this connection
+     * go with it: an application need not free them first. Their backend
+     * operations are closed here, while the backend is still connected. */
+    SQLRETURN ret = argus_dbc_free_children(dbc);
+    if (ret != SQL_SUCCESS) {
+        ARGUS_DBC_UNLOCK(dbc);
+        return ret;
     }
 
     ARGUS_LOG_INFO("Disconnecting from %s backend",
@@ -631,6 +643,7 @@ SQLRETURN SQL_API SQLDisconnect(SQLHDBC ConnectionHandle)
     dbc->connected    = false;
 
     ARGUS_LOG_DEBUG("Disconnected successfully");
+    ARGUS_DBC_UNLOCK(dbc);
     return SQL_SUCCESS;
 }
 

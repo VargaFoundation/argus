@@ -42,6 +42,7 @@ SQLRETURN argus_alloc_dbc(argus_env_t *env, argus_dbc_t **out)
     dbc->signature          = ARGUS_DBC_SIGNATURE;
     dbc->env                = env;
     g_mutex_init(&dbc->mutex);
+    g_mutex_init(&dbc->children_lock);
     dbc->connected          = false;
     dbc->login_timeout      = 0;
     dbc->connection_timeout = 0;
@@ -138,6 +139,11 @@ SQLRETURN argus_alloc_stmt(argus_dbc_t *dbc, argus_stmt_t **out)
     stmt->implicit_bindings = stmt->bindings;
     stmt->implicit_bindings_capacity = stmt->bindings_capacity;
 
+    g_mutex_lock(&dbc->children_lock);
+    stmt->next_in_dbc = dbc->stmts;
+    dbc->stmts = stmt;
+    g_mutex_unlock(&dbc->children_lock);
+
     *out = stmt;
     return SQL_SUCCESS;
 }
@@ -208,6 +214,12 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
         return SQL_ERROR;
     }
 
+    /* Statements went with the last SQLDisconnect (none can be allocated on
+     * a closed connection); explicit descriptors can outlive it. */
+    if (argus_dbc_free_children(dbc) != SQL_SUCCESS)
+        return SQL_ERROR;
+
+    g_mutex_clear(&dbc->children_lock);
     g_mutex_clear(&dbc->mutex);
     dbc->signature = 0;
     free(dbc->host);
@@ -344,6 +356,12 @@ SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
 {
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
+    /* Taking the lock lets a call still running on another thread (an
+     * SQLDisconnect racing an SQLExecDirect, say) return before the handle
+     * goes away; it is released again below because clearing a locked mutex
+     * is undefined. */
+    ARGUS_STMT_LOCK(stmt);
+
     /* Log metrics at INFO level before cleanup */
     if (stmt->rows_fetched_total > 0 || stmt->execute_time_ms > 0) {
         ARGUS_LOG_INFO("Statement metrics: execute=%.1f ms, "
@@ -369,6 +387,25 @@ SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
     }
 
     argus_stmt_reset(stmt);
+
+    /* Leave the connection's list, and unhook the explicit descriptors that
+     * name this statement so freeing them later does not read it. */
+    argus_dbc_t *dbc = stmt->dbc;
+    if (argus_valid_dbc(dbc)) {
+        g_mutex_lock(&dbc->children_lock);
+        for (argus_stmt_t **pp = &dbc->stmts; *pp; pp = &(*pp)->next_in_dbc) {
+            if (*pp == stmt) {
+                *pp = stmt->next_in_dbc;
+                break;
+            }
+        }
+        for (argus_desc_t *d = dbc->descs; d; d = d->next_in_dbc)
+            if (d->stmt == stmt)
+                d->stmt = NULL;
+        g_mutex_unlock(&dbc->children_lock);
+    }
+    ARGUS_STMT_UNLOCK(stmt);
+
     g_mutex_clear(&stmt->mutex);
     free(stmt->cursor_name);
     free(stmt->columns);
@@ -409,6 +446,11 @@ SQLRETURN argus_alloc_desc(argus_dbc_t *dbc, argus_desc_t **out)
     desc->dbc         = dbc;
     argus_diag_clear(&desc->diag);
 
+    g_mutex_lock(&dbc->children_lock);
+    desc->next_in_dbc = dbc->descs;
+    dbc->descs = desc;
+    g_mutex_unlock(&dbc->children_lock);
+
     *out = desc;
     return SQL_SUCCESS;
 }
@@ -435,10 +477,61 @@ SQLRETURN argus_free_desc(argus_desc_t *desc)
         stmt->active_ard        = &stmt->desc_ard;
     }
 
+    argus_dbc_t *dbc = desc->dbc;
+    if (argus_valid_dbc(dbc)) {
+        g_mutex_lock(&dbc->children_lock);
+        for (argus_desc_t **pp = &dbc->descs; *pp; pp = &(*pp)->next_in_dbc) {
+            if (*pp == desc) {
+                *pp = desc->next_in_dbc;
+                break;
+            }
+        }
+        g_mutex_unlock(&dbc->children_lock);
+    }
+
     free(desc->records);
     argus_diag_dispose(&desc->diag);
     desc->signature = 0;
     free(desc);
+    return SQL_SUCCESS;
+}
+
+SQLRETURN argus_dbc_free_children(argus_dbc_t *dbc)
+{
+    /* ODBC: SQLDisconnect is a function sequence error while an asynchronous
+     * execute is running on one of the connection's statements. Check them
+     * all before freeing any. A worker that has finished but has not been
+     * polled yet is only waiting to be joined, which freeing does. */
+    g_mutex_lock(&dbc->children_lock);
+    for (argus_stmt_t *s = dbc->stmts; s; s = s->next_in_dbc) {
+        if ((s->async_state == ARGUS_ASYNC_SUBMITTED ||
+             s->async_state == ARGUS_ASYNC_RUNNING) &&
+            !g_atomic_int_get(&s->async_done)) {
+            g_mutex_unlock(&dbc->children_lock);
+            return argus_set_error(&dbc->diag, "HY010",
+                                   "[Argus] Function sequence error: an "
+                                   "asynchronous execute is in progress on "
+                                   "a statement of this connection", 0);
+        }
+    }
+    g_mutex_unlock(&dbc->children_lock);
+
+    /* Each free unlinks itself, so take the head until the list is empty;
+     * the lock is not held across the free, which takes it. */
+    for (;;) {
+        g_mutex_lock(&dbc->children_lock);
+        argus_stmt_t *s = dbc->stmts;
+        g_mutex_unlock(&dbc->children_lock);
+        if (!s) break;
+        argus_free_stmt(s);
+    }
+    for (;;) {
+        g_mutex_lock(&dbc->children_lock);
+        argus_desc_t *d = dbc->descs;
+        g_mutex_unlock(&dbc->children_lock);
+        if (!d) break;
+        argus_free_desc(d);
+    }
     return SQL_SUCCESS;
 }
 

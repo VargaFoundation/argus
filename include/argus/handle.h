@@ -128,6 +128,15 @@ struct argus_dbc {
     /* Metadata cache (GHashTable*, lazily initialized) */
     void        *metadata_cache;
 
+    /* The handles allocated on this connection. SQLDisconnect frees them
+     * (ODBC: statements and explicitly allocated descriptors go with the
+     * connection) and argus_free_dbc frees what is left; a statement frees
+     * itself out of the list. children_lock guards the two lists only, so it
+     * nests under any handle mutex without ordering concerns. */
+    GMutex               children_lock;
+    struct argus_stmt   *stmts;         /* singly linked through next_in_dbc */
+    struct argus_desc   *descs;         /* explicit descriptors, same */
+
     /* Metrics */
     double       connect_time_ms;       /* last connect duration */
     unsigned long errors_total;         /* total error count */
@@ -198,6 +207,7 @@ typedef struct argus_desc {
     argus_col_binding_t *records;
     int                  record_capacity;
     argus_diag_t         diag;
+    struct argus_desc   *next_in_dbc;   /* explicit: the connection's list */
 } argus_desc_t;
 
 static inline bool argus_valid_desc(SQLHANDLE h) {
@@ -209,6 +219,7 @@ struct argus_stmt {
     unsigned int            signature;
     argus_diag_t            diag;
     argus_dbc_t            *dbc;
+    struct argus_stmt      *next_in_dbc;  /* the connection's statement list */
     GMutex                  mutex;        /* thread safety */
 
     /* Query state */
@@ -351,6 +362,12 @@ int argus_stmt_ensure_bindings(argus_stmt_t *stmt, int ncols);
 SQLRETURN argus_free_env(argus_env_t *env);
 SQLRETURN argus_free_dbc(argus_dbc_t *dbc);
 SQLRETURN argus_free_stmt(argus_stmt_t *stmt);
+
+/* Free every statement and explicit descriptor allocated on the connection,
+ * closing their backend operations first (so it runs before the backend is
+ * disconnected). SQL_ERROR with HY010 on the connection, and nothing freed,
+ * while a statement has an asynchronous execute in flight. */
+SQLRETURN argus_dbc_free_children(argus_dbc_t *dbc);
 
 /* Drop the current result set and every position in it: the backend
  * operation, the row and scroll caches, SQLGetData progress. No thread
