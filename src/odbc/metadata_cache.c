@@ -87,42 +87,54 @@ fail:
 
 /* ── Build cache key ─────────────────────────────────────────── */
 
+/* The arguments are the caller's search patterns, of any length: a fixed
+ * buffer would make two patterns that differ past its end share an entry. */
 static char *build_cache_key(const char *func,
                               const char *a1, const char *a2,
                               const char *a3, const char *a4)
 {
-    char key[2048];
-    snprintf(key, sizeof(key), "%s|%s|%s|%s|%s",
-             func,
-             a1 ? a1 : "",
-             a2 ? a2 : "",
-             a3 ? a3 : "",
-             a4 ? a4 : "");
-    return strdup(key);
+    return g_strdup_printf("%s|%s|%s|%s|%s",
+                           func,
+                           a1 ? a1 : "",
+                           a2 ? a2 : "",
+                           a3 ? a3 : "",
+                           a4 ? a4 : "");
 }
 
 /* ── Public API ──────────────────────────────────────────────── */
 
-void argus_metadata_cache_init(argus_dbc_t *dbc)
+/* Called with metadata_cache_lock held. */
+static void cache_init_locked(argus_dbc_t *dbc)
 {
     if (dbc->metadata_cache) return;
     dbc->metadata_cache = g_hash_table_new_full(
         g_str_hash, g_str_equal, g_free, cache_entry_free);
 }
 
+void argus_metadata_cache_init(argus_dbc_t *dbc)
+{
+    g_mutex_lock(&dbc->metadata_cache_lock);
+    cache_init_locked(dbc);
+    g_mutex_unlock(&dbc->metadata_cache_lock);
+}
+
 void argus_metadata_cache_free(argus_dbc_t *dbc)
 {
+    g_mutex_lock(&dbc->metadata_cache_lock);
     if (dbc->metadata_cache) {
         g_hash_table_destroy((GHashTable *)dbc->metadata_cache);
         dbc->metadata_cache = NULL;
     }
+    g_mutex_unlock(&dbc->metadata_cache_lock);
 }
 
 void argus_metadata_cache_clear(argus_dbc_t *dbc)
 {
+    g_mutex_lock(&dbc->metadata_cache_lock);
     if (dbc->metadata_cache) {
         g_hash_table_remove_all((GHashTable *)dbc->metadata_cache);
     }
+    g_mutex_unlock(&dbc->metadata_cache_lock);
 }
 
 /*
@@ -135,15 +147,19 @@ bool argus_metadata_cache_lookup(argus_dbc_t *dbc, argus_stmt_t *stmt,
                                   const char *a1, const char *a2,
                                   const char *a3, const char *a4)
 {
-    if (!dbc->metadata_cache) return false;
-
+    g_mutex_lock(&dbc->metadata_cache_lock);
     GHashTable *ht = (GHashTable *)dbc->metadata_cache;
+    if (!ht) {
+        g_mutex_unlock(&dbc->metadata_cache_lock);
+        return false;
+    }
 
     char *key = build_cache_key(func, a1, a2, a3, a4);
     cache_entry_t *entry = (cache_entry_t *)g_hash_table_lookup(ht, key);
 
     if (!entry) {
-        free(key);
+        g_free(key);
+        g_mutex_unlock(&dbc->metadata_cache_lock);
         return false;
     }
 
@@ -152,22 +168,26 @@ bool argus_metadata_cache_lookup(argus_dbc_t *dbc, argus_stmt_t *stmt,
     gint64 age_sec = (now - entry->created_at) / G_USEC_PER_SEC;
     if (age_sec > ARGUS_METADATA_CACHE_TTL_SEC) {
         g_hash_table_remove(ht, key);
-        free(key);
+        g_free(key);
+        g_mutex_unlock(&dbc->metadata_cache_lock);
         ARGUS_LOG_DEBUG("Metadata cache expired for %s", func);
         return false;
     }
 
-    free(key);
+    g_free(key);
 
-    /* Deep-copy cached data into stmt */
-    if (!row_cache_deep_copy(&stmt->row_cache, &entry->row_cache))
-        return false;
+    /* Deep-copy cached data into stmt, while the entry cannot be replaced
+     * or cleared from under the copy. */
+    bool copied = row_cache_deep_copy(&stmt->row_cache, &entry->row_cache) &&
+                  argus_stmt_ensure_columns(stmt, entry->num_cols) == 0;
+    if (copied)
+        memcpy(stmt->columns, entry->columns,
+               (size_t)entry->num_cols * sizeof(argus_column_desc_t));
+    int num_cols = entry->num_cols;
+    g_mutex_unlock(&dbc->metadata_cache_lock);
+    if (!copied) return false;
 
-    if (argus_stmt_ensure_columns(stmt, entry->num_cols) != 0)
-        return false;
-    memcpy(stmt->columns, entry->columns,
-           (size_t)entry->num_cols * sizeof(argus_column_desc_t));
-    stmt->num_cols = entry->num_cols;
+    stmt->num_cols = num_cols;
     stmt->metadata_fetched = true;
     stmt->executed = true;
     /* Rows are already in the cache (and exhausted); mark the fetch as started
@@ -191,11 +211,6 @@ void argus_metadata_cache_store(argus_dbc_t *dbc, argus_stmt_t *stmt,
                                  const char *a1, const char *a2,
                                  const char *a3, const char *a4)
 {
-    if (!dbc->metadata_cache)
-        argus_metadata_cache_init(dbc);
-
-    GHashTable *ht = (GHashTable *)dbc->metadata_cache;
-
     cache_entry_t *entry = calloc(1, sizeof(cache_entry_t));
     if (!entry) return;
 
@@ -217,7 +232,10 @@ void argus_metadata_cache_store(argus_dbc_t *dbc, argus_stmt_t *stmt,
     entry->created_at = g_get_monotonic_time();
 
     char *key = build_cache_key(func, a1, a2, a3, a4);
-    g_hash_table_replace(ht, key, entry);
+    g_mutex_lock(&dbc->metadata_cache_lock);
+    cache_init_locked(dbc);
+    g_hash_table_replace((GHashTable *)dbc->metadata_cache, key, entry);
+    g_mutex_unlock(&dbc->metadata_cache_lock);
 
     ARGUS_LOG_DEBUG("Metadata cache stored for %s", func);
 }

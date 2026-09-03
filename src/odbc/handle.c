@@ -43,6 +43,7 @@ SQLRETURN argus_alloc_dbc(argus_env_t *env, argus_dbc_t **out)
     dbc->env                = env;
     g_mutex_init(&dbc->mutex);
     g_mutex_init(&dbc->children_lock);
+    g_mutex_init(&dbc->metadata_cache_lock);
     dbc->connected          = false;
     dbc->login_timeout      = 0;
     dbc->connection_timeout = 0;
@@ -267,6 +268,7 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
 
     /* Free metadata cache */
     argus_metadata_cache_free(dbc);
+    g_mutex_clear(&dbc->metadata_cache_lock);
 
     argus_diag_dispose(&dbc->diag);
     free(dbc);

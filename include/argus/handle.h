@@ -125,8 +125,11 @@ struct argus_dbc {
     /* SQLBrowseConnect accumulated keywords */
     char        *browse_buf;
 
-    /* Metadata cache (GHashTable*, lazily initialized) */
+    /* Metadata cache (GHashTable*, lazily initialized). Statements on one
+     * connection run catalog functions concurrently under their own locks,
+     * so the table has a lock of its own; it nests under any handle mutex. */
     void        *metadata_cache;
+    GMutex       metadata_cache_lock;
 
     /* The handles allocated on this connection. SQLDisconnect frees them
      * (ODBC: statements and explicitly allocated descriptors go with the

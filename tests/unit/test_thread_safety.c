@@ -20,6 +20,7 @@
 #include <glib.h>
 #include "argus/handle.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define THREADS 8
@@ -124,10 +125,119 @@ static void test_concurrent_handle_access(void **state)
     SQLFreeHandle(SQL_HANDLE_ENV, env);
 }
 
+/* ── Metadata cache: one table per connection, statements on many threads ── */
+
+#define CACHE_ITERS 2000
+
+typedef struct {
+    argus_dbc_t  *dbc;
+    argus_stmt_t *stmt;
+    int           id;
+} cache_ctx_t;
+
+/* Give the statement a one-column result of `n` rows, as a catalog function
+ * leaves behind before it stores the result. */
+static void fill_result(argus_stmt_t *stmt, int n, int tag)
+{
+    argus_row_cache_free(&stmt->row_cache);
+    argus_row_cache_init(&stmt->row_cache);
+    stmt->row_cache.rows = calloc((size_t)n, sizeof(argus_row_t));
+    stmt->row_cache.num_rows = (size_t)n;
+    stmt->row_cache.capacity = (size_t)n;
+    stmt->row_cache.num_cols = 1;
+    stmt->row_cache.exhausted = true;
+    for (int r = 0; r < n; r++) {
+        argus_cell_t *cell = calloc(1, sizeof(argus_cell_t));
+        char buf[32];
+        snprintf(buf, sizeof(buf), "t%d_r%d", tag, r);
+        cell->data = strdup(buf);
+        cell->data_len = strlen(buf);
+        stmt->row_cache.rows[r].cells = cell;
+    }
+    snprintf((char *)stmt->columns[0].name, sizeof(stmt->columns[0].name),
+             "TABLE_NAME");
+    stmt->columns[0].sql_type = SQL_VARCHAR;
+    stmt->num_cols = 1;
+}
+
+static gpointer cache_worker(gpointer data)
+{
+    cache_ctx_t *c = data;
+    char table[32];
+
+    for (int i = 0; i < CACHE_ITERS; i++) {
+        /* A handful of keys per thread, shared with no other thread, so a
+         * hit can be checked against what this thread stored. */
+        snprintf(table, sizeof(table), "t%d_%d", c->id, i % 4);
+        fill_result(c->stmt, 1 + (i % 3), c->id);
+        argus_metadata_cache_store(c->dbc, c->stmt, "SQLTables",
+                                   NULL, "s", table, NULL);
+
+        argus_row_cache_free(&c->stmt->row_cache);
+        argus_row_cache_init(&c->stmt->row_cache);
+        if (argus_metadata_cache_lookup(c->dbc, c->stmt, "SQLTables",
+                                        NULL, "s", table, NULL)) {
+            assert_int_equal(c->stmt->num_cols, 1);
+            assert_true(c->stmt->row_cache.num_rows >= 1);
+            char expect[32];
+            snprintf(expect, sizeof(expect), "t%d_r0", c->id);
+            assert_string_equal(c->stmt->row_cache.rows[0].cells[0].data,
+                                expect);
+        }
+        /* Every thread also clears now and then, as SQLEndTran does. */
+        if (i % 97 == c->id)
+            argus_metadata_cache_clear(c->dbc);
+    }
+    argus_row_cache_free(&c->stmt->row_cache);
+    argus_row_cache_init(&c->stmt->row_cache);
+    return NULL;
+}
+
+/* SQLTables/SQLColumns on several statements of one connection store into
+ * and read from the same table; it used to be mutated under the statement
+ * locks only, which do not exclude each other. */
+static void test_concurrent_metadata_cache(void **state)
+{
+    (void)state;
+    argus_env_t *env = NULL;
+    argus_dbc_t *dbc = NULL;
+    assert_int_equal(argus_alloc_env(&env), SQL_SUCCESS);
+    assert_int_equal(argus_alloc_dbc(env, &dbc), SQL_SUCCESS);
+    dbc->connected = true;
+
+    cache_ctx_t ctx[THREADS];
+    GThread *th[THREADS];
+    for (int t = 0; t < THREADS; t++) {
+        ctx[t] = (cache_ctx_t){ dbc, NULL, t };
+        assert_int_equal(argus_alloc_stmt(dbc, &ctx[t].stmt), SQL_SUCCESS);
+    }
+    for (int t = 0; t < THREADS; t++)
+        th[t] = g_thread_new("cache-hammer", cache_worker, &ctx[t]);
+    for (int t = 0; t < THREADS; t++) g_thread_join(th[t]);
+
+    /* The table is still coherent: a fresh store is found again. */
+    fill_result(ctx[0].stmt, 2, 99);
+    argus_metadata_cache_store(dbc, ctx[0].stmt, "SQLColumns",
+                               NULL, "s", "final", NULL);
+    argus_row_cache_free(&ctx[0].stmt->row_cache);
+    argus_row_cache_init(&ctx[0].stmt->row_cache);
+    assert_true(argus_metadata_cache_lookup(dbc, ctx[0].stmt, "SQLColumns",
+                                            NULL, "s", "final", NULL));
+    assert_int_equal(ctx[0].stmt->row_cache.num_rows, 2);
+    assert_string_equal(ctx[0].stmt->row_cache.rows[1].cells[0].data,
+                        "t99_r1");
+
+    for (int t = 0; t < THREADS; t++) argus_free_stmt(ctx[t].stmt);
+    dbc->connected = false;
+    assert_int_equal(argus_free_dbc(dbc), SQL_SUCCESS);
+    argus_free_env(env);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_concurrent_handle_access),
+        cmocka_unit_test(test_concurrent_metadata_cache),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
