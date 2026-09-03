@@ -1109,6 +1109,7 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
 
     SQLULEN array_size = stmt->row_array_size > 0 ? stmt->row_array_size : 1;
     SQLULEN rows_fetched = 0;
+    SQLULEN status_filled = 0;   /* row status slots already written */
     SQLRETURN final_ret = SQL_SUCCESS;
 
     for (SQLULEN i = 0; i < array_size; i++) {
@@ -1117,12 +1118,14 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
         if (ret == SQL_NO_DATA) {
             if (stmt->row_status_ptr)
                 stmt->row_status_ptr[i] = SQL_ROW_NOROW;
+            status_filled = i + 1;
             break;
         }
 
         if (ret == SQL_ERROR) {
             if (stmt->row_status_ptr)
                 stmt->row_status_ptr[i] = SQL_ROW_ERROR;
+            status_filled = i + 1;
             final_ret = SQL_ERROR;
             break;
         }
@@ -1135,11 +1138,13 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
             final_ret = SQL_SUCCESS_WITH_INFO;
         }
         rows_fetched++;
+        status_filled = i + 1;
     }
 
-    /* Fill remaining status slots with SQL_ROW_NOROW */
+    /* Fill remaining status slots with SQL_ROW_NOROW (without erasing the
+     * SQL_ROW_ERROR slot of a failed row) */
     if (stmt->row_status_ptr) {
-        for (SQLULEN i = rows_fetched; i < array_size; i++)
+        for (SQLULEN i = status_filled; i < array_size; i++)
             stmt->row_status_ptr[i] = SQL_ROW_NOROW;
     }
 
@@ -1149,8 +1154,11 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
 
     ARGUS_STMT_UNLOCK(stmt);
 
+    /* An error on the first row of the rowset must surface as SQL_ERROR.
+     * Reporting SQL_NO_DATA here would turn a dropped connection or a
+     * server-side failure into a clean, silently truncated result set. */
     if (rows_fetched == 0)
-        return SQL_NO_DATA;
+        return final_ret == SQL_ERROR ? SQL_ERROR : SQL_NO_DATA;
 
     return final_ret;
 }
