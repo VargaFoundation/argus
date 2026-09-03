@@ -219,11 +219,16 @@ static char *render_param(const argus_param_binding_t *param,
 
     case SQL_C_BINARY: {
         /* Render as hex literal: X'AABB...' */
-        size_t len;
+        SQLLEN n;
         if (param->str_len_or_ind && *param->str_len_or_ind >= 0)
-            len = (size_t)*param->str_len_or_ind;
+            n = *param->str_len_or_ind;
         else
-            len = (size_t)param->buffer_length;
+            n = param->buffer_length;
+        /* Without an indicator the length is BufferLength, which the
+         * application may not have set: a negative or absurd value would
+         * wrap the allocation below and the loop would write past it. */
+        if (n < 0 || (size_t)n > (SIZE_MAX - 4) / 2) return NULL;
+        size_t len = (size_t)n;
         char *out = malloc(2 + len * 2 + 1 + 1);
         if (!out) return NULL;
         char *dst = out;
