@@ -152,4 +152,14 @@ void argus_conn_params_free(argus_conn_params_t *params);
 int  argus_conn_params_parse(argus_conn_params_t *params, const char *conn_str);
 const char *argus_conn_params_get(const argus_conn_params_t *params, const char *key);
 
+/* Connection-string keys whose value is a credential (PWD, *SECRET, *TOKEN,
+ * AuditKey, ...). The one list every redaction in the driver uses. */
+bool  argus_connstr_key_is_secret(const char *key);
+
+/* Copy of `conn_str` with every secret value replaced by "***", parsed with
+ * the same rules as argus_conn_params_parse (whitespace around keys and
+ * values, {braced} values). Returns NULL only for NULL input or OOM; the
+ * caller frees the result with free(). */
+char *argus_connstr_redact(const char *conn_str);
+
 #endif /* ARGUS_TYPES_H */

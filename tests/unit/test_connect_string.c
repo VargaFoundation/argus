@@ -3,6 +3,8 @@
 #include <setjmp.h>
 #include <cmocka.h>
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include "argus/types.h"
 
 /* ── Test: Parse simple connection string ────────────────────── */
@@ -180,6 +182,99 @@ static void test_full_conn_string(void **state)
 
 /* ── Main ─────────────────────────────────────────────────────── */
 
+/* ── Redaction: the one secret-key list used by every copy that leaves
+ *    the driver (OutConnectionString, observability taps) ───────── */
+
+static void assert_redacted(const char *in, const char *expected)
+{
+    char *out = argus_connstr_redact(in);
+    assert_non_null(out);
+    assert_string_equal(out, expected);
+    free(out);
+}
+
+static void test_redact_masks_password(void **state)
+{
+    (void)state;
+    assert_redacted("HOST=h;PWD=secret;UID=u", "HOST=h;PWD=***;UID=u");
+    assert_redacted("Password=secret;host=h", "Password=***;host=h");
+    /* Spelling and order of the keys are preserved: the string is replayed
+     * by the caller to reconnect. */
+    assert_redacted("Host=h;Pwd=x", "Host=h;Pwd=***");
+}
+
+static void test_redact_tolerates_spaces_and_braces(void **state)
+{
+    (void)state;
+    /* " PWD = secret " would slip past a "PWD=" prefix match. */
+    assert_redacted("HOST=h; PWD = secret ;UID=u", "HOST=h;PWD=***;UID=u");
+    assert_redacted("HOST=h;\tPassword\t=\tsecret", "HOST=h;Password=***");
+    /* Braced values may contain ';' — the whole value is one secret. */
+    assert_redacted("PWD={a;b};HOST=h", "PWD=***;HOST=h");
+    assert_redacted("PWD={p@ss;word}", "PWD=***");
+    /* Braces around a non-secret value survive verbatim. */
+    assert_redacted("HOST=h;SearchPath={a;b}", "HOST=h;SearchPath={a;b}");
+}
+
+static void test_redact_masks_every_credential_key(void **state)
+{
+    (void)state;
+    static const char *const secret_keys[] = {
+        "PWD", "PASSWORD", "ClientSecret", "OAuth2ClientSecret",
+        "AccessToken", "BQAccessToken", "RefreshToken", "IdToken",
+        "BearerToken", "Token", "ApiKey", "SSLKeyPassword", "Passphrase",
+        "LicenseToken", "AuditKey", "OtlpAuthHeader", "VaultToken",
+        "MyCustomSecret", NULL
+    };
+    for (int i = 0; secret_keys[i]; i++) {
+        assert_true(argus_connstr_key_is_secret(secret_keys[i]));
+        char in[128], expected[128];
+        snprintf(in, sizeof(in), "HOST=h;%s=hunter2;UID=u", secret_keys[i]);
+        snprintf(expected, sizeof(expected), "HOST=h;%s=***;UID=u",
+                 secret_keys[i]);
+        assert_redacted(in, expected);
+    }
+}
+
+static void test_redact_keeps_endpoints_and_paths(void **state)
+{
+    (void)state;
+    /* Endpoints and key *files* are needed to reconnect and carry no
+     * credential — masking them would break the persisted string. */
+    static const char *const public_keys[] = {
+        "HOST", "UID", "USER", "DATABASE", "TokenURL", "TokenURI",
+        "OAuth2TokenEndpoint", "BQTokenEndpoint", "OAuth2AuthEndpoint",
+        "SSLKeyFile", "SSLCertFile", "KeyFilePath", "BQKeyFile",
+        "OAuth2ClientId", "ClientId", "AuthMech", "SSLCAFile", NULL
+    };
+    for (int i = 0; public_keys[i]; i++)
+        assert_false(argus_connstr_key_is_secret(public_keys[i]));
+
+    assert_redacted(
+        "OAuth2TokenEndpoint=https://idp/token;SSLKeyFile=/p/k.pem;"
+        "KeyFilePath=/p;ClientSecret=s",
+        "OAuth2TokenEndpoint=https://idp/token;SSLKeyFile=/p/k.pem;"
+        "KeyFilePath=/p;ClientSecret=***");
+}
+
+static void test_redact_edge_cases(void **state)
+{
+    (void)state;
+    assert_null(argus_connstr_redact(NULL));
+    assert_redacted("", "");
+    assert_redacted(";;;", "");
+    /* Fragments without '=' carry no value and are kept as is. */
+    assert_redacted("HOST=h;garbage", "HOST=h;garbage");
+    assert_redacted("garbage;PWD=x", "garbage;PWD=***");
+    /* Empty values stay empty (never turned into "***"). */
+    assert_redacted("PWD=;HOST=h", "PWD=***;HOST=h");
+    assert_redacted("HOST=;UID=u", "HOST=;UID=u");
+    /* Trailing separators and whitespace are normalised away. */
+    assert_redacted("HOST=h;PWD=x;;", "HOST=h;PWD=***");
+    assert_false(argus_connstr_key_is_secret(NULL));
+    assert_false(argus_connstr_key_is_secret(""));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -192,6 +287,11 @@ int main(void)
         cmocka_unit_test(test_missing_key),
         cmocka_unit_test(test_trailing_semicolons),
         cmocka_unit_test(test_full_conn_string),
+        cmocka_unit_test(test_redact_masks_password),
+        cmocka_unit_test(test_redact_tolerates_spaces_and_braces),
+        cmocka_unit_test(test_redact_masks_every_credential_key),
+        cmocka_unit_test(test_redact_keeps_endpoints_and_paths),
+        cmocka_unit_test(test_redact_edge_cases),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

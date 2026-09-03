@@ -25,42 +25,6 @@ extern char *argus_str_dup(const SQLCHAR *str, SQLINTEGER len);
 extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
 extern bool argus_resolve_dsn(argus_dbc_t *dbc, const char *dsn_name);
 
-/* ── Internal: redacted connection string for the observability taps ──
- * Copy of "k=v;k=v" with the value of any secret-bearing key (its name
- * contains PWD, PASSWORD, SECRET or TOKEN — deliberately over-broad, so an
- * endpoint URL may be masked but a secret never survives) replaced by "***".
- * The taps (argus/obs_hooks.h) only ever see this copy, never the raw string. */
-static char *obs_redact_connstr(const char *s)
-{
-    if (!s) return NULL;
-    GString *out = g_string_sized_new(strlen(s));
-    const char *p = s;
-    while (*p) {
-        const char *pair_end = strchr(p, ';');
-        if (!pair_end) pair_end = p + strlen(p);
-        const char *eq = memchr(p, '=', (size_t)(pair_end - p));
-        if (eq) {
-            char key[64];
-            size_t klen = (size_t)(eq - p) < sizeof(key) - 1
-                              ? (size_t)(eq - p) : sizeof(key) - 1;
-            for (size_t i = 0; i < klen; i++)
-                key[i] = (char)g_ascii_toupper(p[i]);
-            key[klen] = '\0';
-            g_string_append_len(out, p, eq - p + 1);
-            if (strstr(key, "PWD") || strstr(key, "PASSWORD") ||
-                strstr(key, "SECRET") || strstr(key, "TOKEN"))
-                g_string_append(out, "***");
-            else
-                g_string_append_len(out, eq + 1, pair_end - eq - 1);
-        } else {
-            g_string_append_len(out, p, pair_end - p);
-        }
-        if (*pair_end) g_string_append_c(out, ';');
-        p = *pair_end ? pair_end + 1 : pair_end;
-    }
-    return g_string_free(out, FALSE);
-}
-
 /* ── Internal: multi-host + secret helpers for do_connect ────── */
 
 /* Hosts a HOST=h1,h2,h3 failover list may carry (bare IPv6 addresses are not
@@ -594,9 +558,12 @@ SQLRETURN SQL_API SQLDriverConnect(
 
     argus_conn_params_free(&params);
 
-    /* The observability taps get a redacted copy — never the raw string. */
+    /* The observability taps (argus/obs_hooks.h) and OutConnectionString
+     * below share one redacted copy — the raw string never leaves this
+     * function; the log and the telemetry never see it either. */
     free(dbc->obs_connstr);
-    dbc->obs_connstr = obs_redact_connstr(conn_str);
+    dbc->obs_connstr = argus_connstr_redact(conn_str);
+    const char *redacted = dbc->obs_connstr;
 
     /* For SQL_DRIVER_COMPLETE[_REQUIRED], verify HOST is present */
     if ((DriverCompletion == SQL_DRIVER_COMPLETE ||
@@ -609,37 +576,20 @@ SQLRETURN SQL_API SQLDriverConnect(
     /* Connect */
     SQLRETURN ret = do_connect(dbc);
 
-    /* Build output connection string with password masked */
+    /* OutConnectionString is persisted by BI tools and replayed to reconnect,
+     * so it is the redacted copy: every credential is "***", endpoints and
+     * file paths survive. */
     if (OutConnectionString && BufferLength > 0) {
-        /* Mask PWD= value in connection string for security */
-        char *masked = strdup(conn_str);
-        if (masked) {
-            char *p = masked;
-            while (*p) {
-                if ((p == masked || *(p - 1) == ';') &&
-                    (strncasecmp(p, "PWD=", 4) == 0 ||
-                     strncasecmp(p, "PASSWORD=", 9) == 0)) {
-                    char *val = strchr(p, '=');
-                    if (val) {
-                        val++;
-                        char *val_end = strchr(val, ';');
-                        if (!val_end) val_end = val + strlen(val);
-                        for (char *c = val; c < val_end; c++)
-                            *c = '*';
-                        p = val_end;
-                        continue;
-                    }
-                }
-                p++;
-            }
-            SQLSMALLINT out_len = argus_copy_string(masked,
+        if (redacted) {
+            SQLSMALLINT out_len = argus_copy_string(redacted,
                                                      OutConnectionString,
                                                      BufferLength);
             if (StringLength2Ptr) *StringLength2Ptr = out_len;
-            free(masked);
+        } else if (StringLength2Ptr) {
+            *StringLength2Ptr = 0;
         }
     } else if (StringLength2Ptr) {
-        *StringLength2Ptr = (SQLSMALLINT)strlen(conn_str);
+        *StringLength2Ptr = redacted ? (SQLSMALLINT)strlen(redacted) : 0;
     }
 
     free(conn_str);

@@ -116,6 +116,129 @@ int argus_conn_params_parse(argus_conn_params_t *params, const char *conn_str)
     return 0;
 }
 
+/* ── Secret-bearing keys ──────────────────────────────────────── */
+
+/*
+ * A key names a credential when its uppercased form is one of these or ends
+ * with one of the suffixes below. Endpoints are deliberately not on the list:
+ * TOKENURL, OAUTH2TOKENENDPOINT or BQTOKENENDPOINT name where a token comes
+ * from, and an application that persists OutConnectionString needs them back
+ * to reconnect. Keys the open driver does not parse (LicenseToken, AuditKey,
+ * OtlpAuthHeader) are listed because they travel in the same string.
+ */
+static const char *const secret_keys[] = {
+    "PWD", "PASSWORD", "TOKEN", "SECRET", "PASSPHRASE",
+    "ACCESSTOKEN", "BQACCESSTOKEN", "REFRESHTOKEN", "IDTOKEN", "BEARERTOKEN",
+    "CLIENTSECRET", "OAUTH2CLIENTSECRET",
+    "APIKEY", "API_KEY", "PRIVATEKEY", "SSLKEYPASSWORD",
+    "CREDENTIAL", "CREDENTIALS",
+    "LICENSETOKEN", "AUDITKEY", "OTLPAUTHHEADER",
+    NULL
+};
+
+static const char *const secret_suffixes[] = {
+    "PWD", "PASSWORD", "PASSPHRASE", "SECRET", "TOKEN", "APIKEY", "AUTHHEADER",
+    NULL
+};
+
+bool argus_connstr_key_is_secret(const char *key)
+{
+    if (!key) return false;
+    size_t klen = strlen(key);
+    char ukey[128];
+    if (klen == 0 || klen >= sizeof(ukey)) return false;
+    for (size_t i = 0; i < klen; i++)
+        ukey[i] = (char)toupper((unsigned char)key[i]);
+    ukey[klen] = '\0';
+
+    for (int i = 0; secret_keys[i]; i++)
+        if (strcmp(ukey, secret_keys[i]) == 0) return true;
+    for (int i = 0; secret_suffixes[i]; i++) {
+        size_t slen = strlen(secret_suffixes[i]);
+        if (klen > slen && strcmp(ukey + klen - slen, secret_suffixes[i]) == 0)
+            return true;
+    }
+    return false;
+}
+
+char *argus_connstr_redact(const char *conn_str)
+{
+    if (!conn_str) return NULL;
+
+    size_t cap = strlen(conn_str) + 16;
+    char *out = malloc(cap);
+    if (!out) return NULL;
+    size_t olen = 0;
+
+    const char *p = conn_str;
+    while (*p) {
+        while (*p == ';' || *p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+
+        const char *key_start = p;
+        while (*p && *p != '=' && *p != ';') p++;
+        if (*p != '=') {
+            /* A fragment without '=': carries no value, kept as is. */
+            size_t n = (size_t)(p - key_start);
+            if (olen + n + 2 > cap) {
+                char *grown = realloc(out, olen + n + 2);
+                if (!grown) { free(out); return NULL; }
+                out = grown; cap = olen + n + 2;
+            }
+            if (olen) out[olen++] = ';';
+            memcpy(out + olen, key_start, n);
+            olen += n;
+            continue;
+        }
+
+        size_t key_len = (size_t)(p - key_start);
+        while (key_len > 0 && (key_start[key_len - 1] == ' ' ||
+                                key_start[key_len - 1] == '\t'))
+            key_len--;
+        p++;
+        while (*p == ' ' || *p == '\t') p++;
+
+        const char *val_start = p;
+        size_t val_len;
+        if (*p == '{') {
+            p++;
+            while (*p && *p != '}') p++;
+            if (*p == '}') p++;
+            val_len = (size_t)(p - val_start);
+        } else {
+            while (*p && *p != ';') p++;
+            val_len = (size_t)(p - val_start);
+            while (val_len > 0 && (val_start[val_len - 1] == ' ' ||
+                                    val_start[val_len - 1] == '\t'))
+                val_len--;
+        }
+
+        char ukey[128];
+        size_t ulen = key_len < sizeof(ukey) - 1 ? key_len : sizeof(ukey) - 1;
+        memcpy(ukey, key_start, ulen);
+        ukey[ulen] = '\0';
+        bool secret = (key_len < sizeof(ukey)) &&
+                      argus_connstr_key_is_secret(ukey);
+
+        const char *val = secret ? "***" : val_start;
+        size_t vlen = secret ? 3 : val_len;
+        size_t need = olen + 1 + key_len + 1 + vlen + 1;
+        if (need > cap) {
+            char *grown = realloc(out, need);
+            if (!grown) { free(out); return NULL; }
+            out = grown; cap = need;
+        }
+        if (olen) out[olen++] = ';';
+        memcpy(out + olen, key_start, key_len);
+        olen += key_len;
+        out[olen++] = '=';
+        memcpy(out + olen, val, vlen);
+        olen += vlen;
+    }
+    out[olen] = '\0';
+    return out;
+}
+
 const char *argus_conn_params_get(const argus_conn_params_t *params,
                                   const char *key)
 {
