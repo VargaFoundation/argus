@@ -4,6 +4,7 @@
 #include "argus/dialect.h"
 #include "argus/telemetry.h"
 #include "argus/numtext.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -67,11 +68,17 @@ static char *render_param(const argus_param_binding_t *param,
 {
     if (!param->bound) return NULL;
 
-    /* Check for SQL_NULL_DATA */
-    if (param->str_len_or_ind &&
-        *param->str_len_or_ind == SQL_NULL_DATA) {
-        return strdup("NULL");
+    if (param->str_len_or_ind) {
+        SQLLEN ind = *param->str_len_or_ind;
+        if (ind == SQL_NULL_DATA)
+            return strdup("NULL");
+        /* A data-at-execution indicator that no SQLPutData cycle resolved
+         * (a paramset row past the first): the value is the application's
+         * token, not data. */
+        if (ind == SQL_DATA_AT_EXEC || ind <= SQL_LEN_DATA_AT_EXEC_OFFSET)
+            return NULL;
     }
+    if (!param->value) return NULL;
 
     switch (param->value_type) {
     case SQL_C_CHAR:
@@ -710,6 +717,63 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
     return SQL_SUCCESS;
 }
 
+/* ── Internal: data-at-execution ──────────────────────────────── */
+
+static bool param_is_dae(const argus_param_binding_t *p)
+{
+    if (!p->bound || !p->str_len_or_ind) return false;
+    SQLLEN ind = *p->str_len_or_ind;
+    return ind == SQL_DATA_AT_EXEC || ind <= SQL_LEN_DATA_AT_EXEC_OFFSET;
+}
+
+static bool stmt_has_dae_param(const argus_stmt_t *stmt)
+{
+    for (int i = 0; i < stmt->num_param_bindings; i++)
+        if (param_is_dae(&stmt->param_bindings[i])) return true;
+    return false;
+}
+
+/* Called by SQLExecute/SQLExecDirect when a bound parameter says
+ * SQL_DATA_AT_EXEC: open the cycle and return SQL_NEED_DATA. While a cycle
+ * is open the only legal calls are SQLParamData, SQLPutData and SQLCancel. */
+static SQLRETURN dae_begin(argus_stmt_t *stmt)
+{
+    if (stmt->dae_state != ARGUS_DAE_IDLE)
+        return argus_set_error(&stmt->diag, "HY010",
+                               "[Argus] Function sequence error: "
+                               "data-at-execution in progress", 0);
+
+    int n = stmt->num_param_bindings;
+    stmt->dae_values = calloc((size_t)n, sizeof(*stmt->dae_values));
+    if (!stmt->dae_values)
+        return argus_set_error(&stmt->diag, "HY001",
+                               "[Argus] Memory allocation failed", 0);
+    stmt->num_dae_values = n;
+    stmt->dae_state = ARGUS_DAE_NEED_DATA;
+    stmt->dae_current_param = -1; /* SQLParamData advances to the first */
+    return SQL_NEED_DATA;
+}
+
+/* The bindings as execution sees them at the end of a cycle: the
+ * application's, except that a parameter whose data came through SQLPutData
+ * points at the bytes the cycle collected, with a length of its own. */
+static argus_param_binding_t *dae_effective_bindings(argus_stmt_t *stmt)
+{
+    int n = stmt->num_param_bindings;
+    argus_param_binding_t *eff = calloc((size_t)(n > 0 ? n : 1), sizeof(*eff));
+    if (!eff) return NULL;
+    for (int i = 0; i < n; i++) {
+        eff[i] = stmt->param_bindings[i];
+        if (i < stmt->num_dae_values && stmt->dae_values[i].supplied) {
+            argus_dae_value_t *v = &stmt->dae_values[i];
+            eff[i].value = v->data;
+            eff[i].buffer_length = (SQLLEN)v->len;
+            eff[i].str_len_or_ind = &v->ind;
+        }
+    }
+    return eff;
+}
+
 /* ── Internal: resolve query with param substitution ──────────── */
 
 static char *resolve_query(argus_stmt_t *stmt, const char *query)
@@ -867,6 +931,14 @@ SQLRETURN SQL_API SQLExecDirect(
     /* Store the query */
     free(stmt->query);
     stmt->query = query;
+
+    /* Data-at-execution: SQLParamData runs the statement once the
+     * application has put every parameter's data. */
+    if (stmt->dae_state != ARGUS_DAE_IDLE || stmt_has_dae_param(stmt)) {
+        SQLRETURN ret = dae_begin(stmt);
+        ARGUS_STMT_UNLOCK(stmt);
+        return ret;
+    }
 
     /* Resolve parameters */
     char *resolved = resolve_query(stmt, query);
@@ -1043,20 +1115,11 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT StatementHandle)
         return err;
     }
 
-    /* Check for data-at-execution parameters */
-    if (stmt->dae_state == ARGUS_DAE_IDLE) {
-        for (int i = 0; i < stmt->num_param_bindings; i++) {
-            argus_param_binding_t *p = &stmt->param_bindings[i];
-            if (!p->bound || !p->str_len_or_ind) continue;
-            SQLLEN ind = *p->str_len_or_ind;
-            if (ind == SQL_DATA_AT_EXEC ||
-                (ind <= SQL_LEN_DATA_AT_EXEC_OFFSET)) {
-                stmt->dae_state = ARGUS_DAE_NEED_DATA;
-                stmt->dae_current_param = -1; /* will advance in ParamData */
-                ARGUS_STMT_UNLOCK(stmt);
-                return SQL_NEED_DATA;
-            }
-        }
+    /* Data-at-execution: hand control to SQLParamData/SQLPutData */
+    if (stmt->dae_state != ARGUS_DAE_IDLE || stmt_has_dae_param(stmt)) {
+        SQLRETURN ret = dae_begin(stmt);
+        ARGUS_STMT_UNLOCK(stmt);
+        return ret;
     }
 
     SQLULEN paramset_size = stmt->paramset_size;
@@ -1240,14 +1303,9 @@ SQLRETURN SQL_API SQLCancel(SQLHSTMT StatementHandle)
     ARGUS_STMT_LOCK(stmt);
     argus_diag_clear(&stmt->diag);
 
-    /* Reset DAE state if in progress */
-    if (stmt->dae_state != ARGUS_DAE_IDLE) {
-        stmt->dae_state = ARGUS_DAE_IDLE;
-        stmt->dae_current_param = -1;
-        if (stmt->dae_buffer) {
-            g_byte_array_set_size(stmt->dae_buffer, 0);
-        }
-    }
+    /* A data-at-execution cycle in progress is abandoned: the statement
+     * goes back to its prepared state and the next SQLExecute asks again. */
+    argus_stmt_dae_clear(stmt);
 
     /* Async in flight: the worker owns async_query and the execution fields, so
      * it must be joined before we touch either. Joining waits for the in-flight
@@ -1393,12 +1451,10 @@ SQLRETURN SQL_API SQLMoreResults(SQLHSTMT StatementHandle)
 
 static int find_next_dae_param(argus_stmt_t *stmt, int after)
 {
-    for (int i = after + 1; i < stmt->num_param_bindings; i++) {
-        argus_param_binding_t *p = &stmt->param_bindings[i];
-        if (!p->bound || !p->str_len_or_ind) continue;
-        SQLLEN ind = *p->str_len_or_ind;
-        if (ind == SQL_DATA_AT_EXEC ||
-            (ind <= SQL_LEN_DATA_AT_EXEC_OFFSET))
+    int n = stmt->num_param_bindings < stmt->num_dae_values
+                ? stmt->num_param_bindings : stmt->num_dae_values;
+    for (int i = after + 1; i < n; i++) {
+        if (param_is_dae(&stmt->param_bindings[i]))
             return i;
     }
     return -1;
@@ -1416,62 +1472,68 @@ SQLRETURN SQL_API SQLParamData(
     ARGUS_STMT_LOCK(stmt);
     argus_diag_clear(&stmt->diag);
 
-    if (stmt->dae_state == ARGUS_DAE_IDLE) {
+    if (stmt->dae_state == ARGUS_DAE_IDLE || !stmt->dae_values) {
         SQLRETURN err = argus_set_error(&stmt->diag, "HY010",
                                "[Argus] Function sequence error", 0);
         ARGUS_STMT_UNLOCK(stmt);
         return err;
     }
 
-    /* If we were putting data for a param, finalize it */
+    /* The parameter being put is complete. No SQLPutData at all means a
+     * zero-length value, not a NULL. */
     if (stmt->dae_state == ARGUS_DAE_PUTTING &&
-        stmt->dae_current_param >= 0) {
-        argus_param_binding_t *p =
-            &stmt->param_bindings[stmt->dae_current_param];
-        /* Replace the param's value pointer with accumulated buffer */
-        if (stmt->dae_buffer && stmt->dae_buffer->len > 0) {
-            p->value = (SQLPOINTER)stmt->dae_buffer->data;
-            /* Update str_len_or_ind to actual data length */
-            static SQLLEN dae_len;
-            dae_len = (SQLLEN)stmt->dae_buffer->len;
-            p->str_len_or_ind = &dae_len;
+        stmt->dae_current_param >= 0 &&
+        stmt->dae_current_param < stmt->num_dae_values) {
+        argus_dae_value_t *v = &stmt->dae_values[stmt->dae_current_param];
+        if (!v->data && v->ind != SQL_NULL_DATA) {
+            v->data = calloc(1, 1);
+            if (!v->data) {
+                SQLRETURN err = argus_set_error(&stmt->diag, "HY001",
+                                       "[Argus] Memory allocation failed", 0);
+                ARGUS_STMT_UNLOCK(stmt);
+                return err;
+            }
+            v->len = 0;
+            v->ind = 0;
         }
+        v->supplied = true;
     }
 
-    /* Find the next DAE param */
+    /* Ask for the next one */
     int next = find_next_dae_param(stmt, stmt->dae_current_param);
     if (next >= 0) {
         stmt->dae_current_param = next;
         stmt->dae_state = ARGUS_DAE_PUTTING;
-        /* Reset the accumulation buffer for this param */
-        if (!stmt->dae_buffer)
-            stmt->dae_buffer = g_byte_array_new();
-        else
-            g_byte_array_set_size(stmt->dae_buffer, 0);
-        /* Return the user's value pointer for identification */
+        /* The application identifies the parameter by the token it bound */
         if (Value)
             *Value = stmt->param_bindings[next].value;
         ARGUS_STMT_UNLOCK(stmt);
         return SQL_NEED_DATA;
     }
 
-    /* All DAE params have been provided — execute the query */
-    stmt->dae_state = ARGUS_DAE_IDLE;
-    stmt->dae_current_param = -1;
-
-    char *resolved = resolve_query(stmt, stmt->query);
+    /* Every parameter has its data: run the statement. The resolved SQL
+     * owns copies of the values, so the cycle's buffers go before the
+     * execution, and the application's bindings are untouched throughout —
+     * re-executing asks for the data again. */
+    argus_param_binding_t *eff = dae_effective_bindings(stmt);
+    if (!eff) {
+        argus_stmt_dae_clear(stmt);
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY001",
+                               "[Argus] Memory allocation failed", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
+    }
+    char *resolved = substitute_params(stmt->query, eff,
+                                       stmt->num_param_bindings, &stmt->diag,
+                                       argus_dialect_for(stmt->dbc)->backslash_escapes);
+    free(eff);
+    argus_stmt_dae_clear(stmt);
     if (!resolved) {
         ARGUS_STMT_UNLOCK(stmt);
         return SQL_ERROR;
     }
     SQLRETURN ret = do_execute(stmt, resolved);
     free(resolved);
-
-    /* Free DAE buffer */
-    if (stmt->dae_buffer) {
-        g_byte_array_free(stmt->dae_buffer, TRUE);
-        stmt->dae_buffer = NULL;
-    }
 
     ARGUS_STMT_UNLOCK(stmt);
     return ret;
@@ -1491,7 +1553,8 @@ SQLRETURN SQL_API SQLPutData(
     argus_diag_clear(&stmt->diag);
 
     if (stmt->dae_state != ARGUS_DAE_PUTTING ||
-        stmt->dae_current_param < 0) {
+        stmt->dae_current_param < 0 ||
+        stmt->dae_current_param >= stmt->num_dae_values) {
         SQLRETURN err = argus_set_error(&stmt->diag, "HY010",
                                "[Argus] Function sequence error: "
                                "no parameter awaiting data", 0);
@@ -1506,12 +1569,13 @@ SQLRETURN SQL_API SQLPutData(
         return err;
     }
 
+    argus_dae_value_t *v = &stmt->dae_values[stmt->dae_current_param];
+
     if (StrLen_or_Ind == SQL_NULL_DATA) {
-        /* Mark param as NULL */
-        argus_param_binding_t *p =
-            &stmt->param_bindings[stmt->dae_current_param];
-        static SQLLEN null_ind = SQL_NULL_DATA;
-        p->str_len_or_ind = &null_ind;
+        free(v->data);
+        v->data = NULL;
+        v->len = 0;
+        v->ind = SQL_NULL_DATA;
         ARGUS_STMT_UNLOCK(stmt);
         return SQL_SUCCESS;
     }
@@ -1529,11 +1593,26 @@ SQLRETURN SQL_API SQLPutData(
         return err;
     }
 
-    /* Accumulate data */
-    if (!stmt->dae_buffer)
-        stmt->dae_buffer = g_byte_array_new();
-    g_byte_array_append(stmt->dae_buffer,
-                         (const guint8 *)Data, (guint)data_len);
+    /* Append, keeping a NUL after the bytes so a SQL_C_CHAR value stays a
+     * C string. Chunks after a SQL_NULL_DATA make the value data again. */
+    if (data_len > SIZE_MAX - v->len - 1) {
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY001",
+                               "[Argus] Memory allocation failed", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
+    }
+    unsigned char *grown = realloc(v->data, v->len + data_len + 1);
+    if (!grown) {
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY001",
+                               "[Argus] Memory allocation failed", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
+    }
+    v->data = grown;
+    memcpy(v->data + v->len, Data, data_len);
+    v->len += data_len;
+    v->data[v->len] = '\0';
+    v->ind = (SQLLEN)v->len;
 
     ARGUS_STMT_UNLOCK(stmt);
     return SQL_SUCCESS;

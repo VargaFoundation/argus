@@ -36,8 +36,7 @@ static void free_test_stmt(argus_stmt_t *stmt)
     if (!stmt) return;
     free(stmt->query);
     free(stmt->async_query);
-    if (stmt->dae_buffer)
-        g_byte_array_free(stmt->dae_buffer, TRUE);
+    argus_stmt_dae_clear(stmt);
     if (stmt->scroll_rows) {
         int nc = stmt->num_cols > 0 ? stmt->num_cols
                                      : stmt->row_cache.num_cols;
@@ -210,79 +209,8 @@ static void test_async_state_machine(void **state)
  * P2-4: SQLParamData / SQLPutData
  * ────────────────────────────────────────────────────────────── */
 
-static void test_putdata_accumulation(void **state)
-{
-    (void)state;
-
-    argus_stmt_t *stmt = create_test_stmt();
-    assert_non_null(stmt);
-
-    /* Set up a data-at-execution parameter. param_bindings is lazily
-     * allocated now, so create the slot through the real API before poking
-     * DAE fields directly. */
-    SQLLEN dae_ind = SQL_DATA_AT_EXEC;
-    char user_ptr = 'X'; /* sentinel for identification */
-
-    assert_int_equal(SQLBindParameter((SQLHSTMT)stmt, 1, SQL_PARAM_INPUT,
-                                      SQL_C_CHAR, SQL_VARCHAR, 0, 0,
-                                      &user_ptr, 1, &dae_ind), SQL_SUCCESS);
-    assert_non_null(stmt->param_bindings);
-    stmt->param_bindings[0].value = &user_ptr;
-    stmt->param_bindings[0].str_len_or_ind = &dae_ind;
-    stmt->num_param_bindings = 1;
-
-    /* Simulate the DAE flow: SQLExecute would return SQL_NEED_DATA,
-     * but we can't call it without a backend, so test PutData directly */
-    stmt->dae_state = ARGUS_DAE_PUTTING;
-    stmt->dae_current_param = 0;
-
-    /* Send 3 chunks of data via SQLPutData */
-    SQLRETURN ret;
-    ret = SQLPutData((SQLHSTMT)stmt, (SQLPOINTER)"Hello", 5);
-    assert_int_equal(ret, SQL_SUCCESS);
-
-    ret = SQLPutData((SQLHSTMT)stmt, (SQLPOINTER)", ", 2);
-    assert_int_equal(ret, SQL_SUCCESS);
-
-    ret = SQLPutData((SQLHSTMT)stmt, (SQLPOINTER)"World", 5);
-    assert_int_equal(ret, SQL_SUCCESS);
-
-    /* Verify accumulated data */
-    assert_non_null(stmt->dae_buffer);
-    assert_int_equal(stmt->dae_buffer->len, 12);
-    assert_memory_equal(stmt->dae_buffer->data, "Hello, World", 12);
-
-    free_test_stmt(stmt);
-}
-
-static void test_putdata_null(void **state)
-{
-    (void)state;
-
-    argus_stmt_t *stmt = create_test_stmt();
-    assert_non_null(stmt);
-
-    /* Create the slot through the real API (lazy param_bindings), with no
-     * application indicator pointer — PutData must then provide one. */
-    static char dummy[2];
-    assert_int_equal(SQLBindParameter((SQLHSTMT)stmt, 1, SQL_PARAM_INPUT,
-                                      SQL_C_CHAR, SQL_VARCHAR, 0, 0,
-                                      dummy, sizeof(dummy), NULL), SQL_SUCCESS);
-    stmt->dae_state = ARGUS_DAE_PUTTING;
-    stmt->dae_current_param = 0;
-    stmt->param_bindings[0].str_len_or_ind = NULL;
-    stmt->num_param_bindings = 1;
-
-    /* Send NULL data */
-    SQLRETURN ret = SQLPutData((SQLHSTMT)stmt, NULL, SQL_NULL_DATA);
-    assert_int_equal(ret, SQL_SUCCESS);
-
-    /* str_len_or_ind should be set to SQL_NULL_DATA */
-    assert_non_null(stmt->param_bindings[0].str_len_or_ind);
-    assert_int_equal(*stmt->param_bindings[0].str_len_or_ind, SQL_NULL_DATA);
-
-    free_test_stmt(stmt);
-}
+/* The full SQLParamData/SQLPutData cycle, against a recording backend, is
+ * covered by test_dae.c; here only the sequence errors. */
 
 static void test_putdata_sequence_error(void **state)
 {
@@ -474,8 +402,6 @@ int main(void)
         cmocka_unit_test(test_async_attr_store),
         cmocka_unit_test(test_async_state_machine),
         /* P2-4: SQLParamData/SQLPutData */
-        cmocka_unit_test(test_putdata_accumulation),
-        cmocka_unit_test(test_putdata_null),
         cmocka_unit_test(test_putdata_sequence_error),
         cmocka_unit_test(test_paramdata_sequence_error),
         /* P2-5: Scrollable cursors */

@@ -261,6 +261,19 @@ SQLRETURN argus_free_dbc(argus_dbc_t *dbc)
     return SQL_SUCCESS;
 }
 
+void argus_stmt_dae_clear(argus_stmt_t *stmt)
+{
+    if (stmt->dae_values) {
+        for (int i = 0; i < stmt->num_dae_values; i++)
+            free(stmt->dae_values[i].data);
+        free(stmt->dae_values);
+        stmt->dae_values = NULL;
+    }
+    stmt->num_dae_values = 0;
+    stmt->dae_state = ARGUS_DAE_IDLE;
+    stmt->dae_current_param = -1;
+}
+
 void argus_stmt_reset(argus_stmt_t *stmt)
 {
     /* Close backend operation if active */
@@ -319,13 +332,7 @@ void argus_stmt_reset(argus_stmt_t *stmt)
     free(stmt->async_query);
     stmt->async_query = NULL;
 
-    /* Reset DAE state */
-    stmt->dae_state = ARGUS_DAE_IDLE;
-    stmt->dae_current_param = -1;
-    if (stmt->dae_buffer) {
-        g_byte_array_free(stmt->dae_buffer, TRUE);
-        stmt->dae_buffer = NULL;
-    }
+    argus_stmt_dae_clear(stmt);
 
     /* Reset parameter bindings */
     if (stmt->param_bindings)
@@ -587,6 +594,9 @@ SQLRETURN SQL_API SQLFreeStmt(
         break;
 
     case SQL_RESET_PARAMS:
+        /* The data collected for a cycle in progress is indexed by the
+         * bindings being dropped. */
+        argus_stmt_dae_clear(stmt);
         if (stmt->param_bindings)
             memset(stmt->param_bindings, 0,
                    (size_t)stmt->param_bindings_capacity

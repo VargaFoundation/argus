@@ -161,6 +161,18 @@ typedef enum {
     ARGUS_DAE_PUTTING    = 2
 } argus_dae_state_t;
 
+/* What SQLPutData supplied for one parameter during a data-at-execution
+ * cycle. The application's binding is never touched — its value stays the
+ * token it handed SQLBindParameter and its indicator keeps saying
+ * SQL_DATA_AT_EXEC, so the next SQLExecute asks for the data again —
+ * execution works on a copy of the bindings that points here instead. */
+typedef struct argus_dae_value {
+    unsigned char *data;      /* accumulated bytes, NUL-terminated */
+    size_t         len;
+    SQLLEN         ind;       /* len, or SQL_NULL_DATA */
+    bool           supplied;  /* SQLParamData has moved past this parameter */
+} argus_dae_value_t;
+
 /* ── Descriptors ──────────────────────────────────────────────────
  * ODBC requires the four descriptors (ARD/APD/IRD/IPD) to be real, distinct
  * handles that SQLAllocHandle(SQL_HANDLE_DESC) can also allocate explicitly.
@@ -283,7 +295,9 @@ struct argus_stmt {
     /* Data-at-execution state */
     argus_dae_state_t       dae_state;
     int                     dae_current_param;  /* 0-based index */
-    GByteArray             *dae_buffer;         /* accumulated PutData bytes */
+    argus_dae_value_t      *dae_values;         /* one per bound parameter,
+                                                 * only while a cycle runs */
+    int                     num_dae_values;
 
     /* Application-set cursor name (SQLSetCursorName); NULL = default */
     char                   *cursor_name;
@@ -338,6 +352,10 @@ SQLRETURN argus_free_env(argus_env_t *env);
 SQLRETURN argus_free_dbc(argus_dbc_t *dbc);
 SQLRETURN argus_free_stmt(argus_stmt_t *stmt);
 void argus_stmt_reset(argus_stmt_t *stmt);
+
+/* End a data-at-execution cycle: free what SQLPutData collected and return
+ * the statement to ARGUS_DAE_IDLE. Safe to call when no cycle is running. */
+void argus_stmt_dae_clear(argus_stmt_t *stmt);
 
 /* Explicit descriptor handles (SQLAllocHandle/SQLFreeHandle SQL_HANDLE_DESC). */
 SQLRETURN argus_alloc_desc(argus_dbc_t *dbc, argus_desc_t **out);
