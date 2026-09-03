@@ -22,6 +22,7 @@
 #include "hive/hive_internal.h"
 #include "impala/impala_internal.h"
 #include "hs2_fetch.h"
+#include "locale_helper.h"
 
 int hive_fetch_results(argus_backend_conn_t conn, argus_backend_op_t op,
                        int max_rows, argus_row_cache_t *cache,
@@ -62,6 +63,20 @@ static TColumn *string_column(int n)
     g_object_set(tcol->stringVal, "nulls", nulls, NULL);   /* setter takes a ref */
     g_byte_array_unref(nulls);
     tcol->__isset_stringVal = TRUE;
+    return tcol;
+}
+
+static TColumn *double_column(int n, double first)
+{
+    TColumn *tcol = g_object_new(TYPE_T_COLUMN, NULL);
+    for (int r = 0; r < n; r++) {
+        gdouble v = first + r;
+        g_array_append_val(tcol->doubleVal->values, v);
+    }
+    GByteArray *nulls = g_byte_array_new();
+    g_object_set(tcol->doubleVal, "nulls", nulls, NULL);
+    g_byte_array_unref(nulls);
+    tcol->__isset_doubleVal = TRUE;
     return tcol;
 }
 
@@ -122,6 +137,33 @@ static void test_rowset_to_cache_binary_only(void **state)
     assert_string_equal(cache.rows[0].cells[0].data, "00ff10");
     assert_true(cache.rows[1].cells[0].is_null);
     assert_string_equal(cache.rows[2].cells[0].data, "02ff10");
+
+    argus_row_cache_clear(&cache);
+    g_ptr_array_unref(cols);
+}
+
+/* DOUBLE columns are rendered to text by the driver: the text must use '.'
+ * even when the host application switched the process to a comma-decimal
+ * locale (Excel and Tableau do). */
+static void test_rowset_to_cache_double_ignores_locale(void **state)
+{
+    (void)state;
+    const char *locale = argus_test_use_comma_locale();
+    if (!locale && argus_test_locale_required()) fail();
+    if (!locale) skip();
+
+    GPtrArray *cols = columns(double_column(2, 1.5), NULL);
+    argus_row_cache_t cache;
+    memset(&cache, 0, sizeof(cache));
+    int num_cols = 0;
+
+    int rc = argus_hs2_rowset_to_cache(cols, &cache, &num_cols);
+    argus_test_restore_c_locale();
+    assert_int_equal(rc, 0);
+    assert_int_equal(cache.num_rows, 2);
+    assert_string_equal(cache.rows[0].cells[0].data, "1.5");
+    assert_int_equal(cache.rows[0].cells[0].data_len, 3);
+    assert_string_equal(cache.rows[1].cells[0].data, "2.5");
 
     argus_row_cache_clear(&cache);
     g_ptr_array_unref(cols);
@@ -396,6 +438,7 @@ int main(void)
         cmocka_unit_test(test_row_count_counts_binary_column),
         cmocka_unit_test(test_row_count_is_longest_column),
         cmocka_unit_test(test_rowset_to_cache_binary_only),
+        cmocka_unit_test(test_rowset_to_cache_double_ignores_locale),
         cmocka_unit_test(test_rowset_to_cache_short_column_leaves_cells_empty),
         cmocka_unit_test(test_rowset_to_cache_empty),
         cmocka_unit_test(test_status_ok),

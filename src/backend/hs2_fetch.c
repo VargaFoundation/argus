@@ -10,6 +10,7 @@
  * one unit and frees with one free.
  */
 #include "hs2_fetch.h"
+#include "argus/numtext.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -154,9 +155,9 @@ static void fill_column(TColumn *tcol, int col_idx, int num_rows,
         for (int r = 0; r < num_rows && r < (int)v->len; r++) {
             argus_cell_t *cell = &cache->rows[r].cells[col_idx];
             if (hs2_is_null(n, r)) { cell->is_null = true; continue; }
-            int len = snprintf(buf, sizeof(buf), "%.15g",
-                               g_array_index(v, gdouble, r));
-            put_text(cell, &cursors[r], buf, (size_t)len);
+            size_t len = argus_dtoa(buf, sizeof(buf), 15,
+                                    g_array_index(v, gdouble, r));
+            put_text(cell, &cursors[r], buf, len);
         }
         return;
     }

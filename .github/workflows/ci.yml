@@ -34,7 +34,13 @@ jobs:
             libjson-glib-dev \
             libmariadb-dev \
             libpq-dev \
-            libkrb5-dev
+            libkrb5-dev \
+            locales
+
+      # The locale tests switch LC_NUMERIC to a comma-decimal locale, the way
+      # Excel and Tableau leave the process on a French or German desktop.
+      - name: Generate a comma-decimal locale
+        run: sudo locale-gen fr_FR.UTF-8
 
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="--coverage"
@@ -43,6 +49,8 @@ jobs:
         run: cmake --build build -j$(nproc)
 
       - name: Unit Tests
+        env:
+          ARGUS_TEST_REQUIRE_LOCALE: "1"
         run: cd build && ctest --output-on-failure -L unit
 
       - name: Coverage report
@@ -476,7 +484,11 @@ jobs:
             libjson-glib-dev \
             libmariadb-dev \
             libpq-dev \
-            libkrb5-dev
+            libkrb5-dev \
+            locales
+
+      - name: Generate a comma-decimal locale
+        run: sudo locale-gen fr_FR.UTF-8
 
       - name: Configure (ASan + UBSan)
         run: cmake -B build-asan -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON
@@ -489,6 +501,7 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=0:abort_on_error=0
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0
           LSAN_OPTIONS: suppressions=${{ github.workspace }}/.github/lsan.supp
+          ARGUS_TEST_REQUIRE_LOCALE: "1"
         run: cd build-asan && ctest --output-on-failure -L unit
 
   # Coverage-guided fuzzing over the hand-written parsers (escape translator,

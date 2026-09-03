@@ -483,8 +483,9 @@ if(BUILD_ADBC)
     add_library(argus_adbc SHARED adbc/argus_adbc.c)
     target_include_directories(argus_adbc
         PUBLIC  $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
-        PRIVATE ${ODBC_INCLUDE_DIRS})
-    target_link_libraries(argus_adbc PRIVATE argus_odbc)
+        PRIVATE ${ODBC_INCLUDE_DIRS} ${GLIB2_INCLUDE_DIRS})
+    target_link_directories(argus_adbc PRIVATE ${GLIB2_LIBRARY_DIRS})
+    target_link_libraries(argus_adbc PRIVATE argus_odbc ${GLIB2_LIBRARIES})
     set_target_properties(argus_adbc PROPERTIES
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR}

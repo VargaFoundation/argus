@@ -1,5 +1,6 @@
 #include "phoenix_internal.h"
 #include "argus/compat.h"
+#include "argus/numtext.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -155,8 +156,7 @@ int phoenix_parse_frame(JsonObject *frame,
                 gdouble v = json_node_get_double(val_node);
                 cell->data = malloc(32);
                 if (cell->data)
-                    cell->data_len = (size_t)snprintf(cell->data, 32,
-                                                       "%.15g", v);
+                    cell->data_len = argus_dtoa(cell->data, 32, 15, v);
             } else if (vtype == G_TYPE_BOOLEAN) {
                 gboolean v = json_node_get_boolean(val_node);
                 cell->data = strdup(v ? "true" : "false");

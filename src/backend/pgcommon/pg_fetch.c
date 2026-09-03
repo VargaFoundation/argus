@@ -1,5 +1,6 @@
 #include "pg_common.h"
 #include "argus/log.h"
+#include "argus/numtext.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -184,7 +185,7 @@ static int copy_row(const pg_conn_t *conn, PGresult *res, int row, int ncols,
             /* NaN and ±Infinity are spelled out by PostgreSQL and strtod
              * parses both, so no special case is needed. */
             cell->native_kind = kind;
-            cell->native.f64 = strtod(cell->data, NULL);
+            cell->native.f64 = argus_strtod(cell->data, NULL);
         }
     }
     return 0;

@@ -1,5 +1,6 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
+#include "argus/numtext.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -241,7 +242,7 @@ static SQLRETURN convert_cell_to_target(
             char tmp[64];
             int n = (cell->native_kind == ARGUS_NATIVE_I64)
                     ? snprintf(tmp, sizeof(tmp), "%lld", iv)
-                    : snprintf(tmp, sizeof(tmp), "%.17g", dv);
+                    : (int)argus_dtoa(tmp, sizeof(tmp), 17, dv);
             argus_cell_t tc;
             tc.data = tmp;
             tc.data_len = (n > 0) ? (size_t)n : 0;
@@ -336,8 +337,9 @@ static SQLRETURN convert_cell_to_target(
 
     case SQL_C_FLOAT: {
         errno = 0;
-        float val = strtof(cell->data, NULL);
-        if (errno) {
+        double dval = argus_strtod(cell->data, NULL);
+        float val = (float)dval;
+        if (errno || (isinf(val) && !isinf(dval))) {
             return argus_set_error(diag, "22003",
                                    "[Argus] Numeric value out of range", 0);
         }
@@ -350,7 +352,7 @@ static SQLRETURN convert_cell_to_target(
 
     case SQL_C_DOUBLE: {
         errno = 0;
-        double val = strtod(cell->data, NULL);
+        double val = argus_strtod(cell->data, NULL);
         if (errno) {
             return argus_set_error(diag, "22003",
                                    "[Argus] Numeric value out of range", 0);

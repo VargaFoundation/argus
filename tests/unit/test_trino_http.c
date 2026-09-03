@@ -15,6 +15,11 @@
 #include <string.h>
 
 #include "trino_internal.h"
+#include "locale_helper.h"
+
+int trino_fetch_results(argus_backend_conn_t conn, argus_backend_op_t op,
+                        int max_rows, argus_row_cache_t *cache,
+                        argus_column_desc_t *columns, int *num_cols);
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -31,6 +36,7 @@ typedef struct {
     GMutex   lock;
     GPtrArray *requests;   /* char*: raw request head of each connection */
     int      to_serve;
+    const char *body;      /* JSON body of every reply; "[]" by default */
 } listener_t;
 
 static gpointer serve(gpointer data)
@@ -47,10 +53,13 @@ static gpointer serve(gpointer data)
             g_string_append_len(req, buf, n);
             if (strstr(req->str, "\r\n\r\n")) break;
         }
-        const char *reply = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-                            "Content-Length: 2\r\nConnection: close\r\n\r\n[]";
+        char *reply = g_strdup_printf(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            "Content-Length: %zu\r\nConnection: close\r\n\r\n%s",
+            strlen(l->body), l->body);
         ssize_t w = write(c, reply, strlen(reply));
         (void)w;
+        g_free(reply);
         close(c);
         g_mutex_lock(&l->lock);
         g_ptr_array_add(l->requests, g_string_free(req, FALSE));
@@ -59,12 +68,13 @@ static gpointer serve(gpointer data)
     return NULL;
 }
 
-static listener_t *listener_start(int to_serve)
+static listener_t *listener_start_with_body(int to_serve, const char *body)
 {
     listener_t *l = g_new0(listener_t, 1);
     g_mutex_init(&l->lock);
     l->requests = g_ptr_array_new_with_free_func(g_free);
     l->to_serve = to_serve;
+    l->body = body;
     l->fd = socket(AF_INET, SOCK_STREAM, 0);
     assert_true(l->fd >= 0);
     struct sockaddr_in a = {0};
@@ -77,6 +87,11 @@ static listener_t *listener_start(int to_serve)
     assert_int_equal(listen(l->fd, 4), 0);
     l->thread = g_thread_new("listener", serve, l);
     return l;
+}
+
+static listener_t *listener_start(int to_serve)
+{
+    return listener_start_with_body(to_serve, "[]");
 }
 
 static const char *listener_request(listener_t *l, guint i)
@@ -262,6 +277,62 @@ static void test_basic_credentials_stay_on_the_origin(void **state)
     listener_free(other);
 }
 
+/* Doubles in a result page are parsed by the driver's own JSON scanner
+ * (and by json-glib when it is disabled). Both must read "1.5" as 1.5 under
+ * a comma-decimal locale, where strtod() would stop at the '.'. */
+static void fetch_one_double_page(bool fast_scanner, double expected)
+{
+    static const char page[] =
+        "{\"id\":\"20240101_000000_00001_abcde\","
+        "\"columns\":[{\"name\":\"x\",\"type\":\"double\","
+        "\"typeSignature\":{\"rawType\":\"double\",\"arguments\":[]}}],"
+        "\"data\":[[1.5],[-2.25e-3]],"
+        "\"stats\":{\"state\":\"FINISHED\"}}";
+    listener_t *origin = listener_start_with_body(1, page);
+    trino_conn_t *conn = conn_new(origin, TRINO_AUTH_BEARER);
+
+    trino_operation_t *op = trino_operation_new();
+    op->next_uri = g_strdup_printf("%s/v1/statement/20240101_000000_00001_abcde/1",
+                                   conn->base_url);
+    op->metadata_fetched = true;
+    op->columns = calloc(1, sizeof(argus_column_desc_t));
+    op->num_cols = 1;
+
+    if (fast_scanner) g_unsetenv("ARGUS_TRINO_NOFASTJSON");
+    else g_setenv("ARGUS_TRINO_NOFASTJSON", "1", TRUE);
+
+    argus_row_cache_t cache;
+    memset(&cache, 0, sizeof(cache));
+    int rc = trino_fetch_results((argus_backend_conn_t)conn,
+                                 (argus_backend_op_t)op, 100, &cache,
+                                 NULL, NULL);
+    g_unsetenv("ARGUS_TRINO_NOFASTJSON");
+    listener_join(origin);
+
+    assert_int_equal(rc, 0);
+    assert_int_equal(cache.num_rows, 2);
+    assert_int_equal(cache.rows[0].cells[0].native_kind, ARGUS_NATIVE_F64);
+    assert_true(cache.rows[0].cells[0].native.f64 == expected);
+    assert_true(cache.rows[1].cells[0].native.f64 == -2.25e-3);
+
+    argus_row_cache_clear(&cache);
+    trino_operation_free(op);
+    conn_free(conn);
+    listener_free(origin);
+}
+
+static void test_result_doubles_ignore_locale(void **state)
+{
+    (void)state;
+    const char *locale = argus_test_use_comma_locale();
+    if (!locale && argus_test_locale_required()) fail();
+    if (!locale) skip();
+
+    fetch_one_double_page(true, 1.5);
+    fetch_one_double_page(false, 1.5);
+    argus_test_restore_c_locale();
+}
+
 #endif /* !_WIN32 */
 
 int main(void)
@@ -273,6 +344,7 @@ int main(void)
         cmocka_unit_test(test_spooled_segment_gets_only_its_own_headers),
         cmocka_unit_test(test_next_uri_on_another_host_gets_no_credentials),
         cmocka_unit_test(test_basic_credentials_stay_on_the_origin),
+        cmocka_unit_test(test_result_doubles_ignore_locale),
 #endif
     };
     int rc = cmocka_run_group_tests(tests, NULL, NULL);

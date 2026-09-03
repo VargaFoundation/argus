@@ -11,6 +11,7 @@
 extern "C" {
 #include "kudu_internal.h"
 #include "argus/log.h"
+#include "argus/numtext.h"
 }
 
 /* sql.h defines BOOL as a macro, conflicting with KuduColumnSchema::BOOL */
@@ -136,7 +137,7 @@ int kudu_cpp_execute_scan(void *client, const kudu_parsed_query_t *query,
                 case KuduColumnSchema::FLOAT:
                 case KuduColumnSchema::DOUBLE:
                     values.push_back(KuduValue::FromDouble(
-                        std::stod(pred->in_values[j])));
+                        argus_strtod(pred->in_values[j], NULL)));
                     break;
                 case KuduColumnSchema::BOOL:
                     values.push_back(KuduValue::FromBool(
@@ -177,7 +178,7 @@ int kudu_cpp_execute_scan(void *client, const kudu_parsed_query_t *query,
                 break;
             case KuduColumnSchema::FLOAT:
             case KuduColumnSchema::DOUBLE:
-                val = KuduValue::FromDouble(std::stod(pred->value));
+                val = KuduValue::FromDouble(argus_strtod(pred->value, NULL));
                 break;
             case KuduColumnSchema::BOOL:
                 val = KuduValue::FromBool(
@@ -349,14 +350,14 @@ int kudu_cpp_fetch_batch(kudu_operation_t *op,
             case KuduColumnSchema::FLOAT: {
                 float v;
                 row.GetFloat(c, &v);
-                snprintf(buf, sizeof(buf), "%.7g", v);
+                argus_dtoa(buf, sizeof(buf), 7, (double)v);
                 cell->data = strdup(buf);
                 break;
             }
             case KuduColumnSchema::DOUBLE: {
                 double v;
                 row.GetDouble(c, &v);
-                snprintf(buf, sizeof(buf), "%.15g", v);
+                argus_dtoa(buf, sizeof(buf), 15, v);
                 cell->data = strdup(buf);
                 break;
             }

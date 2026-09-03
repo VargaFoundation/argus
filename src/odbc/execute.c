@@ -3,6 +3,7 @@
 #include "argus/log.h"
 #include "argus/dialect.h"
 #include "argus/telemetry.h"
+#include "argus/numtext.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -193,13 +194,13 @@ static char *render_param(const argus_param_binding_t *param,
 
     case SQL_C_FLOAT: {
         char buf[64];
-        snprintf(buf, sizeof(buf), "%.7g", (double)*(const SQLREAL *)param->value);
+        argus_dtoa(buf, sizeof(buf), 7, (double)*(const SQLREAL *)param->value);
         return strdup(buf);
     }
 
     case SQL_C_DOUBLE: {
         char buf[64];
-        snprintf(buf, sizeof(buf), "%.15g", *(const SQLDOUBLE *)param->value);
+        argus_dtoa(buf, sizeof(buf), 15, *(const SQLDOUBLE *)param->value);
         return strdup(buf);
     }
 

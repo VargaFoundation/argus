@@ -1,5 +1,6 @@
 #include "trino_internal.h"
 #include "argus/compat.h"
+#include "argus/numtext.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -307,11 +308,11 @@ static const char *sj_value_to_cell(const char *p, const char *e,
     size_t nl = (size_t)(p - ns);
     if (nl >= sizeof(tmp)) nl = sizeof(tmp) - 1;
     memcpy(tmp, ns, nl); tmp[nl] = '\0';
-    if (is_float) { cell->native_kind = ARGUS_NATIVE_F64; cell->native.f64 = strtod(tmp, NULL); }
+    if (is_float) { cell->native_kind = ARGUS_NATIVE_F64; cell->native.f64 = argus_strtod(tmp, NULL); }
     else {
         errno = 0;
         long long v = strtoll(tmp, NULL, 10);
-        if (errno == ERANGE) { cell->native_kind = ARGUS_NATIVE_F64; cell->native.f64 = strtod(tmp, NULL); }
+        if (errno == ERANGE) { cell->native_kind = ARGUS_NATIVE_F64; cell->native.f64 = argus_strtod(tmp, NULL); }
         else { cell->native_kind = ARGUS_NATIVE_I64; cell->native.i64 = v; }
     }
     return p;

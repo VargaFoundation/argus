@@ -17,6 +17,7 @@
  * follow-ups.
  */
 #include "argus/adbc.h"
+#include "argus/numtext.h"
 
 #include <sql.h>
 #include <sqlext.h>
@@ -610,8 +611,8 @@ static char* param_to_literal(const char* fmt, struct ArrowArray* arr)
         long long v = d64 ? d64[row] : (long long)((const int32_t*)arr->buffers[1])[row];
         snprintf(buf, sizeof(buf), "%lld", v); return strdup(buf);
     }
-    case 'g': { const double* d = arr->buffers[1]; snprintf(buf, sizeof(buf), "%.17g", d[row]); return strdup(buf); }
-    case 'f': { const float* d = arr->buffers[1]; snprintf(buf, sizeof(buf), "%.9g", (double)d[row]); return strdup(buf); }
+    case 'g': { const double* d = arr->buffers[1]; argus_dtoa(buf, sizeof(buf), 17, d[row]); return strdup(buf); }
+    case 'f': { const float* d = arr->buffers[1]; argus_dtoa(buf, sizeof(buf), 9, (double)d[row]); return strdup(buf); }
     case 'b': { const uint8_t* bm = arr->buffers[1]; return strdup(((bm[row / 8] >> (row % 8)) & 1) ? "TRUE" : "FALSE"); }
     case 'u': case 'U': {                        /* utf8: quote + escape */
         const int32_t* off = arr->buffers[1];

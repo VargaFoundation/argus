@@ -3,6 +3,7 @@
 #include "argus/log.h"
 #include "argus/compat.h"
 #include "../curl_common.h"
+#include "argus/numtext.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -200,8 +201,7 @@ static char *json_value_to_str(JsonNode *node, size_t *len)
                                          (long long)json_node_get_int(node));
     } else if (vt == G_TYPE_DOUBLE) {
         out = malloc(32);
-        if (out) *len = (size_t)snprintf(out, 32, "%.15g",
-                                         json_node_get_double(node));
+        if (out) *len = argus_dtoa(out, 32, 15, json_node_get_double(node));
     } else if (vt == G_TYPE_BOOLEAN) {
         gboolean v = json_node_get_boolean(node);
         out = strdup(v ? "true" : "false");
