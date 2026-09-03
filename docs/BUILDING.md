@@ -45,16 +45,26 @@ brew install cmake unixodbc glib thrift cmocka pkg-config curl json-glib \
     libpq mariadb-connector-c
 ```
 
-`libpq` and `mariadb-connector-c` are keg-only, so pkg-config cannot see them
-until they are on its path. Configure with:
+Homebrew's `thrift` is the compiler and the C++ runtime only — it does not
+build c_glib, so Hive/Impala need the same portable runtime subset the
+Windows build uses (see below; the script runs unchanged under Apple clang):
 
 ```bash
-export PKG_CONFIG_PATH="$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mariadb-connector-c)/lib/pkgconfig:$PKG_CONFIG_PATH"
+bash scripts/build-thrift-c-glib.sh "$PWD/thrift-c-glib-prefix" 0.23.0
 ```
 
-Without it the PostgreSQL and MySQL-wire backends are left out of the build
-(see [Choosing backends](#choosing-backends) for how to make that an error
-instead).
+`libpq` and `mariadb-connector-c` are keg-only, so pkg-config cannot see them
+until they are on its path, and neither can it see the runtime just built.
+Configure with:
+
+```bash
+export PKG_CONFIG_PATH="$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mariadb-connector-c)/lib/pkgconfig:$PWD/thrift-c-glib-prefix/lib/pkgconfig:$PKG_CONFIG_PATH"
+```
+
+Without it the PostgreSQL, MySQL-wire and Hive/Impala backends are left out
+of the build (see [Choosing backends](#choosing-backends) for how to make
+that an error instead). This is what `ci.yml` and `release.yml` do on
+`macos-latest`, with `-DARGUS_RELEASE=ON`.
 
 ### Windows (MSYS2/UCRT64)
 

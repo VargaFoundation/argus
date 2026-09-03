@@ -192,10 +192,12 @@ PKG_CONFIG_PATH="$PWD/thrift-c-glib-prefix/lib/pkgconfig" \
 cmake --build build
 ```
 
-**macOS:** Homebrew `unixodbc glib json-glib curl libpq mariadb-connector-c`
-then the same CMake invocation. `libpq` and `mariadb-connector-c` are keg-only,
-so add them to `PKG_CONFIG_PATH` first
-(`export PKG_CONFIG_PATH="$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mariadb-connector-c)/lib/pkgconfig:$PKG_CONFIG_PATH"`).
+**macOS:** Homebrew `unixodbc glib json-glib curl libpq mariadb-connector-c
+thrift`, the thrift c_glib runtime as on Windows (`brew`'s thrift is the
+compiler only), then the same CMake invocation. `libpq` and
+`mariadb-connector-c` are keg-only, so add them and the runtime to
+`PKG_CONFIG_PATH` first
+(`export PKG_CONFIG_PATH="$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mariadb-connector-c)/lib/pkgconfig:$PWD/thrift-c-glib-prefix/lib/pkgconfig:$PKG_CONFIG_PATH"`).
 Configure with `-DARGUS_WITH_POSTGRES=ON -DARGUS_WITH_MYSQL=ON` (or
 `-DARGUS_RELEASE=ON`) to get a configure error instead of a driver quietly
 built without them; `strings -a build/src/libargus_odbc.dylib | grep '^argus-build '`

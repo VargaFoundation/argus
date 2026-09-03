@@ -180,10 +180,27 @@ jobs:
             curl \
             libpq \
             mariadb-connector-c \
+            thrift \
             cmocka
           # libpq is keg-only: without this the pkg-config probe misses it and
-          # the PostgreSQL backends are left out of the build.
-          echo "PKG_CONFIG_PATH=$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mariadb-connector-c)/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+          # the PostgreSQL backends are left out of the build. The last entry
+          # is the thrift_c_glib runtime built below.
+          echo "PKG_CONFIG_PATH=$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mariadb-connector-c)/lib/pkgconfig:$PWD/thrift-c-glib-prefix/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+
+      - name: Cache thrift_c_glib
+        id: cache-thrift
+        uses: actions/cache@v4
+        with:
+          path: thrift-c-glib-prefix
+          key: thrift-c-glib-0.23.0-macos-${{ runner.arch }}-v1
+
+      - name: Build thrift_c_glib (portable subset)
+        if: steps.cache-thrift.outputs.cache-hit != 'true'
+        # Homebrew's thrift formula ships the compiler and the C++ runtime,
+        # not c_glib; build the portable subset (Argus talks through its own
+        # GIO transport). Without it the driver has no Hive/Impala, and
+        # ARGUS_RELEASE=ON refuses to configure.
+        run: bash scripts/build-thrift-c-glib.sh "$PWD/thrift-c-glib-prefix" 0.23.0
 
       # ARGUS_RELEASE=ON turns a missing dependency into a configure error
       # instead of a driver that quietly ships without that backend.

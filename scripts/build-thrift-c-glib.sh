@@ -1,6 +1,8 @@
 #!/bin/bash
 # Build the portable subset of the thrift c_glib runtime as a static
-# library, for platforms whose package manager does not ship it (MSYS2).
+# library, for platforms whose package manager does not ship it: MSYS2
+# and Homebrew both package the thrift compiler and the C++ runtime, but
+# neither builds c_glib.
 #
 # thrift_c_glib's socket transports are raw-POSIX and do not compile on
 # Windows, but Argus does not use them: Hive/Impala speak through the
@@ -12,6 +14,11 @@
 #
 # Usage: build-thrift-c-glib.sh <install-prefix> [thrift-version]
 # Env:   CC, AR (default cc/ar), PKG_CONFIG (default pkg-config)
+#
+# Needs only a C compiler, ar, curl, tar and glib's pkg-config files: it
+# runs unchanged under MSYS2 (gcc), on macOS (Apple clang, BSD userland)
+# and on Linux. The thrift compiler itself is a separate package
+# (mingw-w64-*-thrift, brew install thrift, thrift-compiler).
 
 set -euo pipefail
 
@@ -78,8 +85,12 @@ mkdir -p "$PREFIX/lib/pkgconfig" "$PREFIX/include"
 # shellcheck disable=SC2086
 "$AR" rcs "$PREFIX/lib/libthrift_c_glib.a" $OBJS
 
-# Headers: keep the <thrift/c_glib/...> include layout.
-(cd "$SRC" && find thrift -name '*.h' -exec install -D {} "$PREFIX/include/{}" \;)
+# Headers: keep the <thrift/c_glib/...> include layout. (No `install -D`:
+# BSD install on macOS does not have it.)
+(cd "$SRC" && find thrift -name '*.h' | while IFS= read -r h; do
+    mkdir -p "$PREFIX/include/$(dirname "$h")"
+    cp "$h" "$PREFIX/include/$h"
+done)
 
 cat > "$PREFIX/lib/pkgconfig/thrift_c_glib.pc" <<EOF
 prefix=$PREFIX
