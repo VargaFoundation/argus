@@ -114,9 +114,19 @@ jobs:
           %__gpg_sign_cmd %{__gpg} gpg --batch --no-verbose --no-armor --pinentry-mode loopback --passphrase-file $RUNNER_TEMP/gpg-pass --digest-algo sha256 -u "%{_gpg_name}" -sbo %{__signature_filename} %{__plaintext_filename}
           MACROS
           rpmsign --addsign argus-odbc-*.rpm
+          # Verify against a private rpm database owned by this user. On
+          # Ubuntu rpm has no /var/lib/rpm, so it keeps its keyring per user:
+          # a `sudo rpm --import` lands in root's database and a non-root
+          # `rpm -K` reports NOKEY (the first v0.6.1 run failed that way).
+          set -o pipefail
           gpg --armor --export "$GPG_KEY_ID" > "$RUNNER_TEMP/argus-pub.asc"
-          sudo rpm --import "$RUNNER_TEMP/argus-pub.asc"
-          rpm -K -v argus-odbc-*.rpm
+          rpmdb="$RUNNER_TEMP/rpmdb"
+          rpm --define "_dbpath $rpmdb" --initdb
+          rpm --define "_dbpath $rpmdb" --import "$RUNNER_TEMP/argus-pub.asc"
+          rpm --define "_dbpath $rpmdb" -K -v argus-odbc-*.rpm | tee "$RUNNER_TEMP/rpm-verify.txt"
+          # `rpm -K` exits 0 for an unsigned package (digests alone are OK):
+          # require the header signature line itself.
+          grep -q 'Signature, key ID .*: OK' "$RUNNER_TEMP/rpm-verify.txt"
 
       # Debian dropped dpkg-sig after bullseye and apt has never verified
       # signatures embedded in a .deb -- repository InRelease signing is the
