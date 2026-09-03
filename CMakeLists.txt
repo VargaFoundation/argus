@@ -292,6 +292,56 @@ else()
     endif()
 endif()
 
+# ---------------------------------------------------------------------------
+# Hardening. The driver is loaded into Excel, Tableau and whatever else a
+# user points at a DSN, and it parses bytes from the network before the
+# connection is authenticated, so it gets the floor a distribution applies
+# to its own packages: stack canaries, fortified libc calls, read-only
+# relocations bound at load time, non-executable stack, and DEP/ASLR on
+# Windows. scripts/check-hardening.sh reads the result back out of the
+# built driver in CI. ARGUS_HARDENING=OFF is for profiling and for a
+# toolchain that rejects one of the flags.
+# ---------------------------------------------------------------------------
+option(ARGUS_HARDENING "Stack protector, FORTIFY_SOURCE, RELRO/BIND_NOW, DEP/ASLR" ON)
+if(ARGUS_HARDENING)
+    if(MSVC)
+        add_compile_options(/GS /guard:cf)
+        add_link_options(/DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf)
+    else()
+        include(CheckCCompilerFlag)
+        # Probed rather than assumed: -fcf-protection is x86-only and Apple's
+        # clang rejects -fstack-clash-protection on arm64.
+        foreach(flag IN ITEMS -fstack-protector-strong -fstack-clash-protection -fcf-protection=full)
+            string(MAKE_C_IDENTIFIER "ARGUS_CC_HAS${flag}" have)
+            check_c_compiler_flag("${flag}" ${have})
+            if(${have})
+                add_compile_options("${flag}")
+            endif()
+        endforeach()
+        # FORTIFY needs an optimising build (glibc warns at -O0), and its
+        # checked wrappers would bypass the sanitizer interceptors. tests/
+        # reads ARGUS_FORTIFY to know whether to expect the *_chk imports.
+        if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT ENABLE_ASAN AND NOT ENABLE_FUZZING)
+            add_compile_options(-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2)
+            set(ARGUS_FORTIFY ON)
+        endif()
+        if(WIN32)
+            # MinGW: GCC pulls libssp in only when the protector flag is also
+            # on the link line. binutils has defaulted the three PE flags on
+            # since 2.36; stating them keeps older toolchains honest.
+            if(ARGUS_CC_HAS_fstack_protector_strong)
+                add_link_options(-fstack-protector-strong)
+            endif()
+            add_link_options(-Wl,--dynamicbase -Wl,--high-entropy-va -Wl,--nxcompat)
+        elseif(NOT APPLE)
+            add_link_options(-Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack)
+        endif()
+    endif()
+    message(STATUS "Hardening: ENABLED")
+else()
+    message(STATUS "Hardening: DISABLED (ARGUS_HARDENING=OFF)")
+endif()
+
 # SQL_DRIVER_NAME is the driver's own file name, which differs per platform.
 # It lives here rather than in src/ because tests/ asserts on it too, and a
 # second copy of the rule is exactly how the two drifted apart before.

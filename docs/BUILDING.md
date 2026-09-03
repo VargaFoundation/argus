@@ -132,6 +132,7 @@ cmake --build build
 | `ARGUS_WITH_<BACKEND>` | AUTO | Per-backend request: `AUTO`, `ON` or `OFF` (see below) |
 | `ARGUS_RELEASE` | OFF | Turn every `AUTO` a release ships with into `ON` |
 | `ARGUS_ENABLE_TELEMETRY` | ON | Compile in the opt-in usage telemetry (off at runtime by default) |
+| `ARGUS_HARDENING` | ON | Stack protector, `_FORTIFY_SOURCE=2` (optimising builds), full RELRO + `BIND_NOW`, DEP/ASLR/CFG on Windows |
 | `ENABLE_ASAN` | OFF | AddressSanitizer + UndefinedBehaviorSanitizer |
 | `ENABLE_FUZZING` | OFF | libFuzzer harnesses in `fuzz/` (requires Clang) |
 | `CMAKE_BUILD_TYPE` | Release | Debug or Release |
@@ -264,11 +265,29 @@ The same line is the first thing the driver logs at `INFO` level when it is
 loaded, which is the quickest way to find out what an installed driver
 actually contains.
 
-```bash
-# Check the shared library exports (Linux)
-nm -D build/src/libargus_odbc.so | grep SQL
+The shared driver exports the ODBC entry points and nothing else, and it is
+built with the hardening flags a distribution applies to its own packages.
+`ctest -L unit` runs both checks (`check_exports`, `check_hardening`) on the
+library it just built; the release workflow runs them again on each artefact.
+To run them by hand:
 
-# Should show entries like:
+```bash
+# Every exported symbol must start with SQL; anything else is listed as LEAKED
+scripts/check-exports.sh build/src/libargus_odbc.so
+
+# RELRO + BIND_NOW, non-executable stack, stack protector; --release also
+# expects the FORTIFY_SOURCE wrappers, which only exist in an optimising build
+scripts/check-hardening.sh build/src/libargus_odbc.so --release
+```
+
+Both take a `.so`, `.dylib` or `.dll` and use `nm`/`readelf`/`objdump` from the
+toolchain that built it (`NM`, `READELF`, `OBJDUMP` override the defaults).
+The raw export list is one command away:
+
+```bash
+nm -D --defined-only build/src/libargus_odbc.so | grep ' T '
+
+# Should show only entries like:
 # T SQLAllocHandle
 # T SQLConnect
 # T SQLDriverConnect

@@ -12,10 +12,10 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
 
-    # Package signing runs only when the GPG secret is configured. Like the
-    # Windows Azure signing and the Apple notarization, the steps below are
-    # continue-on-error, so a missing or expired key degrades to unsigned
-    # packages instead of blocking the release.
+    # Package signing runs only when the GPG secret is configured. Once it
+    # is, a signing failure fails the release: an expired key must be fixed,
+    # not silently shipped around as unsigned packages under a green tag.
+    # (Same policy for the Apple and Azure signing below.)
     env:
       GPG_SIGN_ENABLED: ${{ secrets.GPG_PRIVATE_KEY }}
 
@@ -58,6 +58,14 @@ jobs:
             hive impala trino phoenix pinot druid bigquery mysql \
             postgres greenplum cloudberry gssapi
 
+      # ctest above already ran these for whatever the configure step decided;
+      # this asserts what a release must be regardless: SQL*-only exports and
+      # every hardening property including FORTIFY (--release).
+      - name: Check exports and hardening
+        run: |
+          bash scripts/check-exports.sh build/src/libargus_odbc.so
+          bash scripts/check-hardening.sh build/src/libargus_odbc.so --release
+
       - name: Package tar.gz
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -82,7 +90,6 @@ jobs:
 
       - name: Import GPG signing key
         if: env.GPG_SIGN_ENABLED != ''
-        continue-on-error: true
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
@@ -97,7 +104,6 @@ jobs:
       # signing the header covers the payload too.
       - name: Sign .rpm
         if: env.GPG_SIGN_ENABLED != ''
-        continue-on-error: true
         env:
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
@@ -118,7 +124,6 @@ jobs:
       # signature beside each artifact instead, verifiable with `gpg --verify`.
       - name: Sign .deb and tarball (detached)
         if: env.GPG_SIGN_ENABLED != ''
-        continue-on-error: true
         env:
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
@@ -155,9 +160,8 @@ jobs:
     runs-on: macos-latest
 
     # Signing + notarization run only when the Apple secrets are configured;
-    # like the Windows Azure signing, the steps are continue-on-error so a
-    # missing/expired credential degrades to an unsigned .pkg instead of
-    # blocking the release.
+    # once they are, a failure fails the release rather than publishing an
+    # unsigned .pkg under a green tag.
     env:
       NOTARIZE_ENABLED: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
 
@@ -198,6 +202,11 @@ jobs:
             hive impala trino phoenix pinot druid bigquery mysql \
             postgres greenplum cloudberry
 
+      - name: Check exports and hardening
+        run: |
+          bash scripts/check-exports.sh build/src/libargus_odbc.dylib
+          bash scripts/check-hardening.sh build/src/libargus_odbc.dylib --release
+
       - name: Package tar.gz
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -222,7 +231,6 @@ jobs:
       # keychain so codesign/productsign can find them.
       - name: Import Apple signing identity
         if: env.NOTARIZE_ENABLED != ''
-        continue-on-error: true
         env:
           APPLE_DEVELOPER_ID_P12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
           APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
@@ -241,7 +249,6 @@ jobs:
       # Sign the dylib before packaging so the .pkg contains a signed binary.
       - name: Codesign the driver
         if: env.NOTARIZE_ENABLED != ''
-        continue-on-error: true
         env:
           APPLE_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
         run: |
@@ -255,7 +262,6 @@ jobs:
       # stapled .pkg installs without a Gatekeeper prompt on end-user Macs.
       - name: Sign + notarize + staple the .pkg
         if: env.NOTARIZE_ENABLED != ''
-        continue-on-error: true
         env:
           APPLE_INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -280,9 +286,8 @@ jobs:
     environment: main
 
     env:
-      # Attempt signing whenever the Azure secret is configured. The signing
-      # steps are continue-on-error, so a broken certificate degrades to an
-      # unsigned release instead of blocking it.
+      # Sign whenever the Azure secret is configured; a broken certificate
+      # then fails the release instead of shipping an unsigned installer.
       SIGN_ENABLED: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
 
     defaults:
@@ -347,6 +352,11 @@ jobs:
             hive impala trino phoenix pinot druid bigquery mysql \
             postgres greenplum cloudberry sspi
 
+      - name: Check exports and hardening
+        run: |
+          bash scripts/check-exports.sh build/src/libargus_odbc.dll
+          bash scripts/check-hardening.sh build/src/libargus_odbc.dll --release
+
       - name: Prepare installer files
         run: |
           mkdir -p installer/staging/gio-modules
@@ -362,7 +372,6 @@ jobs:
 
       - name: Sign driver DLL
         if: env.SIGN_ENABLED != ''
-        continue-on-error: true
         uses: azure/trusted-signing-action@v0.5.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -384,7 +393,6 @@ jobs:
 
       - name: Sign installer
         if: env.SIGN_ENABLED != ''
-        continue-on-error: true
         uses: azure/trusted-signing-action@v0.5.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -434,8 +442,7 @@ jobs:
       # Power BI connector signing is deliberately separate from the driver's
       # Azure Trusted Signing: MakePQX signs a .pqx only with a .pfx certificate
       # and has no Trusted Signing / Key Vault path. With no cert configured the
-      # build degrades to an unsigned Argus.mez (same spirit as the driver's
-      # continue-on-error signing).
+      # build produces an unsigned Argus.mez only.
       PQ_SIGNING_CERT_BASE64: ${{ secrets.PQ_SIGNING_CERT_BASE64 }}
       PQ_SIGNING_CERT_PASSWORD: ${{ secrets.PQ_SIGNING_CERT_PASSWORD }}
 
@@ -467,6 +474,9 @@ jobs:
     needs: [build-linux, build-macos, build-windows, build-powerbi-connector]
     runs-on: ubuntu-latest
 
+    env:
+      GPG_SIGN_ENABLED: ${{ secrets.GPG_PRIVATE_KEY }}
+
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -477,32 +487,54 @@ jobs:
       - name: List artifacts
         run: ls -la artifacts/
 
-      # One signed manifest covering every published file. This is the
-      # verification path that works the same on every platform, including the
-      # ones whose native signing is unavailable (an unsigned .pkg still gets a
-      # checksum a user can verify against this signature).
-      - name: Checksum and sign the manifest
-        env:
-          GPG_SIGN_ENABLED: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
-        continue-on-error: true
+      # Every platform artefact must be present before anything is published:
+      # a job that uploaded nothing (if-no-files-found defaults to warn) must
+      # not turn into a release with a hole in it.
+      - name: Check that every artefact is present
+        run: |
+          cd artifacts
+          missing=0
+          for pattern in 'argus-odbc-*-linux-x64.tar.gz' 'argus-odbc_*.deb' \
+                         'argus-odbc-*.rpm' 'argus-odbc-*-macos-*.tar.gz' \
+                         'argus-odbc-*.pkg' 'argus-odbc-*-windows-x64-installer.exe' \
+                         'argus-odbc-*-windows-x64.intunewin' 'Argus.mez'; do
+            # shellcheck disable=SC2086
+            if ! ls $pattern >/dev/null 2>&1; then
+              echo "MISSING: $pattern"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ]
+
+      # One manifest covering every published file. This is the verification
+      # path that works the same on every platform, including the ones whose
+      # native signing is unavailable (an unsigned .pkg still gets a checksum
+      # a user can verify against the signed manifest).
+      - name: Checksum the artefacts
         run: |
           cd artifacts
           # Checksum the payloads, not the detached signatures beside them.
           find . -maxdepth 1 -type f ! -name '*.asc' ! -name 'SHA256SUMS*' \
             -printf '%P\n' | sort | xargs sha256sum > SHA256SUMS
           cat SHA256SUMS
-          if [ -n "$GPG_SIGN_ENABLED" ]; then
-            printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
-            umask 077
-            printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/gpg-pass"
-            gpg --batch --yes --pinentry-mode loopback \
-                --passphrase-file "$RUNNER_TEMP/gpg-pass" \
-                -u "$GPG_KEY_ID" --armor --detach-sign SHA256SUMS
-            gpg --verify SHA256SUMS.asc SHA256SUMS
-          fi
+          [ -s SHA256SUMS ]
+          sha256sum -c SHA256SUMS
+
+      - name: Sign the manifest
+        if: env.GPG_SIGN_ENABLED != ''
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          cd artifacts
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          umask 077
+          printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/gpg-pass"
+          gpg --batch --yes --pinentry-mode loopback \
+              --passphrase-file "$RUNNER_TEMP/gpg-pass" \
+              -u "$GPG_KEY_ID" --armor --detach-sign SHA256SUMS
+          gpg --verify SHA256SUMS.asc SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

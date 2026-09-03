@@ -74,13 +74,6 @@ jobs:
           files: coverage.info
           fail_ci_if_error: false
 
-      - name: Check shared library exports
-        run: |
-          nm -D build/src/libargus_odbc.so | grep ' T SQL' | head -20
-          echo "---"
-          echo "Total exported SQL functions:"
-          nm -D build/src/libargus_odbc.so | grep -c ' T SQL'
-
       - name: Package tar.gz
         run: |
           mkdir -p staging/argus-odbc/lib
@@ -157,13 +150,6 @@ jobs:
           bash scripts/check-build-manifest.sh build/src/libargus_odbc.dylib \
             hive impala trino phoenix pinot druid bigquery mysql \
             postgres greenplum cloudberry
-
-      - name: Check shared library exports
-        run: |
-          nm -gU build/src/libargus_odbc.dylib | grep ' _SQL' | head -20
-          echo "---"
-          echo "Total exported SQL functions:"
-          nm -gU build/src/libargus_odbc.dylib | grep -c ' _SQL'
 
       - name: Package tar.gz
         run: |
@@ -343,8 +329,9 @@ jobs:
     runs-on: ubuntu-latest
 
     # A .taco is a jar; Tableau verifies its signature. Signing runs only when
-    # the code-signing keystore secret is present and is continue-on-error, so
-    # PRs and unsigned-key builds still produce a loadable (unsigned) .taco.
+    # the code-signing keystore secret is present (PRs from forks do not see
+    # it and still produce a loadable, unsigned .taco); once it is, a signing
+    # failure fails the job rather than quietly uploading an unsigned jar.
     env:
       TACO_SIGN_ENABLED: ${{ secrets.TABLEAU_SIGN_KEYSTORE }}
 
@@ -382,7 +369,6 @@ jobs:
       # so Tableau accepts it without lowering its signature-verification level.
       - name: Sign the .taco connectors
         if: env.TACO_SIGN_ENABLED != ''
-        continue-on-error: true
         env:
           TABLEAU_SIGN_KEYSTORE: ${{ secrets.TABLEAU_SIGN_KEYSTORE }}
           TABLEAU_SIGN_KEYSTORE_PASSWORD: ${{ secrets.TABLEAU_SIGN_KEYSTORE_PASSWORD }}

@@ -181,6 +181,30 @@ if(ARGUS_BUILD_FLIGHTSQL)
     set_tests_properties(test_flightsql_convert PROPERTIES LABELS "unit")
 endif()
 
+# Checks on the linked driver itself: it must export nothing but the SQL*
+# entry points, and it must carry the hardening the top-level CMakeLists.txt
+# asked for. Both scripts read the binary back with nm/readelf/objdump, so
+# they need a POSIX shell (MSYS2 on Windows) and only apply to a shared build.
+find_program(ARGUS_SH sh)
+if(BUILD_SHARED_LIBS AND NOT MSVC AND ARGUS_SH)
+    add_test(NAME check_exports
+        COMMAND ${ARGUS_SH} ${PROJECT_SOURCE_DIR}/scripts/check-exports.sh $<TARGET_FILE:argus_odbc>)
+    set_tests_properties(check_exports PROPERTIES LABELS "unit")
+    if(ARGUS_HARDENING)
+        # --release also expects the FORTIFY *_chk imports, which only exist
+        # in an optimising, non-sanitized build (see ARGUS_FORTIFY).
+        set(hardening_args "")
+        if(ARGUS_FORTIFY)
+            set(hardening_args --release)
+        endif()
+        add_test(NAME check_hardening
+            COMMAND ${ARGUS_SH} ${PROJECT_SOURCE_DIR}/scripts/check-hardening.sh $<TARGET_FILE:argus_odbc> ${hardening_args})
+        set_tests_properties(check_hardening PROPERTIES LABELS "unit")
+    endif()
+elseif(BUILD_SHARED_LIBS AND NOT MSVC)
+    message(STATUS "No POSIX sh found: check_exports/check_hardening tests not registered")
+endif()
+
 # Integration tests (optional)
 if(BUILD_INTEGRATION_TESTS)
     function(argus_add_integration_test name source)

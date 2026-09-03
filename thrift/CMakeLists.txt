@@ -67,8 +67,15 @@ target_link_directories(argus_thrift_generated
         ${THRIFT_C_GLIB_LIBRARY_DIRS}
 )
 
-# PIC required since this static lib is linked into a shared library
-set_target_properties(argus_thrift_generated PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# PIC required since this static lib is linked into a shared library. Hidden
+# visibility because it is linked into the driver: the generated
+# t_c_l_i_service_* GObject types and toString helpers are implementation
+# detail, and exporting them made two Thrift c_glib drivers loaded into one
+# process resolve each other's copies. Only the SQL* entry points are public.
+set_target_properties(argus_thrift_generated PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    C_VISIBILITY_PRESET hidden
+)
 
 # Suppress warnings in generated code
 if(NOT MSVC)
