@@ -162,6 +162,24 @@ bool  argus_connstr_key_is_secret(const char *key);
  * caller frees the result with free(). */
 char *argus_connstr_redact(const char *conn_str);
 
+/* ── ODBC string arguments ───────────────────────────────────── */
+/* A length argument of a narrow entry point is a byte count or SQL_NTS.
+ * Any other negative value is a caller bug that ODBC reports as HY090
+ * ("Invalid string or buffer length"); the entry point checks it before
+ * the buffer is read, because cast to size_t it is a multi-gigabyte
+ * memcpy. */
+static inline bool argus_odbc_len_valid(SQLLEN len)
+{
+    return len >= 0 || len == SQL_NTS;
+}
+
+/* Copy of `str`: `len` bytes, or up to the NUL for SQL_NTS. NULL for a NULL
+ * `str`, for a length that argus_odbc_len_valid rejects, and on OOM; an entry
+ * point that must tell those apart checks the length first. Caller frees
+ * with free(). */
+char *argus_str_dup(const SQLCHAR *str, SQLINTEGER len);
+char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
+
 /* ── SQL text helpers ────────────────────────────────────────── */
 /* Shared by the parameter renderer and every backend that builds catalog
  * queries from ODBC search patterns: a value that reaches a query string

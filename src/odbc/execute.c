@@ -11,7 +11,6 @@
 #include <float.h>
 #include <glib.h>
 
-extern char *argus_str_dup(const SQLCHAR *str, SQLINTEGER len);
 
 /* ── Internal: count parameter markers in a SQL string ────────── */
 
@@ -842,6 +841,12 @@ SQLRETURN SQL_API SQLExecDirect(
         ARGUS_STMT_UNLOCK(stmt);
         return err;
     }
+    if (!argus_odbc_len_valid(TextLength)) {
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY090",
+                               "[Argus] Invalid string or buffer length", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
+    }
 
     char *query = argus_str_dup(StatementText, TextLength);
     if (!query) {
@@ -893,6 +898,12 @@ SQLRETURN SQL_API SQLPrepare(
     if (!StatementText) {
         SQLRETURN err = argus_set_error(&stmt->diag, "HY009",
                                "[Argus] NULL statement text", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return err;
+    }
+    if (!argus_odbc_len_valid(TextLength)) {
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY090",
+                               "[Argus] Invalid string or buffer length", 0);
         ARGUS_STMT_UNLOCK(stmt);
         return err;
     }
@@ -1158,6 +1169,9 @@ SQLRETURN SQL_API SQLNativeSql(
     if (!InStatementText)
         return argus_set_error(&dbc->diag, "HY009",
                                "[Argus] NULL statement text", 0);
+    if (!argus_odbc_len_valid(TextLength1))
+        return argus_set_error(&dbc->diag, "HY090",
+                               "[Argus] Invalid string or buffer length", 0);
 
     /* The translation is dialect-specific, so without a connection there is no
      * right answer — better to say so than to silently apply the ANSI dialect

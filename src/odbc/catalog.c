@@ -16,7 +16,6 @@
 #define SQL_DATETIME        9
 #endif
 
-extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
 
 /* ── Helper: strip trailing spaces from identifier (metadata_id mode) ── */
 
@@ -32,6 +31,24 @@ static char *strip_trailing_spaces(const char *s)
     out[len] = '\0';
     return out;
 }
+
+/* ── Helper: HY090 on a name length that is neither a count nor SQL_NTS ──
+ * Checked before the first argus_str_dup_short, whose NULL for a bad length
+ * would otherwise read here as "argument omitted" and turn the caller's bug
+ * into an unfiltered catalog query. */
+static SQLRETURN catalog_check_lengths(argus_stmt_t *stmt,
+                                       const SQLSMALLINT *lens, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (!argus_odbc_len_valid(lens[i]))
+            return argus_set_error(&stmt->diag, "HY090",
+                                   "[Argus] Invalid string or buffer length", 0);
+    }
+    return SQL_SUCCESS;
+}
+#define CATALOG_CHECK_LENGTHS(stmt, ...) \
+    catalog_check_lengths((stmt), (const SQLSMALLINT[]){ __VA_ARGS__ }, \
+                          sizeof((const SQLSMALLINT[]){ __VA_ARGS__ }) / sizeof(SQLSMALLINT))
 
 /* ── Helper: dup catalog arg, applying metadata_id rules if set ── */
 
@@ -109,6 +126,11 @@ static SQLRETURN sqltables_impl(
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
+    {
+        SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3,
+                                                        NameLength4);
+        if (len_ret != SQL_SUCCESS) return len_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
@@ -231,6 +253,11 @@ static SQLRETURN sqlcolumns_impl(
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
+    {
+        SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3,
+                                                        NameLength4);
+        if (len_ret != SQL_SUCCESS) return len_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
@@ -623,6 +650,10 @@ static SQLRETURN sqlstatistics_impl(
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
+    {
+        SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3);
+        if (len_ret != SQL_SUCCESS) return len_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
@@ -758,6 +789,10 @@ static SQLRETURN sqlspecialcolumns_impl(
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
+    {
+        SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3);
+        if (len_ret != SQL_SUCCESS) return len_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
@@ -838,6 +873,10 @@ static SQLRETURN sqlprimarykeys_impl(
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
+    {
+        SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3);
+        if (len_ret != SQL_SUCCESS) return len_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
@@ -935,6 +974,11 @@ static SQLRETURN sqlforeignkeys_impl(
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
+    {
+        SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3,
+                                                        NameLength4, NameLength5, NameLength6);
+        if (len_ret != SQL_SUCCESS) return len_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
@@ -1021,6 +1065,10 @@ static SQLRETURN sqlprocedures_impl(
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
+    {
+        SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3);
+        if (len_ret != SQL_SUCCESS) return len_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
@@ -1105,6 +1153,11 @@ static SQLRETURN sqlprocedurecolumns_impl(
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
+    {
+        SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3,
+                                                        NameLength4);
+        if (len_ret != SQL_SUCCESS) return len_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
@@ -1186,6 +1239,10 @@ static SQLRETURN sqltableprivileges_impl(
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
+    {
+        SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3);
+        if (len_ret != SQL_SUCCESS) return len_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
@@ -1266,6 +1323,11 @@ static SQLRETURN sqlcolumnprivileges_impl(
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
     argus_diag_clear(&stmt->diag);
+    {
+        SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3,
+                                                        NameLength4);
+        if (len_ret != SQL_SUCCESS) return len_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;

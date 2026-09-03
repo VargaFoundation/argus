@@ -329,11 +329,11 @@ SQLSMALLINT argus_copy_string(const char *src,
 
 /*
  * Duplicate a string, handling SQL_NTS and explicit lengths.
- * Caller must free the result.
+ * Caller must free the result. See types.h for the NULL cases.
  */
 char *argus_str_dup(const SQLCHAR *str, SQLINTEGER len)
 {
-    if (!str) return NULL;
+    if (!str || !argus_odbc_len_valid(len)) return NULL;
 
     size_t actual_len;
     if (len == SQL_NTS)
@@ -386,7 +386,7 @@ int argus_hex_decode(const char *hex, size_t hex_len,
 /* Same but for SQLSMALLINT lengths */
 char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len)
 {
-    if (!str) return NULL;
+    if (!str || !argus_odbc_len_valid(len)) return NULL;
 
     size_t actual_len;
     if (len == SQL_NTS)

@@ -21,8 +21,6 @@
 /* External string helper declarations */
 extern SQLSMALLINT argus_copy_string(const char *src,
                                       SQLCHAR *dst, SQLSMALLINT dst_len);
-extern char *argus_str_dup(const SQLCHAR *str, SQLINTEGER len);
-extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
 extern bool argus_resolve_dsn(argus_dbc_t *dbc, const char *dsn_name);
 
 /* ── Internal: multi-host + secret helpers for do_connect ────── */
@@ -275,6 +273,11 @@ SQLRETURN SQL_API SQLDriverConnect(
     if (DriverCompletion == SQL_DRIVER_PROMPT) {
         return argus_set_error(&dbc->diag, "HY000",
                                "[Argus] Driver does not support prompting", 0);
+    }
+
+    if (!argus_odbc_len_valid(StringLength1)) {
+        return argus_set_error(&dbc->diag, "HY090",
+                               "[Argus] Invalid string or buffer length", 0);
     }
 
     /* Get the connection string */
@@ -573,6 +576,12 @@ SQLRETURN SQL_API SQLConnect(
                                "[Argus] Already connected", 0);
     }
 
+    if (!argus_odbc_len_valid(NameLength1) || !argus_odbc_len_valid(NameLength2) ||
+        !argus_odbc_len_valid(NameLength3)) {
+        return argus_set_error(&dbc->diag, "HY090",
+                               "[Argus] Invalid string or buffer length", 0);
+    }
+
     /* Try resolving ServerName as a DSN first */
     char *server = argus_str_dup_short(ServerName, NameLength1);
     if (server) {
@@ -712,6 +721,11 @@ SQLRETURN SQL_API SQLBrowseConnect(
     if (dbc->connected) {
         return argus_set_error(&dbc->diag, "08002",
                                "[Argus] Already connected", 0);
+    }
+
+    if (!argus_odbc_len_valid(StringLength1)) {
+        return argus_set_error(&dbc->diag, "HY090",
+                               "[Argus] Invalid string or buffer length", 0);
     }
 
     /* Merge incoming keywords with previously accumulated ones */

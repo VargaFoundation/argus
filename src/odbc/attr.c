@@ -15,7 +15,6 @@
 
 extern SQLSMALLINT argus_copy_string(const char *src,
                                       SQLCHAR *dst, SQLSMALLINT dst_len);
-extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
 
 /* ── ODBC API: SQLSetEnvAttr ─────────────────────────────────── */
 
@@ -776,6 +775,11 @@ static SQLRETURN sqlsetcursorname_impl(
         return argus_set_error(&stmt->diag, "24000",
                                "[Argus] Cursor name cannot change while a "
                                "cursor is open", 0);
+    }
+
+    if (!argus_odbc_len_valid(NameLength)) {
+        return argus_set_error(&stmt->diag, "HY090",
+                               "[Argus] Invalid string or buffer length", 0);
     }
 
     char *name = argus_str_dup_short(CursorName, NameLength);

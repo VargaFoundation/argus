@@ -18,7 +18,6 @@
 #include <glib.h>
 
 /* Forward declarations */
-extern char *argus_str_dup_short(const SQLCHAR *str, SQLSMALLINT len);
 
 /* ── Internal: apply a single DSN key-value pair to DBC ─────── */
 
