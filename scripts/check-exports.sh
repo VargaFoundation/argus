@@ -13,7 +13,10 @@
 # Usage: scripts/check-exports.sh <driver-binary> [<allowed-prefix>]
 #   The prefix defaults to SQL. The format is picked from the extension:
 #   .dll is PE (objdump), .dylib is Mach-O (nm -gU), anything else is ELF
-#   (nm -D). Set NM/OBJDUMP to point at a specific binutils.
+#   (nm -D). Set NM/OBJDUMP to point at a specific binutils. A .dll may
+#   also export the ODBC installer's setup entry points (ConfigDSN,
+#   ConfigDriver, ConfigTranslator): the Driver Manager looks them up by
+#   name in the driver DLL itself, so they cannot carry the SQL prefix.
 
 set -u
 
@@ -26,6 +29,7 @@ binary="$1"
 prefix="${2:-SQL}"
 NM="${NM:-nm}"
 OBJDUMP="${OBJDUMP:-objdump}"
+setup_exports=''
 
 if [ ! -f "$binary" ]; then
     echo "error: $binary does not exist" >&2
@@ -34,11 +38,14 @@ fi
 
 case "$binary" in
     *.dll)
-        # The [Ordinal/Name Pointer] Table of the export directory: one
-        # "[  12] SQLConnect" line per exported name.
+        # The [Ordinal/Name Pointer] Table of the export directory: one line
+        # per exported name, the name last. binutils prints it either as
+        # "[  12] SQLConnect" or, with newer binutils, as
+        # "[  12] +base[  13]  000c SQLConnect".
         exports="$("$OBJDUMP" -p -- "$binary" \
             | sed -n '/\[Ordinal\/Name Pointer\] Table/,/^$/p' \
-            | sed -n 's/^[[:space:]]*\[[[:space:]]*[0-9][0-9]*\][[:space:]]*//p')"
+            | awk '/^[[:space:]]*\[[[:space:]]*[0-9]+\]/ { print $NF }')"
+        setup_exports='ConfigDSN|ConfigDriver|ConfigTranslator'
         ;;
     *.dylib)
         # Global, defined. Mach-O prepends an underscore to every C symbol.
@@ -62,6 +69,11 @@ fi
 total=$(printf '%s\n' "$exports" | wc -l | tr -d ' ')
 wanted=$(printf '%s\n' "$exports" | grep -c "^$prefix")
 leaked=$(printf '%s\n' "$exports" | grep -v "^$prefix" || true)
+if [ -n "$setup_exports" ] && [ -n "$leaked" ]; then
+    setup=$(printf '%s\n' "$leaked" | grep -xE "$setup_exports" || true)
+    leaked=$(printf '%s\n' "$leaked" | grep -vxE "$setup_exports" || true)
+    [ -n "$setup" ] && echo "setup entry points: $(printf '%s' "$setup" | tr '\n' ' ')"
+fi
 
 echo "$binary: $total exported symbols, $wanted starting with $prefix"
 if [ -n "$leaked" ]; then
@@ -73,4 +85,8 @@ if [ "$wanted" -eq 0 ]; then
     echo "error: $binary exports no $prefix* symbol at all" >&2
     exit 1
 fi
-echo "ok: only $prefix* symbols are exported"
+if [ -n "${setup:-}" ]; then
+    echo "ok: only $prefix* symbols and the setup entry points are exported"
+else
+    echo "ok: only $prefix* symbols are exported"
+fi
