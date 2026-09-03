@@ -29,7 +29,10 @@ jobs:
             thrift-compiler \
             libcmocka-dev \
             libcurl4-openssl-dev \
-            libjson-glib-dev
+            libjson-glib-dev \
+            libmariadb-dev \
+            libpq-dev \
+            libkrb5-dev
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3

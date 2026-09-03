@@ -224,4 +224,11 @@ void argus_backends_init(void);
 size_t argus_backend_count(void);
 const argus_backend_t *argus_backend_at(size_t index);
 
+/* One line naming the version and every backend and auth feature compiled
+ * into this binary: "argus-build 0.6.1 hive impala trino ... gssapi telemetry".
+ * A release job greps it out of the artefact (scripts/check-build-manifest.sh)
+ * so a runner missing a -dev package can no longer ship a driver that quietly
+ * lacks a backend. */
+const char *argus_build_manifest(void);
+
 #endif /* ARGUS_BACKEND_H */

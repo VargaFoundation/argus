@@ -55,103 +55,145 @@ pkg_check_modules(GLIB2 REQUIRED glib-2.0>=2.56)
 pkg_check_modules(GOBJECT2 REQUIRED gobject-2.0>=2.56)
 pkg_check_modules(GIO2 REQUIRED gio-2.0>=2.56)
 
-# Optional: Hive/Impala backend dependencies (Thrift C GLib)
-pkg_check_modules(THRIFT_C_GLIB thrift_c_glib>=0.16)
-if(THRIFT_C_GLIB_FOUND)
-    set(ARGUS_BUILD_THRIFT_BACKENDS ON)
-    message(STATUS "Hive/Impala backends: ENABLED (thrift_c_glib found)")
+# ---------------------------------------------------------------------------
+# Backend selection
+#
+# Every backend is a tri-state request, ARGUS_WITH_<NAME>:
+#   AUTO  build it when its dependencies are found (the default)
+#   ON    require it: configuring fails when a dependency is missing
+#   OFF   leave it out even when the dependencies are present
+# The decision lands in ARGUS_BUILD_<NAME> (ON/OFF), which src/ and tests/ read.
+#
+# ARGUS_RELEASE=ON promotes every backend a release artefact ships with from
+# AUTO to ON. The v0.6.0 Linux and macOS artefacts went out without PostgreSQL
+# and MySQL-wire (and the Windows installer without PostgreSQL) because the
+# release runners lacked the client libraries and the auto-detection only
+# printed a STATUS line; a release configure now fails on that runner instead.
+# Kudu and Flight SQL stay optional: their client libraries are not packaged
+# for the release platforms.
+# ---------------------------------------------------------------------------
+option(ARGUS_RELEASE "Require every backend a release artefact ships with" OFF)
+set(ARGUS_RELEASE_BACKENDS THRIFT_BACKENDS TRINO PHOENIX PINOT DRUID BIGQUERY MYSQL POSTGRES)
 
-    # Optional: GSSAPI (Kerberos) support for Thrift backends
+function(argus_backend_request name doc)
+    set(ARGUS_WITH_${name} AUTO CACHE STRING "${doc}: AUTO, ON or OFF")
+    set_property(CACHE ARGUS_WITH_${name} PROPERTY STRINGS AUTO ON OFF)
+endfunction()
+
+argus_backend_request(THRIFT_BACKENDS "Hive/Impala backends (thrift_c_glib)")
+argus_backend_request(GSSAPI "Kerberos auth for Hive/Impala (krb5-gssapi)")
+argus_backend_request(TRINO "Trino backend (libcurl + json-glib)")
+argus_backend_request(PHOENIX "Phoenix backend (libcurl + json-glib)")
+argus_backend_request(PINOT "Pinot backend (libcurl + json-glib)")
+argus_backend_request(DRUID "Druid backend (libcurl + json-glib)")
+argus_backend_request(BIGQUERY "BigQuery backend (libcurl + json-glib)")
+argus_backend_request(KUDU "Kudu backend (libkudu_client)")
+argus_backend_request(MYSQL "MySQL-wire backend (libmariadb)")
+argus_backend_request(POSTGRES "PostgreSQL/Greenplum/Cloudberry backends (libpq)")
+argus_backend_request(FLIGHTSQL "Arrow Flight SQL backend (arrow-flight-sql)")
+
+# argus_resolve_backend(<name> <result-var> <label> <found> <missing> <install> [<detail>])
+# Combines the ARGUS_WITH_<name> request with the probe result <found> into
+# <result-var> (ON/OFF). A backend that is required but whose dependency
+# <missing> was not found stops the configure step with the <install> hint.
+function(argus_resolve_backend name result label found missing install)
+    string(TOUPPER "${ARGUS_WITH_${name}}" request)
+    if(request MATCHES "^(1|ON|YES|TRUE|Y)$")
+        set(request ON)
+    elseif(request MATCHES "^(0|OFF|NO|FALSE|N|IGNORE)?$")
+        set(request OFF)
+    elseif(NOT request STREQUAL "AUTO")
+        message(FATAL_ERROR "ARGUS_WITH_${name} must be AUTO, ON or OFF (got '${ARGUS_WITH_${name}}')")
+    endif()
+    set(why "ARGUS_WITH_${name}=${request}")
+    if(request STREQUAL "AUTO" AND ARGUS_RELEASE AND name IN_LIST ARGUS_RELEASE_BACKENDS)
+        set(request ON)
+        set(why "ARGUS_RELEASE=ON")
+    endif()
+
+    if(request STREQUAL "OFF")
+        set(${result} OFF PARENT_SCOPE)
+        message(STATUS "${label}: DISABLED (${why})")
+    elseif(found)
+        set(${result} ON PARENT_SCOPE)
+        message(STATUS "${label}: ENABLED${ARGN}")
+    elseif(request STREQUAL "ON")
+        message(FATAL_ERROR "${label}: required by ${why}, but ${missing} was not found: ${install}.")
+    else()
+        set(${result} OFF PARENT_SCOPE)
+        message(STATUS "${label}: DISABLED (${missing} not found; ${install}, or ARGUS_WITH_${name}=ON to make this an error)")
+    endif()
+endfunction()
+
+# Hive/Impala backends (Thrift C GLib)
+pkg_check_modules(THRIFT_C_GLIB thrift_c_glib>=0.16)
+argus_resolve_backend(THRIFT_BACKENDS ARGUS_BUILD_THRIFT_BACKENDS "Hive/Impala backends"
+    "${THRIFT_C_GLIB_FOUND}" "thrift_c_glib" "install libthrift-c-glib-dev and thrift-compiler"
+    " (thrift_c_glib ${THRIFT_C_GLIB_VERSION})")
+
+if(ARGUS_BUILD_THRIFT_BACKENDS)
+    # GSSAPI (Kerberos) for the Thrift transports. Windows uses SSPI instead
+    # (see src/CMakeLists.txt), so GSSAPI is never required there by default.
     pkg_check_modules(KRB5_GSSAPI krb5-gssapi)
+    set(GSSAPI_PROBE_FOUND ${KRB5_GSSAPI_FOUND})
     if(NOT KRB5_GSSAPI_FOUND)
         # Fallback: search directly for the library
         find_library(GSSAPI_LIB gssapi_krb5)
         find_path(GSSAPI_INCLUDE gssapi/gssapi.h)
         if(GSSAPI_LIB AND GSSAPI_INCLUDE)
-            set(ARGUS_HAS_GSSAPI ON)
-        else()
-            set(ARGUS_HAS_GSSAPI OFF)
+            set(GSSAPI_PROBE_FOUND TRUE)
         endif()
-    else()
-        set(ARGUS_HAS_GSSAPI ON)
     endif()
-    if(ARGUS_HAS_GSSAPI)
-        message(STATUS "  GSSAPI (Kerberos) auth: ENABLED")
-    else()
-        message(STATUS "  GSSAPI (Kerberos) auth: DISABLED (install krb5-devel to enable)")
-    endif()
+    argus_resolve_backend(GSSAPI ARGUS_HAS_GSSAPI "  GSSAPI (Kerberos) auth"
+        "${GSSAPI_PROBE_FOUND}" "krb5-gssapi" "install libkrb5-dev")
 else()
-    set(ARGUS_BUILD_THRIFT_BACKENDS OFF)
-    message(STATUS "Hive/Impala backends: DISABLED (thrift_c_glib not found)")
+    set(ARGUS_HAS_GSSAPI OFF)
+    string(TOUPPER "${ARGUS_WITH_GSSAPI}" gssapi_request)
+    if(gssapi_request MATCHES "^(1|ON|YES|TRUE|Y)$")
+        message(FATAL_ERROR "ARGUS_WITH_GSSAPI=ON needs the Hive/Impala backends (ARGUS_WITH_THRIFT_BACKENDS)")
+    endif()
 endif()
 
-# Optional: Trino backend dependencies (libcurl + json-glib)
+# HTTP/JSON backends: Trino, Phoenix, Pinot, Druid and BigQuery all speak
+# through libcurl + json-glib. OpenSSL additionally enables BigQuery
+# service-account key authentication.
 pkg_check_modules(LIBCURL libcurl>=7.28)
 pkg_check_modules(JSON_GLIB json-glib-1.0>=1.2)
-
-if(LIBCURL_FOUND AND JSON_GLIB_FOUND)
-    set(ARGUS_BUILD_TRINO ON)
-    message(STATUS "Trino backend: ENABLED (libcurl + json-glib found)")
-else()
-    set(ARGUS_BUILD_TRINO OFF)
-    message(STATUS "Trino backend: DISABLED (install libcurl-dev and libjson-glib-dev to enable)")
-endif()
-
-# Optional: Phoenix backend dependencies (same as Trino: libcurl + json-glib)
-if(LIBCURL_FOUND AND JSON_GLIB_FOUND)
-    set(ARGUS_BUILD_PHOENIX ON)
-    message(STATUS "Phoenix backend: ENABLED (libcurl + json-glib found)")
-else()
-    set(ARGUS_BUILD_PHOENIX OFF)
-    message(STATUS "Phoenix backend: DISABLED (install libcurl-dev and libjson-glib-dev to enable)")
-endif()
-
-# Optional: Pinot backend (HTTP/JSON SQL; same deps as Trino)
-if(LIBCURL_FOUND AND JSON_GLIB_FOUND)
-    set(ARGUS_BUILD_PINOT ON)
-    message(STATUS "Pinot backend: ENABLED (libcurl + json-glib found)")
-else()
-    set(ARGUS_BUILD_PINOT OFF)
-    message(STATUS "Pinot backend: DISABLED (install libcurl-dev and libjson-glib-dev to enable)")
-endif()
-
-# Optional: Druid backend (HTTP/JSON SQL; same deps as Trino)
-if(LIBCURL_FOUND AND JSON_GLIB_FOUND)
-    set(ARGUS_BUILD_DRUID ON)
-    message(STATUS "Druid backend: ENABLED (libcurl + json-glib found)")
-else()
-    set(ARGUS_BUILD_DRUID OFF)
-    message(STATUS "Druid backend: DISABLED (install libcurl-dev and libjson-glib-dev to enable)")
-endif()
-
-# Optional: BigQuery backend (REST/JSON; libcurl + json-glib; OpenSSL enables
-# service-account key authentication)
 pkg_check_modules(OPENSSL openssl)
+set(HTTP_JSON_FOUND FALSE)
 if(LIBCURL_FOUND AND JSON_GLIB_FOUND)
-    set(ARGUS_BUILD_BIGQUERY ON)
-    if(OPENSSL_FOUND)
-        message(STATUS "BigQuery backend: ENABLED (service-account auth via OpenSSL)")
-    else()
-        message(STATUS "BigQuery backend: ENABLED (AccessToken auth only; install libssl-dev for key files)")
-    endif()
-else()
-    set(ARGUS_BUILD_BIGQUERY OFF)
-    message(STATUS "BigQuery backend: DISABLED (install libcurl-dev and libjson-glib-dev to enable)")
+    set(HTTP_JSON_FOUND TRUE)
 endif()
+set(HTTP_JSON_MISSING "libcurl or json-glib")
+set(HTTP_JSON_INSTALL "install libcurl4-openssl-dev and libjson-glib-dev")
 
-# Optional: Kudu backend dependencies (libkudu_client C++ library)
+argus_resolve_backend(TRINO ARGUS_BUILD_TRINO "Trino backend" "${HTTP_JSON_FOUND}"
+    "${HTTP_JSON_MISSING}" "${HTTP_JSON_INSTALL}")
+argus_resolve_backend(PHOENIX ARGUS_BUILD_PHOENIX "Phoenix backend" "${HTTP_JSON_FOUND}"
+    "${HTTP_JSON_MISSING}" "${HTTP_JSON_INSTALL}")
+argus_resolve_backend(PINOT ARGUS_BUILD_PINOT "Pinot backend" "${HTTP_JSON_FOUND}"
+    "${HTTP_JSON_MISSING}" "${HTTP_JSON_INSTALL}")
+argus_resolve_backend(DRUID ARGUS_BUILD_DRUID "Druid backend" "${HTTP_JSON_FOUND}"
+    "${HTTP_JSON_MISSING}" "${HTTP_JSON_INSTALL}")
+if(OPENSSL_FOUND)
+    set(BIGQUERY_DETAIL " (service-account auth via OpenSSL)")
+else()
+    set(BIGQUERY_DETAIL " (AccessToken auth only; install libssl-dev for key files)")
+endif()
+argus_resolve_backend(BIGQUERY ARGUS_BUILD_BIGQUERY "BigQuery backend" "${HTTP_JSON_FOUND}"
+    "${HTTP_JSON_MISSING}" "${HTTP_JSON_INSTALL}" "${BIGQUERY_DETAIL}")
+
+# Kudu backend (libkudu_client C++ library)
 find_library(KUDU_CLIENT_LIB kudu_client)
 find_path(KUDU_CLIENT_INCLUDE kudu/client/client.h)
-
+set(KUDU_FOUND FALSE)
 if(KUDU_CLIENT_LIB AND KUDU_CLIENT_INCLUDE)
-    set(ARGUS_BUILD_KUDU ON)
-    message(STATUS "Kudu backend: ENABLED (libkudu_client found)")
-else()
-    set(ARGUS_BUILD_KUDU OFF)
-    message(STATUS "Kudu backend: DISABLED (install libkudu-client-dev to enable)")
+    set(KUDU_FOUND TRUE)
 endif()
+argus_resolve_backend(KUDU ARGUS_BUILD_KUDU "Kudu backend" "${KUDU_FOUND}"
+    "libkudu_client" "install libkudu-client-dev")
 
-# Optional: MySQL-wire backend (StarRocks/Doris/ClickHouse/MySQL/MariaDB)
+# MySQL-wire backend (StarRocks/Doris/ClickHouse/MySQL/MariaDB)
 pkg_check_modules(LIBMARIADB libmariadb)
 if(NOT LIBMARIADB_FOUND)
     pkg_check_modules(LIBMARIADB mariadb)
@@ -159,16 +201,10 @@ endif()
 if(NOT LIBMARIADB_FOUND)
     pkg_check_modules(LIBMARIADB libmysqlclient)
 endif()
+argus_resolve_backend(MYSQL ARGUS_BUILD_MYSQL "MySQL-wire backend" "${LIBMARIADB_FOUND}"
+    "libmariadb" "install libmariadb-dev" " (libmariadb ${LIBMARIADB_VERSION})")
 
-if(LIBMARIADB_FOUND)
-    set(ARGUS_BUILD_MYSQL ON)
-    message(STATUS "MySQL-wire backend: ENABLED (libmariadb/mysqlclient found)")
-else()
-    set(ARGUS_BUILD_MYSQL OFF)
-    message(STATUS "MySQL-wire backend: DISABLED (install libmariadb-dev to enable)")
-endif()
-
-# Optional: PostgreSQL-family backends (PostgreSQL / Greenplum / Apache Cloudberry)
+# PostgreSQL-family backends (PostgreSQL / Greenplum / Apache Cloudberry)
 # One libpq-based core serves all three; they differ in catalog and dialect.
 pkg_check_modules(LIBPQ libpq)
 if(NOT LIBPQ_FOUND)
@@ -183,24 +219,15 @@ if(NOT LIBPQ_FOUND)
         set(LIBPQ_VERSION "unknown")
     endif()
 endif()
+argus_resolve_backend(POSTGRES ARGUS_BUILD_POSTGRES "PostgreSQL/Greenplum/Cloudberry backends"
+    "${LIBPQ_FOUND}" "libpq" "install libpq-dev; Homebrew's keg-only libpq needs its lib/pkgconfig on PKG_CONFIG_PATH"
+    " (libpq ${LIBPQ_VERSION})")
 
-if(LIBPQ_FOUND)
-    set(ARGUS_BUILD_POSTGRES ON)
-    message(STATUS "PostgreSQL/Greenplum/Cloudberry backends: ENABLED (libpq ${LIBPQ_VERSION})")
-else()
-    set(ARGUS_BUILD_POSTGRES OFF)
-    message(STATUS "PostgreSQL/Greenplum/Cloudberry backends: DISABLED (install libpq-dev to enable)")
-endif()
-
-# Optional: Arrow Flight SQL backend (Dremio / InfluxDB 3 / Doris / StarRocks)
+# Arrow Flight SQL backend (Dremio / InfluxDB 3 / Doris / StarRocks)
 pkg_check_modules(ARROW_FLIGHT_SQL arrow-flight-sql)
-if(ARROW_FLIGHT_SQL_FOUND)
-    set(ARGUS_BUILD_FLIGHTSQL ON)
-    message(STATUS "Arrow Flight SQL backend: ENABLED (arrow-flight-sql ${ARROW_FLIGHT_SQL_VERSION})")
-else()
-    set(ARGUS_BUILD_FLIGHTSQL OFF)
-    message(STATUS "Arrow Flight SQL backend: DISABLED (install libarrow-flight-sql-dev to enable)")
-endif()
+argus_resolve_backend(FLIGHTSQL ARGUS_BUILD_FLIGHTSQL "Arrow Flight SQL backend" "${ARROW_FLIGHT_SQL_FOUND}"
+    "arrow-flight-sql" "install libarrow-flight-sql-dev"
+    " (arrow-flight-sql ${ARROW_FLIGHT_SQL_VERSION})")
 
 if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO AND NOT ARGUS_BUILD_PHOENIX AND NOT ARGUS_BUILD_KUDU AND NOT ARGUS_BUILD_MYSQL AND NOT ARGUS_BUILD_FLIGHTSQL AND NOT ARGUS_BUILD_PINOT AND NOT ARGUS_BUILD_DRUID AND NOT ARGUS_BUILD_BIGQUERY AND NOT ARGUS_BUILD_POSTGRES)
     message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino/Phoenix) or libkudu_client (for Kudu) or libmariadb-dev (for MySQL-wire: StarRocks/Doris/ClickHouse) or libpq-dev (for PostgreSQL/Greenplum/Cloudberry) or libarrow-flight-sql-dev (for Arrow Flight SQL: Dremio/InfluxDB 3).")

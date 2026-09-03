@@ -16,7 +16,10 @@ sudo apt-get install -y \
     thrift-compiler \
     libcmocka-dev \
     libcurl4-openssl-dev \
-    libjson-glib-dev
+    libjson-glib-dev \
+    libmariadb-dev \
+    libpq-dev \
+    libkrb5-dev
 ```
 
 ### Fedora/RHEL
@@ -29,14 +32,29 @@ sudo dnf install -y \
     thrift-devel \
     libcmocka-devel \
     libcurl-devel \
-    json-glib-devel
+    json-glib-devel \
+    mariadb-connector-c-devel \
+    libpq-devel \
+    krb5-devel
 ```
 
 ### macOS (Homebrew)
 
 ```bash
-brew install cmake unixodbc glib thrift cmocka pkg-config curl json-glib
+brew install cmake unixodbc glib thrift cmocka pkg-config curl json-glib \
+    libpq mariadb-connector-c
 ```
+
+`libpq` and `mariadb-connector-c` are keg-only, so pkg-config cannot see them
+until they are on its path. Configure with:
+
+```bash
+export PKG_CONFIG_PATH="$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mariadb-connector-c)/lib/pkgconfig:$PKG_CONFIG_PATH"
+```
+
+Without it the PostgreSQL and MySQL-wire backends are left out of the build
+(see [Choosing backends](#choosing-backends) for how to make that an error
+instead).
 
 ### Windows (MSYS2/UCRT64)
 
@@ -51,7 +69,9 @@ pacman -S \
     mingw-w64-ucrt-x86_64-glib2 \
     mingw-w64-ucrt-x86_64-curl \
     mingw-w64-ucrt-x86_64-json-glib \
-    mingw-w64-ucrt-x86_64-cmocka
+    mingw-w64-ucrt-x86_64-cmocka \
+    mingw-w64-ucrt-x86_64-libmariadbclient \
+    mingw-w64-ucrt-x86_64-postgresql
 ```
 
 MSYS2 ships the thrift compiler (`mingw-w64-ucrt-x86_64-thrift`) but not the
@@ -108,8 +128,47 @@ cmake --build build
 | `BUILD_TESTING` | ON | Build unit tests |
 | `BUILD_INTEGRATION_TESTS` | OFF | Build integration tests |
 | `BUILD_SHARED_LIBS` | ON | Build shared library (required for ODBC) |
+| `BUILD_ADBC` | ON | Build the Arrow ADBC driver over the ODBC stack |
+| `ARGUS_WITH_<BACKEND>` | AUTO | Per-backend request: `AUTO`, `ON` or `OFF` (see below) |
+| `ARGUS_RELEASE` | OFF | Turn every `AUTO` a release ships with into `ON` |
+| `ARGUS_ENABLE_TELEMETRY` | ON | Compile in the opt-in usage telemetry (off at runtime by default) |
+| `ENABLE_ASAN` | OFF | AddressSanitizer + UndefinedBehaviorSanitizer |
+| `ENABLE_FUZZING` | OFF | libFuzzer harnesses in `fuzz/` (requires Clang) |
 | `CMAKE_BUILD_TYPE` | Release | Debug or Release |
 | `CMAKE_INSTALL_PREFIX` | /usr/local | Installation prefix |
+
+### Choosing backends
+
+Each backend has a tri-state cache variable:
+
+| Variable | Backends | Needs |
+|----------|----------|-------|
+| `ARGUS_WITH_THRIFT_BACKENDS` | Hive, Impala | thrift_c_glib ≥ 0.16 |
+| `ARGUS_WITH_GSSAPI` | Kerberos auth for Hive/Impala | krb5-gssapi (Windows uses SSPI, no option) |
+| `ARGUS_WITH_TRINO`, `_PHOENIX`, `_PINOT`, `_DRUID`, `_BIGQUERY` | the HTTP backends | libcurl + json-glib |
+| `ARGUS_WITH_MYSQL` | MySQL-wire (MySQL, MariaDB, Doris, StarRocks…) | libmariadb / libmysqlclient |
+| `ARGUS_WITH_POSTGRES` | PostgreSQL, Greenplum, Cloudberry | libpq |
+| `ARGUS_WITH_KUDU` | Kudu | kudu_client (C++) |
+| `ARGUS_WITH_FLIGHTSQL` | Arrow Flight SQL | Arrow Flight SQL (C++) |
+
+- `AUTO` (default): build the backend when its dependency is found, otherwise
+  print `DISABLED (... not found)` and carry on.
+- `ON`: the backend is required; a missing dependency is a configure-time
+  `FATAL_ERROR` naming the package to install.
+- `OFF`: never build it, even if the dependency is present.
+
+`-DARGUS_RELEASE=ON` promotes every `AUTO` for the backends a release artefact
+ships with (Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery, MySQL-wire,
+PostgreSQL family) to `ON`. The CI and release workflows configure with it so a
+runner missing a `-dev` package fails the build instead of silently publishing
+a driver without that backend. Kudu and Flight SQL stay optional because their
+C++ SDKs are not packaged everywhere. An explicit `ARGUS_WITH_<BACKEND>=OFF`
+still wins under `ARGUS_RELEASE=ON`.
+
+```bash
+# Require PostgreSQL, skip Kudu, take whatever else is installed
+cmake -B build -DARGUS_WITH_POSTGRES=ON -DARGUS_WITH_KUDU=OFF
+```
 
 ### Debug Build
 
@@ -189,9 +248,25 @@ Use the NSIS installer (see `installer/argus-odbc.nsi`):
 
 ## Verifying the Build
 
+The driver embeds one line naming its version and every backend and auth
+feature it was compiled with. Read it straight out of the binary — no need to
+load the driver — with `strings`, or with the script the release workflow
+uses, which fails when a requested token is missing:
+
+```bash
+strings -a build/src/libargus_odbc.so | grep '^argus-build '
+# argus-build 0.6.1 hive impala trino phoenix mysql pinot druid bigquery postgres greenplum cloudberry gssapi openssl telemetry
+
+scripts/check-build-manifest.sh build/src/libargus_odbc.so hive impala trino postgres
+```
+
+The same line is the first thing the driver logs at `INFO` level when it is
+loaded, which is the quickest way to find out what an installed driver
+actually contains.
+
 ```bash
 # Check the shared library exports (Linux)
-nm -D build/libargus_odbc.so | grep SQL
+nm -D build/src/libargus_odbc.so | grep SQL
 
 # Should show entries like:
 # T SQLAllocHandle

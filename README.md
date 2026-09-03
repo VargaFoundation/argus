@@ -10,7 +10,7 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 ### Core ODBC Support
 - **104 ODBC entry points** (ANSI + Unicode `W` variants) — ODBC 3.80, **Level 1 interface conformance** (`SQL_OIC_LEVEL1`, SQL-92 Entry), plus ODBC 2.x compatibility (`SQLAllocConnect`, `SQLError`, `SQLExtendedFetch`, ...). This matches the commercial Simba/Starburst drivers for these engines; stored procedures and transactions — the two OLTP features Level 1 also names — are reported absent (`SQL_PROCEDURES="N"`, `SQL_TXN_CAPABLE=SQL_TC_NONE`), as they are on Trino/BigQuery/Hive themselves.
 - **Statement-level asynchronous execution** (`SQL_ASYNC_MODE = SQL_AM_STATEMENT`): async `SQLExecDirect`/`SQLExecute` on a worker thread, with `SQLCompleteAsync` and `SQLCancelHandle` (ODBC 3.8).
-- **13 backends**, enabled by dependency auto-detection at configure time
+- **13 backends**, each selected at configure time with `-DARGUS_WITH_<BACKEND>=AUTO|ON|OFF` (`-DARGUS_RELEASE=ON` requires every backend a release ships with); the built driver embeds an `argus-build …` line naming what it contains
 - **Cross-platform**: Linux, macOS and Windows x64
 - **Arrow ADBC driver** (`libargus_adbc`) exposing the same backends through the Arrow C Data Interface
 
@@ -192,10 +192,14 @@ PKG_CONFIG_PATH="$PWD/thrift-c-glib-prefix/lib/pkgconfig" \
 cmake --build build
 ```
 
-**macOS:** Homebrew `unixodbc glib json-glib curl libpq` then the same CMake
-invocation. `libpq` is keg-only, so add it to `PKG_CONFIG_PATH` first
-(`export PKG_CONFIG_PATH="$(brew --prefix libpq)/lib/pkgconfig:$PKG_CONFIG_PATH"`)
-or the PostgreSQL backend is silently left out.
+**macOS:** Homebrew `unixodbc glib json-glib curl libpq mariadb-connector-c`
+then the same CMake invocation. `libpq` and `mariadb-connector-c` are keg-only,
+so add them to `PKG_CONFIG_PATH` first
+(`export PKG_CONFIG_PATH="$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mariadb-connector-c)/lib/pkgconfig:$PKG_CONFIG_PATH"`).
+Configure with `-DARGUS_WITH_POSTGRES=ON -DARGUS_WITH_MYSQL=ON` (or
+`-DARGUS_RELEASE=ON`) to get a configure error instead of a driver quietly
+built without them; `strings -a build/src/libargus_odbc.dylib | grep '^argus-build '`
+shows what any built driver contains. See [docs/BUILDING.md](docs/BUILDING.md).
 
 ## Connection String Parameters
 

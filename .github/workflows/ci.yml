@@ -42,8 +42,10 @@ jobs:
       - name: Generate a comma-decimal locale
         run: sudo locale-gen fr_FR.UTF-8
 
+      # ARGUS_RELEASE=ON: every backend a release ships with must configure
+      # here, so a broken dependency probe fails the PR, not the tag build.
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="--coverage"
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="--coverage" -DARGUS_RELEASE=ON -DARGUS_WITH_GSSAPI=ON
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -52,6 +54,12 @@ jobs:
         env:
           ARGUS_TEST_REQUIRE_LOCALE: "1"
         run: cd build && ctest --output-on-failure -L unit
+
+      - name: Verify the shipped backends
+        run: |
+          bash scripts/check-build-manifest.sh build/src/libargus_odbc.so \
+            hive impala trino phoenix pinot druid bigquery mysql \
+            postgres greenplum cloudberry gssapi
 
       - name: Coverage report
         run: |
@@ -127,19 +135,28 @@ jobs:
             json-glib \
             curl \
             libpq \
+            mariadb-connector-c \
             cmocka
           # libpq is keg-only: without this the pkg-config probe misses it and
-          # the PostgreSQL backends are quietly left out of the build.
-          echo "PKG_CONFIG_PATH=$(brew --prefix libpq)/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+          # the PostgreSQL backends are left out of the build.
+          echo "PKG_CONFIG_PATH=$(brew --prefix libpq)/lib/pkgconfig:$(brew --prefix mariadb-connector-c)/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
 
+      # ARGUS_RELEASE=ON: every backend a release ships with must configure
+      # here, so a broken dependency probe fails the PR, not the tag build.
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DARGUS_RELEASE=ON
 
       - name: Build
         run: cmake --build build -j$(sysctl -n hw.logicalcpu)
 
       - name: Unit Tests
         run: cd build && ctest --output-on-failure -L unit
+
+      - name: Verify the shipped backends
+        run: |
+          bash scripts/check-build-manifest.sh build/src/libargus_odbc.dylib \
+            hive impala trino phoenix pinot druid bigquery mysql \
+            postgres greenplum cloudberry
 
       - name: Check shared library exports
         run: |
@@ -220,16 +237,24 @@ jobs:
         # the portable subset (Argus talks through its own GIO transport).
         run: bash scripts/build-thrift-c-glib.sh "$PWD/thrift-c-glib-prefix" 0.23.0
 
+      # ARGUS_RELEASE=ON: every backend a release ships with must configure
+      # here, so a broken dependency probe fails the PR, not the tag build.
       - name: Configure
         run: >-
           PKG_CONFIG_PATH="$PWD/thrift-c-glib-prefix/lib/pkgconfig"
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DARGUS_RELEASE=ON
 
       - name: Build
         run: cmake --build build
 
       - name: Unit Tests
         run: cd build && ctest --output-on-failure -L unit
+
+      - name: Verify the shipped backends
+        run: |
+          bash scripts/check-build-manifest.sh build/src/libargus_odbc.dll \
+            hive impala trino phoenix pinot druid bigquery mysql \
+            postgres greenplum cloudberry sspi
 
       - name: Prepare installer files
         run: |

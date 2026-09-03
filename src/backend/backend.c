@@ -42,6 +42,73 @@ extern const argus_backend_t *argus_greenplum_backend_get(void);
 extern const argus_backend_t *argus_cloudberry_backend_get(void);
 #endif
 
+/* Assembled from the same ARGUS_HAS_* switches as the registrations below, so
+ * the manifest cannot claim a backend that argus_backends_init() would not
+ * register. Kept as one string literal so `strings` prints it on one line. */
+#ifndef ARGUS_VERSION_MAJOR
+#define ARGUS_VERSION_MAJOR 0
+#endif
+#ifndef ARGUS_VERSION_MINOR
+#define ARGUS_VERSION_MINOR 0
+#endif
+#ifndef ARGUS_VERSION_PATCH
+#define ARGUS_VERSION_PATCH 0
+#endif
+#define ARGUS_STR_(x) #x
+#define ARGUS_STR(x)  ARGUS_STR_(x)
+static const char build_manifest[] =
+    "argus-build "
+    ARGUS_STR(ARGUS_VERSION_MAJOR) "." ARGUS_STR(ARGUS_VERSION_MINOR) "."
+    ARGUS_STR(ARGUS_VERSION_PATCH)
+#ifdef ARGUS_HAS_THRIFT_BACKENDS
+    " hive impala"
+#endif
+#ifdef ARGUS_HAS_TRINO
+    " trino"
+#endif
+#ifdef ARGUS_HAS_PHOENIX
+    " phoenix"
+#endif
+#ifdef ARGUS_HAS_KUDU
+    " kudu"
+#endif
+#ifdef ARGUS_HAS_MYSQL
+    " mysql"
+#endif
+#ifdef ARGUS_HAS_FLIGHTSQL
+    " flightsql"
+#endif
+#ifdef ARGUS_HAS_PINOT
+    " pinot"
+#endif
+#ifdef ARGUS_HAS_DRUID
+    " druid"
+#endif
+#ifdef ARGUS_HAS_BIGQUERY
+    " bigquery"
+#endif
+#ifdef ARGUS_HAS_POSTGRES
+    " postgres greenplum cloudberry"
+#endif
+#ifdef ARGUS_HAS_GSSAPI
+    " gssapi"
+#endif
+#ifdef ARGUS_HAS_SSPI
+    " sspi"
+#endif
+#ifdef ARGUS_HAS_OPENSSL
+    " openssl"
+#endif
+#ifdef ARGUS_HAS_TELEMETRY
+    " telemetry"
+#endif
+    ;
+
+const char *argus_build_manifest(void)
+{
+    return build_manifest;
+}
+
 void argus_backend_register(const argus_backend_t *backend)
 {
     if (!backend) return;
@@ -85,6 +152,9 @@ void argus_backends_init(void)
     /* Idempotent: several entry points call this, and registering twice would
      * fill the registry with duplicates. */
     if (registry_count > 0) return;
+
+    /* First line of any log: what this binary was built with. */
+    ARGUS_LOG_INFO("%s", build_manifest);
 
     /* Register all available backends */
 #ifdef ARGUS_HAS_THRIFT_BACKENDS

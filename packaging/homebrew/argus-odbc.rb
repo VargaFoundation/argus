@@ -23,14 +23,25 @@ class ArgusOdbc < Formula
   depends_on "unixodbc"
 
   def install
-    # libpq is keg-only, so its .pc file is not on the default search path.
-    # Without this the PostgreSQL, Greenplum and Cloudberry backends are left
-    # out of the build without any error -- see README.md.
+    # libpq is keg-only, so its .pc file is not on the default search path;
+    # without this the pkg-config probe misses it -- see docs/BUILDING.md.
     ENV.prepend_path "PKG_CONFIG_PATH", Formula["libpq"].opt_lib/"pkgconfig"
+    ENV.prepend_path "PKG_CONFIG_PATH", Formula["mariadb-connector-c"].opt_lib/"pkgconfig"
 
+    # Every backend this formula declares a dependency for is required, so a
+    # probe that stops finding its library fails the build instead of
+    # producing a bottle that quietly lacks the backend. (No thrift here, so
+    # Hive/Impala are not part of the Homebrew build.)
     system "cmake", "-B", "build",
            "-DCMAKE_BUILD_TYPE=Release",
            "-DBUILD_TESTING=OFF",
+           "-DARGUS_WITH_TRINO=ON",
+           "-DARGUS_WITH_PHOENIX=ON",
+           "-DARGUS_WITH_PINOT=ON",
+           "-DARGUS_WITH_DRUID=ON",
+           "-DARGUS_WITH_BIGQUERY=ON",
+           "-DARGUS_WITH_MYSQL=ON",
+           "-DARGUS_WITH_POSTGRES=ON",
            *std_cmake_args
     system "cmake", "--build", "build"
     lib.install "build/src/libargus_odbc.dylib"
@@ -53,10 +64,15 @@ class ArgusOdbc < Formula
   test do
     assert_predicate lib/"libargus_odbc.dylib", :exist?
 
-    # The ODBC entry points must actually be exported, and the PostgreSQL
-    # backend must have survived the keg-only libpq dance above.
+    # The ODBC entry points must actually be exported, and the build manifest
+    # the driver embeds must list the backends the keg-only dance above and
+    # the -DARGUS_WITH_*=ON flags were meant to guarantee.
     symbols = shell_output("nm -gU #{lib}/libargus_odbc.dylib")
     assert_match "_SQLDriverConnect", symbols
-    assert_match "postgres", shell_output("strings #{lib}/libargus_odbc.dylib")
+    manifest = shell_output("strings -a #{lib}/libargus_odbc.dylib")[/^argus-build .*$/]
+    refute_nil manifest, "no argus-build line in the driver"
+    %w[trino phoenix pinot druid bigquery mysql postgres greenplum cloudberry].each do |backend|
+      assert_match(/ #{backend}( |$)/, manifest)
+    end
   end
 end
