@@ -2,6 +2,73 @@
 
 All notable changes to the Argus ODBC Driver project.
 
+## [Unreleased]
+
+### Fixed: memory safety and handle lifetime
+- **A negative length that is not `SQL_NTS`** (`SQLExecDirect`, `SQLPrepare`,
+  `SQLNativeSql`, `SQLDriverConnect`, `SQLBrowseConnect`, `SQLConnect`,
+  `SQLSetCursorName` and the catalog functions) became `malloc(0)` followed
+  by a multi-gigabyte `memcpy`. Every entry point now answers `HY090`,
+  before it touches the statement's open result set.
+- **Data-at-execution parameters shared one buffer** per statement and one
+  static length per process: with two `SQL_DATA_AT_EXEC` parameters the
+  first one's bytes were overwritten by the second's, and re-executing the
+  prepared statement read the freed buffer instead of asking for the data
+  again. Each parameter now collects into its own buffer, owned by the
+  statement; the application's bindings are never modified; `SQLExecDirect`
+  honours `SQL_DATA_AT_EXEC` instead of rendering the token pointer as the
+  value. `test_dae` drives the whole cycle under ASan.
+- **`SQL_C_BINARY` parameter with a negative `BufferLength`** and no
+  indicator wrapped the hex buffer's size and wrote the value past it; it is
+  `HYC00` like any other unrenderable parameter.
+- **`SQLFreeHandle(SQL_HANDLE_DESC)` on an implicit descriptor** called
+  `free()` on a pointer into the middle of the statement. It is `HY017`, and
+  `SQLGetDiagRec`/`SQLGetDiagField` accept `SQL_HANDLE_DESC` so the
+  diagnostic (and those `SQLSetDescField` records) can be read.
+- **`SQLDisconnect` left the connection's statements behind** with a
+  pointer to a dead backend, leaked their operations, ran without the
+  connection lock and did not refuse (`HY010`) while an asynchronous execute
+  was in flight. The connection now tracks its statements and explicit
+  descriptors and frees them on disconnect, as ODBC has it; an explicit
+  descriptor no longer reads the freed statement it was associated with.
+- **The `SQLTables`/`SQLColumns` metadata cache had no lock of its own**: two
+  statements on one connection corrupted the hash table, and search patterns
+  longer than 2 KiB shared one cache entry.
+- **`SQLFreeStmt(SQL_CLOSE)` and `SQLCloseCursor` discarded the prepared
+  statement**, the bindings and `SQL_ATTR_PARAMSET_SIZE`, so the prepare /
+  execute / close / execute cycle failed with `HY010` and columns bound once
+  fetched nothing after the first close. Closing the cursor now drops only
+  the result set; a re-executed static cursor no longer serves the previous
+  result from `SQLFetchScroll`.
+
+### Fixed: `SQLCancel` and asynchronous execution
+- **`SQLCancel` could not interrupt anything**: it took the statement lock
+  that the running `SQLExecDirect`/`SQLFetch` held, so it only ran once the
+  call had finished on its own, and the asynchronous worker wrote the
+  diagnostics, columns and operation without the lock while other calls
+  read them. The worker now executes under the statement lock; polling
+  answers `SQL_STILL_EXECUTING` without waiting and no longer clears the
+  worker's diagnostic (its error, or `HY008` after a cancel). `SQLCancel`
+  from another thread returns at once: the running call answers
+  `SQL_ERROR`/`HY008` at its next checkpoint and closes the operation on the
+  thread that owns it. On the PostgreSQL family the cancel reaches the
+  server immediately (libpq's out-of-band request, marked by the new
+  `cancel_from_any_thread` vtable flag), so a blocked call returns early;
+  the other backends are cancelled when their call returns. The README
+  paragraph on `SQLCancel` now describes what each backend actually does.
+
+### Fixed: parameter markers inside string literals
+- **A backslash-escaped quote ended a literal** for the marker scanner and
+  the escape parser alike: on Hive, Impala, MySQL wire and BigQuery,
+  `SELECT 'a\'b?c'` had a bound value substituted into the string (or a
+  brace inside it taken for an escape sequence). PostgreSQL's `E'...'`
+  strings and `$tag$...$tag$` dollar quoting were unknown, so a function
+  body failed with `07002` for the `?` in it. Both scanners share one set
+  of dialect-aware lexical helpers (`argus_sql_skip_quoted` and friends,
+  `pg_strings` on the dialect); `"..."` is a literal on the backtick
+  engines and an identifier elsewhere; comments are stepped over by the
+  escape parser too. `SQLNumParams` counts with the dialect.
+
 ## [0.6.1] — 2026-09-03
 
 A corrective release. An audit of the driver as v0.6.0 shipped it found that
