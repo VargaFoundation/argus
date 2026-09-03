@@ -4,6 +4,7 @@
 #include "argus/log.h"
 #include "argus/obs_hooks.h"
 #include "../browser.h"
+#include "../curl_common.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -33,8 +34,18 @@ static void trino_oidc_discover(trino_conn_t *conn, const char *issuer);
 
 /* ── Helper: Apply SSL and timeout settings to curl ─────────────── */
 
-static void trino_apply_curl_settings(trino_conn_t *conn, CURL *curl)
+/*
+ * `with_credentials` is false for URLs outside the connection's origin (the
+ * host:port the user configured): the server may point at spooled-segment
+ * stores or other hosts, and neither the Basic/Negotiate credentials nor
+ * the bearer token (carried in default_headers, which the caller must then
+ * leave out as well) belong there.
+ */
+static void trino_apply_curl_settings(trino_conn_t *conn, CURL *curl,
+                                      bool with_credentials)
 {
+    argus_curl_apply_baseline(curl);
+
     /* SSL/TLS settings */
     if (conn->ssl_enabled) {
         if (conn->ssl_verify) {
@@ -67,6 +78,7 @@ static void trino_apply_curl_settings(trino_conn_t *conn, CURL *curl)
     /* Authentication. Bearer (JWT/OAuth2) is applied as a default header at
      * connect time; Basic and Negotiate are set on the easy handle here because
      * curl_easy_reset() wiped them at the start of each request. */
+    if (!with_credentials) return;
     switch (conn->auth_mode) {
     case TRINO_AUTH_BASIC: {
         char userpwd[512];
@@ -116,7 +128,7 @@ int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
     CURL *curl = conn->curl;
 
     curl_easy_reset(curl);
-    trino_apply_curl_settings(conn, curl);
+    trino_apply_curl_settings(conn, curl, true);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
@@ -141,7 +153,7 @@ int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
         resp->data = NULL;
         resp->size = 0;
         curl_easy_reset(curl);
-        trino_apply_curl_settings(conn, curl);
+        trino_apply_curl_settings(conn, curl, true);
         curl_easy_setopt(curl, CURLOPT_URL, url);
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
@@ -162,16 +174,21 @@ int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
 
 /* ── HTTP helper: GET ────────────────────────────────────────── */
 
-int trino_http_get(trino_conn_t *conn, const char *url,
-                   trino_response_t *resp)
+/*
+ * One GET on the connection's handle. `headers` replaces the session's
+ * default headers; `with_credentials` also controls Basic/Negotiate.
+ */
+static int trino_http_get_with(trino_conn_t *conn, const char *url,
+                               struct curl_slist *headers, bool with_credentials,
+                               trino_response_t *resp)
 {
     CURL *curl = conn->curl;
 
     curl_easy_reset(curl);
-    trino_apply_curl_settings(conn, curl);
+    trino_apply_curl_settings(conn, curl, with_credentials);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
 
@@ -184,30 +201,40 @@ int trino_http_get(trino_conn_t *conn, const char *url,
 
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    return http_code >= 400 ? (int)http_code : 0;
+}
+
+int trino_http_get(trino_conn_t *conn, const char *url,
+                   trino_response_t *resp)
+{
+    /* Every URL the server hands back (nextUri, query info) is expected on
+     * the origin the user connected to. Anything else is fetched without
+     * the session's identity: the credentials were obtained for base_url. */
+    bool same_origin = argus_url_same_origin(url, conn->base_url);
+    if (!same_origin)
+        ARGUS_LOG_WARN("Trino: %s is not on %s; sending the request without "
+                       "credentials", url, conn->base_url);
+
+    int rc = trino_http_get_with(conn, url,
+                                 same_origin ? conn->default_headers : NULL,
+                                 same_origin, resp);
 
     /* OAuth2 (M2M) access token may have expired; refresh once and retry. */
-    if (http_code == 401 && conn->oauth_m2m &&
+    if (rc == 401 && same_origin && conn->oauth_m2m &&
         trino_refresh_oauth_token(conn) == 0) {
         free(resp->data);
-        resp->data = NULL;
-        resp->size = 0;
-        curl_easy_reset(curl);
-        trino_apply_curl_settings(conn, curl);
-        curl_easy_setopt(curl, CURLOPT_URL, url);
-        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
-        res = curl_easy_perform(curl);
-        if (res != CURLE_OK)
-            return -1;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+        rc = trino_http_get_with(conn, url, conn->default_headers, true, resp);
     }
 
-    if (http_code >= 400)
-        return -1;
+    return rc == 0 ? 0 : -1;
+}
 
-    return 0;
+/* Fetch a URL the server delegated to another host (spooled segments):
+ * only the headers the server attached to it, none of the session's. */
+int trino_http_get_plain(trino_conn_t *conn, const char *url,
+                         struct curl_slist *headers, trino_response_t *resp)
+{
+    return trino_http_get_with(conn, url, headers, false, resp) == 0 ? 0 : -1;
 }
 
 /* ── HTTP helper: DELETE ─────────────────────────────────────── */
@@ -216,11 +243,12 @@ int trino_http_delete(trino_conn_t *conn, const char *url)
 {
     CURL *curl = conn->curl;
 
+    bool same_origin = argus_url_same_origin(url, conn->base_url);
     curl_easy_reset(curl);
-    trino_apply_curl_settings(conn, curl);
+    trino_apply_curl_settings(conn, curl, same_origin);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, same_origin ? conn->default_headers : NULL);
 
     CURLcode res = curl_easy_perform(curl);
     return (res == CURLE_OK) ? 0 : -1;
@@ -240,6 +268,7 @@ static int trino_fetch_oauth_token_uncached(trino_conn_t *conn,
 
     CURL *c = curl_easy_init();
     if (!c) return -1;
+    argus_curl_apply_baseline(c);
 
     /* Build a client_secret_post body (widely accepted: Keycloak/Okta/Auth0). */
     char *eid = curl_easy_escape(c, conn->oauth_client_id, 0);
@@ -341,6 +370,7 @@ static JsonParser *trino_oauth_form_post(trino_conn_t *conn, const char *url,
 {
     CURL *c = curl_easy_init();
     if (!c) return NULL;
+    argus_curl_apply_baseline(c);
     struct curl_slist *hdrs = curl_slist_append(
         NULL, "Content-Type: application/x-www-form-urlencoded");
     trino_response_t resp = {0};
@@ -479,6 +509,7 @@ static void trino_oidc_discover(trino_conn_t *conn, const char *issuer)
 
     CURL *c = curl_easy_init();
     if (!c) return;
+    argus_curl_apply_baseline(c);
     trino_response_t resp = {0};
     curl_easy_setopt(c, CURLOPT_URL, url);
     curl_easy_setopt(c, CURLOPT_HTTPGET, 1L);

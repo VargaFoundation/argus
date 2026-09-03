@@ -2,6 +2,7 @@
 #include "argus/handle.h"
 #include "argus/log.h"
 #include "argus/compat.h"
+#include "../curl_common.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +46,7 @@ static int http(pinot_conn_t *conn, const char *url, const char *post_body,
 {
     CURL *curl = conn->curl;
     curl_easy_reset(curl);
+    argus_curl_apply_baseline(curl);
     apply_curl(conn, curl);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     if (post_body) {
@@ -158,6 +160,7 @@ static bool pinot_is_alive(argus_backend_conn_t raw)
 
     CURL *curl = conn->curl;
     curl_easy_reset(curl);
+    argus_curl_apply_baseline(curl);
     if (conn->ssl_enabled) {
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);

@@ -2,6 +2,7 @@
 #include "argus/handle.h"
 #include "argus/error.h"
 #include "argus/log.h"
+#include "../curl_common.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -10,6 +11,8 @@
 
 static void phoenix_apply_curl_settings(phoenix_conn_t *conn, CURL *curl)
 {
+    argus_curl_apply_baseline(curl);
+
     /* SSL/TLS settings */
     if (conn->ssl_enabled) {
         if (conn->ssl_verify) {

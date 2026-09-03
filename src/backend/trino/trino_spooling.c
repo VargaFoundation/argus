@@ -1,5 +1,6 @@
 #include "trino_internal.h"
 #include "argus/log.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -59,24 +60,69 @@ unsigned char *trino_base64_decode(const char *input, size_t *out_len)
     return out;
 }
 
-/* ── Fetch a spooled segment by URI ──────────────────────────── */
+/* ── Spooled segment requests ────────────────────────────────── */
+
+/*
+ * The server attaches to each segment the headers its store needs
+ * ({"name": ["value", ...]}); those, and only those, go on the request.
+ * The segment lives wherever the server spooled it (S3, GCS, a
+ * coordinator-proxied path...), so the session's bearer token, Basic
+ * credentials and X-Trino-* headers never travel with it.
+ */
+static struct curl_slist *segment_header_list(JsonObject *headers)
+{
+    struct curl_slist *list = NULL;
+    if (!headers) return NULL;
+
+    GList *names = json_object_get_members(headers);
+    for (GList *n = names; n; n = n->next) {
+        const char *name = n->data;
+        JsonNode *node = json_object_get_member(headers, name);
+        if (!node) continue;
+
+        if (JSON_NODE_HOLDS_ARRAY(node)) {
+            JsonArray *values = json_node_get_array(node);
+            guint count = json_array_get_length(values);
+            for (guint i = 0; i < count; i++) {
+                JsonNode *v = json_array_get_element(values, i);
+                if (!JSON_NODE_HOLDS_VALUE(v)) continue;
+                const char *value = json_node_get_string(v);
+                if (!value) continue;
+                char *line = g_strdup_printf("%s: %s", name, value);
+                list = curl_slist_append(list, line);
+                g_free(line);
+            }
+        } else if (JSON_NODE_HOLDS_VALUE(node)) {
+            const char *value = json_node_get_string(node);
+            if (!value) continue;
+            char *line = g_strdup_printf("%s: %s", name, value);
+            list = curl_slist_append(list, line);
+            g_free(line);
+        }
+    }
+    g_list_free(names);
+    return list;
+}
 
 int trino_fetch_segment(trino_conn_t *conn, const char *uri,
-                        trino_response_t *resp)
+                        JsonObject *segment_headers, trino_response_t *resp)
 {
     if (!conn || !uri || !resp) return -1;
 
     ARGUS_LOG_DEBUG("Fetching spooled segment: %s", uri);
-    return trino_http_get(conn, uri, resp);
+    struct curl_slist *headers = segment_header_list(segment_headers);
+    int rc = trino_http_get_plain(conn, uri, headers, resp);
+    curl_slist_free_all(headers);
+    return rc;
 }
 
-/* ── Acknowledge a spooled segment (fire-and-forget) ─────────── */
-
-void trino_ack_segment(trino_conn_t *conn, const char *ack_uri)
+void trino_ack_segment(trino_conn_t *conn, const char *ack_uri,
+                       JsonObject *segment_headers)
 {
     if (!conn || !ack_uri) return;
 
     ARGUS_LOG_DEBUG("Acknowledging spooled segment: %s", ack_uri);
+    (void)segment_headers;
     trino_http_delete(conn, ack_uri);
 }
 
@@ -207,12 +253,23 @@ int trino_parse_spooled_data(trino_conn_t *conn, JsonObject *data_obj,
             const char *uri = json_object_get_string_member(seg, "uri");
             if (!uri) continue;
 
+            JsonObject *seg_headers = NULL;
+            if (json_object_has_member(seg, "headers")) {
+                JsonNode *hn = json_object_get_member(seg, "headers");
+                if (hn && JSON_NODE_HOLDS_OBJECT(hn))
+                    seg_headers = json_node_get_object(hn);
+            }
+
             trino_response_t resp = {0};
-            if (trino_fetch_segment(conn, uri, &resp) != 0) {
+            if (trino_fetch_segment(conn, uri, seg_headers, &resp) != 0) {
+                /* A missing segment is missing rows: fail the fetch rather
+                 * than hand the application a shorter result. */
                 ARGUS_LOG_ERROR("Failed to fetch spooled segment %d: %s",
                                 i, uri);
                 free(resp.data);
-                continue;
+                snprintf(conn->last_error, sizeof(conn->last_error),
+                         "Failed to fetch spooled segment %d of %d", i + 1, num_segments);
+                return -1;
             }
 
             if (resp.data) {
@@ -236,7 +293,7 @@ int trino_parse_spooled_data(trino_conn_t *conn, JsonObject *data_obj,
                 const char *ack_uri = json_object_get_string_member(seg,
                                                                      "ackUri");
                 if (ack_uri) {
-                    trino_ack_segment(conn, ack_uri);
+                    trino_ack_segment(conn, ack_uri, seg_headers);
                 }
             }
 

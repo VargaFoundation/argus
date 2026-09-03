@@ -388,6 +388,18 @@ if(ARGUS_BUILD_TELEMETRY)
     list(REMOVE_DUPLICATES ARGUS_COMPILE_DEFS)
 endif()
 
+# Shared libcurl baseline (protocol allow-list, TLS floor, no signals): one
+# copy for every client that speaks HTTP, so a backend cannot forget it.
+if(LIBCURL_FOUND)
+    list(APPEND ARGUS_SOURCES backend/curl_common.c)
+    list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/backend
+        ${LIBCURL_INCLUDE_DIRS}
+    )
+    list(APPEND ARGUS_LINK_LIBS ${LIBCURL_LIBRARIES})
+    list(APPEND ARGUS_LINK_DIRS ${LIBCURL_LIBRARY_DIRS})
+endif()
+
 # Windows version resource (embeds version/company info in the DLL)
 if(WIN32)
     configure_file(

@@ -6,6 +6,7 @@
  */
 
 #include "http_client.h"
+#include "curl_common.h"
 
 #include <curl/curl.h>
 #include <stddef.h>
@@ -27,6 +28,7 @@ int argus_http_post_json(const char *url, const char *body, long timeout_sec)
     CURL *curl = curl_easy_init();
     if (!curl)
         return -1;
+    argus_curl_apply_baseline(curl);
 
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "Content-Type: application/json");

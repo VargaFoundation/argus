@@ -112,6 +112,10 @@ int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
 int trino_http_get(trino_conn_t *conn, const char *url,
                    trino_response_t *resp);
 int trino_http_delete(trino_conn_t *conn, const char *url);
+/* GET without the session's headers or credentials (spooled segments live on
+ * whatever store the server chose); `headers` are the ones it attached. */
+int trino_http_get_plain(trino_conn_t *conn, const char *url,
+                         struct curl_slist *headers, trino_response_t *resp);
 
 /* Query operations */
 int trino_cancel(argus_backend_conn_t conn, argus_backend_op_t op);
@@ -130,12 +134,14 @@ int trino_parse_data(JsonNode *data_node,
 int trino_parse_spooled_data(trino_conn_t *conn, JsonObject *data_obj,
                              argus_row_cache_t *cache, int num_cols);
 
-/* v2 spooling: fetch a spooled segment by URI */
+/* v2 spooling: fetch a spooled segment by URI. `segment_headers` is the
+ * segment's "headers" object (name -> list of values), or NULL. */
 int trino_fetch_segment(trino_conn_t *conn, const char *uri,
-                        trino_response_t *resp);
+                        JsonObject *segment_headers, trino_response_t *resp);
 
 /* v2 spooling: acknowledge a spooled segment */
-void trino_ack_segment(trino_conn_t *conn, const char *ack_uri);
+void trino_ack_segment(trino_conn_t *conn, const char *ack_uri,
+                       JsonObject *segment_headers);
 
 /* Base64 decode helper */
 unsigned char *trino_base64_decode(const char *input, size_t *out_len);

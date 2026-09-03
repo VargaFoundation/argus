@@ -589,7 +589,11 @@ int trino_fetch_results(argus_backend_conn_t raw_conn,
                 /* v2 format: spooled segments object */
                 JsonObject *data_obj = json_node_get_object(data_node);
                 op->spooling_active = true;
-                trino_parse_spooled_data(conn, data_obj, cache, ncols);
+                if (trino_parse_spooled_data(conn, data_obj, cache, ncols) != 0) {
+                    g_object_unref(parser);
+                    free(resp.data);
+                    return -1;
+                }
             }
 
             if (!op->next_uri)

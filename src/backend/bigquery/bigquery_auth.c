@@ -1,6 +1,7 @@
 #include "bigquery_internal.h"
 #include "argus/log.h"
 #include "argus/compat.h"
+#include "../curl_common.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -122,6 +123,7 @@ static int bq_fetch_token(bq_conn_t *conn)
 
     CURL *c = curl_easy_init();
     if (!c) { g_free(assertion); return -1; }
+    argus_curl_apply_baseline(c);
     char *e_assert = curl_easy_escape(c, assertion, 0);
     g_free(assertion);
     char *body = g_strdup_printf(

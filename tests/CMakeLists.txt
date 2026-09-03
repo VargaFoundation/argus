@@ -83,6 +83,21 @@ if(ARGUS_BUILD_TRINO)
     # Browser launcher behind the authorization-code SSO flow.
     argus_add_unit_test(test_browser unit/test_browser.c)
     target_include_directories(test_browser PRIVATE ${PROJECT_SOURCE_DIR}/src/backend)
+    # Which headers reach the origin vs. a spooled-segment store.
+    argus_add_unit_test(test_trino_http unit/test_trino_http.c)
+    target_include_directories(test_trino_http PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/backend/trino
+        ${LIBCURL_INCLUDE_DIRS}
+        ${JSON_GLIB_INCLUDE_DIRS}
+    )
+endif()
+
+if(LIBCURL_FOUND)
+    argus_add_unit_test(test_curl_common unit/test_curl_common.c)
+    target_include_directories(test_curl_common PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/backend
+        ${LIBCURL_INCLUDE_DIRS}
+    )
 endif()
 
 if(ARGUS_BUILD_PHOENIX)

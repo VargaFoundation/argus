@@ -2,6 +2,7 @@
 #include "argus/handle.h"
 #include "argus/log.h"
 #include "argus/compat.h"
+#include "../curl_common.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -47,6 +48,7 @@ int bq_http(bq_conn_t *conn, const char *url, const char *post_body,
 
     CURL *curl = conn->curl;
     curl_easy_reset(curl);
+    argus_curl_apply_baseline(curl);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->headers);
     bq_apply_tls(conn, curl);
