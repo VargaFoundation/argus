@@ -2,6 +2,158 @@
 
 All notable changes to the Argus ODBC Driver project.
 
+## [0.6.1] — 2026-09-03
+
+A corrective release. An audit of the driver as v0.6.0 shipped it found that
+the published Linux and macOS artefacts did not contain the PostgreSQL family
+or MySQL-wire that the 0.6.0 notes announce, that the macOS `.pkg` had never
+contained Hive/Impala, that the Windows installer had no PostgreSQL, and a set
+of faults that make a BI extract silently wrong or that expose the desktop the
+driver runs on. Nothing here is a new feature; every
+item is either something that was shipped broken or a check that keeps it
+from happening again. Users of the PostgreSQL, Greenplum, Cloudberry or
+MySQL-wire backends on Linux/macOS should install this release: 0.6.0 refused
+those `BACKEND=` values with `Unknown backend: postgres`.
+
+### Fixed: the release did not contain what it announced
+- `release.yml` never installed `libpq`/`libmariadb` on the Linux and macOS
+  runners (nor `postgresql` on Windows), and CMake answered a missing client
+  library with a `STATUS` line and a smaller driver. Backend selection is now
+  explicit: `-DARGUS_WITH_<BACKEND>=AUTO|ON|OFF` per backend, `ON` turning a
+  missing dependency into a configure error that names the package to
+  install, and `-DARGUS_RELEASE=ON` (used by CI and the release workflow)
+  requiring every backend a release ships with.
+- The macOS jobs installed no Thrift at all (Homebrew's `thrift` is the
+  compiler and the C++ runtime, not c_glib), so no macOS artefact ever had
+  Hive/Impala. They now build the portable c_glib subset with
+  `scripts/build-thrift-c-glib.sh`, as the Windows job does; the script no
+  longer needs GNU `install`. The Homebrew formula still builds without the
+  two backends.
+- The built driver embeds one `argus-build <version> hive impala trino …`
+  line naming exactly what it contains (`strings -a libargus_odbc.so |
+  grep '^argus-build '`, also the first line it logs at `INFO`).
+  `scripts/check-build-manifest.sh` reads it back and CI, the release
+  workflow and the Homebrew formula's `test do` all fail when a backend is
+  missing. CodeQL now analyses the MySQL-wire, libpq and Kerberos code it
+  was skipping for lack of those headers.
+
+### Fixed: silently wrong or truncated results
+- **`SQLFetch` reported a failed first row as `SQL_NO_DATA`.** A dropped
+  connection or a server error on the first `fetch_results()` looked like a
+  clean end of the result set and BI tools saved truncated extracts without a
+  warning. A failure is `SQL_ERROR` with its diagnostic; only a genuinely
+  empty result set is `SQL_NO_DATA`.
+- **Floating-point values followed `LC_NUMERIC`.** Excel, Tableau and Power
+  BI Desktop call `setlocale(LC_ALL, "")`, so on a French or German desktop a
+  bound `SQL_C_DOUBLE` reached the server as `WHERE x = 1,5`, a fetched
+  `"1.5"` converted to `1.0`, and DOUBLE columns rendered by the Hive/Impala,
+  Pinot, Druid, Phoenix, Kudu and ADBC paths carried a comma. Every render
+  and parse goes through `argus_dtoa()`/`argus_strtod()` (`g_ascii_*`);
+  `test_locale_numbers` runs the ODBC calls under `fr_FR`/`de_DE`, and CI
+  installs the locale so the test cannot skip.
+- **HiveServer2/Impala**: a row set whose only populated column was BINARY
+  counted as zero rows (end of result); an empty batch with
+  `hasMoreRows=true` (Impala's `FETCH_ROWS_TIMEOUT_MS`, a gateway still
+  producing) ended the fetch; every Impala batch leaked its payload through
+  an extra `g_object_get` reference; a `FetchResults` error status was
+  reported as a bare "Failed to fetch results" without the server's message.
+  `hasMoreRows=false` is deliberately not used as a terminator — Hive and
+  Spark Thrift Server hard-code it — the reasoning is in `hs2_fetch.h`.
+- **Trino spooled protocol**: a segment that failed to download returned
+  fewer rows instead of failing the fetch.
+
+### Fixed: security
+- **Driver-side connection pool removed.** It keyed parked connections on
+  host, port, backend and user name only, so with `SQL_ATTR_CONNECTION_POOLING`
+  on the environment (unixODBC, Tableau) a second `SQLDriverConnect` with the
+  wrong password, another database, another `AuthMech` or no TLS was served
+  somebody else's authenticated session. Pooling is the Driver Manager's job;
+  the driver now gives its pool what it needs: `SQL_ATTR_CONNECTION_DEAD` is
+  answered by the backend's `is_alive` probe, and `SQL_ATTR_RESET_CONNECTION`
+  (ODBC 3.8) runs the backend's `reset_session` (PostgreSQL: `ROLLBACK` +
+  `DISCARD ALL`) before a connection is parked. The undocumented `POOL*`
+  keywords and `ARGUS_POOL_*` variables are gone.
+- **Command execution from a DSN.** The Trino authorization-code flow built a
+  shell command from `OAuth2AuthEndpoint` (`AuthURI`) and `$BROWSER` and ran
+  it through `system()`: a shared DSN, an `.odc` or a `.tds` carrying
+  `AuthURI=https://x/'; cmd; '` ran `cmd` at connect time inside the host
+  process. The browser is launched through `g_spawn_async` argv (or
+  `ShellExecuteW`) with the URL as one argument, the endpoint must be an
+  `https://` URL made of URL characters (`http://` only for the local
+  machine), and a rejected endpoint fails the connection with `08001`.
+- **SASL pre-authentication DoS.** The negotiation reader passed the 4-byte
+  frame length announced by the server to `g_malloc()` before any credential
+  was checked — up to 4 GiB, or an abort of Excel/Tableau on failure. Frames
+  are capped at 1 MiB with `g_try_malloc` and complete reads; the PLAIN
+  rejection path no longer derives a `memcpy` bound from `errmsg_size - 60`
+  (which underflows). The framed/buffered transports get an explicit
+  `ThriftConfiguration` (64 MiB frames, 100 MiB messages, recursion 64) and
+  Thrift-over-HTTP refuses bodies above the same cap.
+- **Trino credentials left the connection's origin.** The bearer token,
+  Basic/Negotiate credentials and `X-Trino-*` headers were attached to every
+  URL the server handed back, including spooled-segment URIs on S3/GCS or any
+  host the coordinator named. Session headers now go to `base_url`'s origin
+  only; segments are fetched with the headers of their descriptor and nothing
+  else. Every curl handle in the driver (Trino, Pinot, Druid, Phoenix,
+  BigQuery, Thrift HTTP, telemetry) is now limited to `http`/`https` for
+  requests and redirects, with a TLS 1.2 floor (`src/backend/curl_common.c`).
+- **Catalog search patterns were interpolated verbatim** into the
+  `information_schema` queries of Trino, MySQL-wire and Druid (`… LIKE '%s'`),
+  and Trino's table-type list accumulated into a 256-byte buffer with an
+  unchecked `snprintf` offset (CodeQL `cpp/overflowing-snprintf`). Shared
+  `argus_sql_quote_literal()`/`argus_sql_quote_ident()` helpers (also used by
+  the parameter renderer), `GString` builders, and
+  `mysql_real_escape_string()` on the MySQL-wire connection so the server's
+  charset and `NO_BACKSLASH_ESCAPES` are honoured.
+- **`OutConnectionString` masked only `PWD=`/`PASSWORD=`** at the start of a
+  pair: `ClientSecret`, `OAuth2ClientSecret`, `AccessToken`, `BQAccessToken`
+  came back in clear (BI tools persist that string in their workbooks), and
+  `; PWD = x` or `PWD={a;b}` were not masked at all. One key classifier
+  (`argus_connstr_key_is_secret()`: `PWD`, `PASSWORD`, `PASSPHRASE`, `SECRET`,
+  `TOKEN`, `APIKEY`, `AUTHHEADER` suffixes, so the enterprise addon's
+  `LicenseToken`/`AuditKey`/`OtlpAuthHeader` are covered) drives both the
+  returned string and the observability copy; endpoints such as
+  `OAuth2TokenEndpoint` are no longer over-masked.
+
+### Fixed: unloading the driver
+- **The library destructor joined the telemetry sender unconditionally**: a
+  POST in flight held `dlclose()` or process exit for up to the 10 s HTTP
+  timeout, and the same call from `DllMain(DLL_PROCESS_DETACH)` could only
+  deadlock (a thread cannot exit while the loader lock is held). The driver
+  now quiesces when the last environment handle is freed — where a Driver
+  Manager goes before it unloads a driver, and where waiting is allowed: the
+  sender gets 500 ms to finish, is then told to abort its POST through
+  libcurl's progress callback, and is joined within about two seconds;
+  `DllMain` only signals. The same point fires the new
+  `argus_obs_hook_unload(may_wait)` tap, so an add-on that started threads
+  stops them before the code they run is unmapped — nothing in the driver
+  told an add-on it was going away before. Everything restarts lazily on
+  the next environment the application allocates.
+
+### Build: hardening, exports, signing
+- `ARGUS_HARDENING` (default `ON`): `-fstack-protector-strong`,
+  `-fstack-clash-protection`, `-fcf-protection=full` where the compiler takes
+  them, `_FORTIFY_SOURCE=2` on optimising non-sanitized builds, full RELRO +
+  `BIND_NOW` + non-executable stack on ELF, DEP/ASLR/high-entropy ASLR on
+  MinGW, `/GS /guard:cf /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT` on MSVC.
+  Ubuntu's GCC defaults had been giving the Linux build a canary and FORTIFY
+  by accident; macOS and Windows had neither, and no platform had `BIND_NOW`.
+- The generated Thrift code is built with hidden visibility like the rest of
+  the driver: 104 `SQL*` exports instead of 385 (281 of them
+  `t_c_l_i_service_*`/`toString_*` internals that two Thrift c_glib drivers in
+  one process resolved against each other).
+- `scripts/check-exports.sh` and `scripts/check-hardening.sh` read both
+  properties back out of a `.so`/`.dylib`/`.dll`; `ctest -L unit` runs them as
+  `check_exports`/`check_hardening` on every platform, and the release
+  workflow runs them on each artefact with `--release`.
+- The ten signing steps of the release (GPG, Apple codesign/notarize, Azure
+  Trusted Signing, Tableau jarsigner) were `continue-on-error`, so an expired
+  key produced a green tag with unsigned packages. They still run only when
+  their secret is configured, but fail the release when it is and they
+  break. The release job now checks that every platform artefact and the
+  Power BI connector are present, always writes `SHA256SUMS`, verifies it
+  with `sha256sum -c`, and signs it in a separate step.
+
 ## [0.6.0] — 2026-08-25
 
 The first v0.6.0 tag (2026-08-24) never produced a release: the pipeline
