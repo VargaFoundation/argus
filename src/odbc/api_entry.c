@@ -10,8 +10,12 @@
 
 #include "argus/odbc_api.h"
 #include "argus/backend.h"
+#include "argus/lifecycle.h"
 #include "argus/log.h"
+#include "argus/obs_hooks.h"
 #include "argus/telemetry.h"
+
+#include <stdbool.h>
 
 #ifdef ARGUS_HAS_CURL
 #include <curl/curl.h>
@@ -31,8 +35,32 @@ static void argus_library_load(void)
     argus_telemetry_init();
 }
 
-static void argus_library_unload(void)
+/* Stop everything that runs on a thread of its own: the telemetry sender and
+ * whatever a tap provider started. Returns true once none of them is left.
+ * `may_wait` is false only from DllMain, where the loader lock is held and a
+ * thread cannot exit until it is released, so waiting there would deadlock;
+ * that path signals the threads and leaves them to finish on their own. */
+static bool argus_library_stop_threads(bool may_wait)
 {
+    bool clean = argus_obs_hook_unload(may_wait ? 1 : 0) != 0;
+    if (!argus_telemetry_stop(may_wait))
+        clean = false;
+    return clean;
+}
+
+void argus_library_quiesce(void)
+{
+    argus_library_stop_threads(true);
+}
+
+static void argus_library_unload(bool may_wait)
+{
+    /* A thread that is still running -- which only happens when a host
+     * unloads the driver without freeing its environment handle first -- may
+     * be inside libcurl or the log; tearing those down under it would trade
+     * a leak for a crash, so the teardown is skipped altogether. */
+    if (!argus_library_stop_threads(may_wait))
+        return;
     argus_telemetry_shutdown();
     argus_log_cleanup();
 #ifdef ARGUS_HAS_CURL
@@ -46,12 +74,17 @@ static void argus_library_unload(void)
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
     (void)hinstDLL;
-    (void)lpvReserved;
 
     if (fdwReason == DLL_PROCESS_ATTACH) {
         argus_library_load();
     } else if (fdwReason == DLL_PROCESS_DETACH) {
-        argus_library_unload();
+        /* A non-NULL lpvReserved means the process is exiting: every other
+         * thread has already been terminated and the OS reclaims everything,
+         * so nothing may block or free here -- a mutex one of those threads
+         * held would never be released. On FreeLibrary the loader lock is
+         * held, hence may_wait = false. */
+        if (lpvReserved == NULL)
+            argus_library_unload(false);
     }
     return TRUE;
 }
@@ -69,7 +102,7 @@ static void argus_init(void)
 __attribute__((destructor))
 static void argus_cleanup(void)
 {
-    argus_library_unload();
+    argus_library_unload(true);
 }
 
 #endif

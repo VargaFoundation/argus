@@ -105,16 +105,33 @@ hundred bytes until something actually errors or binds). Passwords use
 
 ## The observability seam (`obs_hooks`)
 
-`include/argus/obs_hooks.h` declares eleven tap points (connect, statement,
+`include/argus/obs_hooks.h` declares twelve tap points (connect, statement,
 disconnect, secret resolution, token cache, fetch presets, statement guards,
-a connection-admission gate, host pick/result), defined as weak no-ops in
-`src/odbc/obs_hooks.c`. In this Apache-2.0 build they do nothing; an
-out-of-tree add-on may link strong definitions (see the README's
+a connection-admission gate, host pick/result, unload), defined as weak
+no-ops in `src/odbc/obs_hooks.c`. In this Apache-2.0 build they do nothing;
+an out-of-tree add-on may link strong definitions (see the README's
 "Observability hooks" section for the disclosure). Signatures are primitives
 only, so the driver never depends on external types. Note that
 `__attribute__((weak))` override semantics are only guaranteed for
 static/whole-archive linking on GCC/Clang — the seam is not a stable dynamic
 ABI.
+
+## Library lifecycle
+
+`src/odbc/api_entry.c` owns process-wide setup and teardown (`curl_global_init`,
+logging, the backend registry, telemetry) from the library constructor —
+`DllMain` on Windows. Teardown is split in two because of how Driver Managers
+unload a driver: they free the last environment handle first and
+`dlclose()`/`FreeLibrary()` afterwards, and a Windows `DllMain` cannot wait
+for a thread (it holds the loader lock the exiting thread needs too). So the
+last `SQLFreeHandle(SQL_HANDLE_ENV)` is where the driver *quiesces*
+(`include/argus/lifecycle.h`): it fires `argus_obs_hook_unload(1)` for an
+add-on's threads and stops the telemetry sender, waiting a bounded time for
+both — a POST in flight is aborted through libcurl's progress callback rather
+than waited for. The destructor repeats that (without waiting under
+`DllMain`) and only then releases libcurl and the log; if anything still
+runs, the teardown is skipped rather than pulled out from under a thread.
+Everything restarts lazily when the application allocates a new environment.
 
 ## Quality gates
 

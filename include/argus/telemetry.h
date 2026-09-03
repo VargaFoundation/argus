@@ -25,8 +25,15 @@ struct argus_dbc;
 
 #ifdef ARGUS_HAS_TELEMETRY
 
-/* Process-wide lifecycle; called once from the library constructor/destructor. */
+/* Process-wide lifecycle (see lifecycle.h). init runs from the library
+ * constructor. stop halts the background sender: a POST in flight gets a
+ * short grace period, is then told to abort, and the caller waits about two
+ * seconds at most; with may_wait false (DllMain, loader lock held) it only
+ * signals the sender. Returns true when no sender thread is left; the sender
+ * restarts lazily on the next event. shutdown releases everything else and
+ * does nothing while a sender is still running. */
 void argus_telemetry_init(void);
+bool argus_telemetry_stop(bool may_wait);
 void argus_telemetry_shutdown(void);
 
 /* True only if a connection's events would actually be transmitted, i.e. the
@@ -50,6 +57,7 @@ void argus_telemetry_session_end(const struct argus_dbc *dbc);
 #else /* telemetry compiled out — no-op stubs */
 
 static inline void argus_telemetry_init(void) {}
+static inline bool argus_telemetry_stop(bool may_wait) { (void)may_wait; return true; }
 static inline void argus_telemetry_shutdown(void) {}
 static inline bool argus_telemetry_active(const struct argus_dbc *dbc)
 { (void)dbc; return false; }

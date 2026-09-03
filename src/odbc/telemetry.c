@@ -10,6 +10,9 @@
  *  - Fully asynchronous and best-effort: emitters only enqueue; a single
  *    background thread batches and POSTs. Nothing here can block or fail an
  *    ODBC call. A bounded queue drops events under backpressure.
+ *  - Stops in bounded time: the sender is started lazily and stopped by
+ *    argus_telemetry_stop() before the driver can be unmapped (lifecycle.h);
+ *    an in-flight POST is aborted rather than waited for.
  */
 
 #include "argus/telemetry.h"
@@ -40,6 +43,13 @@
 #define ARGUS_TELEMETRY_BATCH_MAX      64
 #define ARGUS_TELEMETRY_POLL_US        (2 * G_USEC_PER_SEC)
 #define ARGUS_TELEMETRY_HTTP_TIMEOUT   10L
+/* argus_telemetry_stop(): how long an in-flight POST may still finish on its
+ * own before it is told to abort, and how long the caller waits for the
+ * sender in total. libcurl polls the abort callback at least about once a
+ * second, so the second bound leaves room for one such round after the
+ * first. */
+#define ARGUS_TELEMETRY_STOP_GRACE_MS  500
+#define ARGUS_TELEMETRY_STOP_WAIT_MS   2000
 
 /* ── Static state (initialized once at library load, before threads) ─── */
 
@@ -52,9 +62,19 @@ static char         g_os_version[64] = "";
 static char         g_driver_version[24] = "";
 
 static GAsyncQueue *g_queue = NULL;
+
+/* Sender thread state. g_sender_lock guards g_sender, g_sender_done and
+ * g_sender_abandoned; the two flags below are read from the sender without
+ * it. g_shutting_down tells the sender (and enqueue) that a stop is under
+ * way; g_abort_http tells the POST in flight to give up. */
+static GMutex       g_sender_lock;
+static GMutex       g_stop_lock;        /* one argus_telemetry_stop() at a time */
+static GCond        g_sender_cond;      /* signalled when the sender is done */
 static GThread     *g_sender = NULL;
+static gboolean     g_sender_done = FALSE;
+static gboolean     g_sender_abandoned = FALSE; /* stopped without a join */
 static volatile gint g_shutting_down = 0;
-static GOnce        g_sender_once = G_ONCE_INIT;
+static volatile gint g_abort_http = 0;
 
 /* Sentinel pushed on shutdown to wake the sender from its blocking pop. */
 static char g_stop_sentinel;
@@ -228,10 +248,24 @@ static const char *rows_bucket(unsigned long n)
 
 /* ── Sender thread ───────────────────────────────────────────────────── */
 
+/* argus_http_abort_fn: polled by libcurl during the POST. */
+static int http_should_abort(void *ctx)
+{
+    (void)ctx;
+    return g_atomic_int_get(&g_abort_http);
+}
+
 static void flush_batch(GPtrArray *events)
 {
     if (!events || events->len == 0)
         return;
+    /* Past the stop grace period nothing may be sent any more; a POST that
+     * started earlier is being aborted through http_should_abort(). */
+    if (g_atomic_int_get(&g_abort_http)) {
+        ARGUS_LOG_DEBUG("Telemetry stopping (dropped %u event(s))",
+                        events->len);
+        return;
+    }
 
     ensure_install_id();
 
@@ -258,7 +292,8 @@ static void flush_batch(GPtrArray *events)
     g_string_append(body, "]}");
 
     int rc = argus_http_post_json(g_endpoint, body->str,
-                                  ARGUS_TELEMETRY_HTTP_TIMEOUT);
+                                  ARGUS_TELEMETRY_HTTP_TIMEOUT,
+                                  http_should_abort, NULL);
     if (rc != 0)
         ARGUS_LOG_DEBUG("Telemetry POST failed (dropped %u event(s))",
                         events->len);
@@ -304,27 +339,50 @@ static gpointer sender_thread(gpointer data)
     }
     flush_batch(tail);
     g_ptr_array_free(tail, TRUE);
+
+    /* Signalled before returning, so a stop() under the Windows loader lock
+     * can learn that the thread is finished without waiting for it to exit
+     * (thread exit needs that lock too). */
+    g_mutex_lock(&g_sender_lock);
+    g_sender_done = TRUE;
+    g_cond_broadcast(&g_sender_cond);
+    g_mutex_unlock(&g_sender_lock);
     return NULL;
 }
 
-static gpointer start_sender(gpointer data)
+/* Caller holds g_sender_lock. */
+static void start_sender_locked(void)
 {
-    (void)data;
-    g_sender = g_thread_new("argus-telemetry", sender_thread, NULL);
-    return NULL;
+    g_sender_done = FALSE;
+    g_atomic_int_set(&g_abort_http, 0);
+    g_atomic_int_set(&g_shutting_down, 0);
+    g_sender = g_thread_try_new("argus-telemetry", sender_thread, NULL, NULL);
 }
 
 static void enqueue(char *event_json)
 {
     if (!event_json)
         return;
-    if (g_atomic_int_get(&g_shutting_down) ||
+    g_mutex_lock(&g_sender_lock);
+    if (!g_queue || g_sender_abandoned ||
+        g_atomic_int_get(&g_shutting_down) ||
         g_async_queue_length(g_queue) >= ARGUS_TELEMETRY_QUEUE_MAX) {
+        g_mutex_unlock(&g_sender_lock);
         g_free(event_json);
         return;
     }
-    g_once(&g_sender_once, start_sender, NULL);
+    /* Started on the first event and again after a stop(): a Driver Manager
+     * that frees its environment handle and allocates a new one keeps the
+     * driver loaded, and its telemetry keeps working. */
+    if (!g_sender)
+        start_sender_locked();
+    if (!g_sender) {
+        g_mutex_unlock(&g_sender_lock);
+        g_free(event_json);
+        return;
+    }
     g_async_queue_push(g_queue, event_json);
+    g_mutex_unlock(&g_sender_lock);
 }
 
 /* ── Public lifecycle ────────────────────────────────────────────────── */
@@ -358,18 +416,96 @@ void argus_telemetry_init(void)
      * contradict PRIVACY.md even if the id is never sent. */
 }
 
+/* Wait on g_sender_cond (g_sender_lock held) until the sender is done or
+ * `deadline` (monotonic microseconds) passes. */
+static void wait_sender_done_until(gint64 deadline)
+{
+    while (!g_sender_done &&
+           g_cond_wait_until(&g_sender_cond, &g_sender_lock, deadline))
+        ;
+}
+
+bool argus_telemetry_stop(bool may_wait)
+{
+    /* One stop at a time. Under the loader lock (may_wait false) never block
+     * on another stopper either: it may be joining the sender, whose exit
+     * needs the very lock this caller holds. */
+    if (may_wait)
+        g_mutex_lock(&g_stop_lock);
+    else if (!g_mutex_trylock(&g_stop_lock))
+        return false;
+
+    g_mutex_lock(&g_sender_lock);
+    GThread *t = g_sender;
+    if (!t) {
+        bool clean = !g_sender_abandoned;
+        g_mutex_unlock(&g_sender_lock);
+        g_mutex_unlock(&g_stop_lock);
+        return clean;
+    }
+
+    /* Wake the sender out of its poll; it drains what is queued and goes. */
+    g_atomic_int_set(&g_shutting_down, 1);
+    g_async_queue_push(g_queue, &g_stop_sentinel);
+
+    if (may_wait) {
+        gint64 start = g_get_monotonic_time();
+        /* Let a POST in flight finish on its own first ... */
+        wait_sender_done_until(start +
+                               ARGUS_TELEMETRY_STOP_GRACE_MS * G_TIME_SPAN_MILLISECOND);
+        if (!g_sender_done) {
+            /* ... then tell it to give up; libcurl notices within about a
+             * second. Anything still queued is dropped by flush_batch(). */
+            g_atomic_int_set(&g_abort_http, 1);
+            wait_sender_done_until(start +
+                                   ARGUS_TELEMETRY_STOP_WAIT_MS * G_TIME_SPAN_MILLISECOND);
+        }
+    } else {
+        g_atomic_int_set(&g_abort_http, 1);
+    }
+
+    /* Joining is only allowed where the thread can actually exit: outside
+     * DllMain. Once done it is a formality; if the sender is still not done
+     * after the wait -- libcurl stuck somewhere it cannot poll the callback
+     * -- the join is bounded by the HTTP timeout, which beats letting the
+     * thread run on in code that is about to disappear. */
+    bool joined = false;
+    if (may_wait) {
+        g_mutex_unlock(&g_sender_lock);
+        g_thread_join(t);
+        g_mutex_lock(&g_sender_lock);
+        joined = true;
+    } else {
+        g_thread_unref(t);
+        g_sender_abandoned = TRUE;
+    }
+    g_sender = NULL;
+    if (joined) {
+        /* Whatever the final drain left behind is dropped, the sentinel
+         * included -- a restarted sender must not trip over a stale one.
+         * Then ready for a lazy restart on the next event. */
+        gpointer e;
+        while ((e = g_async_queue_try_pop(g_queue)) != NULL)
+            if (e != &g_stop_sentinel)
+                g_free(e);
+        g_atomic_int_set(&g_abort_http, 0);
+        g_atomic_int_set(&g_shutting_down, 0);
+    }
+    g_mutex_unlock(&g_sender_lock);
+    g_mutex_unlock(&g_stop_lock);
+    return joined;
+}
+
 void argus_telemetry_shutdown(void)
 {
-    if (!g_queue)
-        return;
-    g_atomic_int_set(&g_shutting_down, 1);
-    if (g_sender) {
-        g_async_queue_push(g_queue, &g_stop_sentinel);
-        g_thread_join(g_sender);
-        g_sender = NULL;
+    if (!argus_telemetry_stop(true))
+        return;   /* an abandoned sender may still use all of this */
+    g_mutex_lock(&g_sender_lock);
+    if (g_queue) {
+        g_async_queue_unref(g_queue);
+        g_queue = NULL;
     }
-    g_async_queue_unref(g_queue);
-    g_queue = NULL;
+    g_mutex_unlock(&g_sender_lock);
     g_free(g_endpoint);   g_endpoint = NULL;
     g_free(g_install_id); g_install_id = NULL;
 }

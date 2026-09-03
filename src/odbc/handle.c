@@ -1,11 +1,18 @@
 #include "argus/handle.h"
 #include "argus/odbc_api.h"
 #include "argus/compat.h"
+#include "argus/lifecycle.h"
 #include "argus/log.h"
 #include "argus/obs_hooks.h"
 #include "argus/telemetry.h"
 #include <stdlib.h>
 #include <string.h>
+
+/* Live environment handles. A Driver Manager frees the last one before it
+ * unloads the driver, which makes argus_free_env() the one place where the
+ * driver can still stop its background threads and wait for them outside
+ * the Windows loader lock (see lifecycle.h). */
+static gint g_live_envs = 0;
 
 /* ── Internal allocation functions ────────────────────────────── */
 
@@ -14,6 +21,7 @@ SQLRETURN argus_alloc_env(argus_env_t **out)
     argus_env_t *env = calloc(1, sizeof(argus_env_t));
     if (!env) return SQL_ERROR;
 
+    g_atomic_int_inc(&g_live_envs);
     env->signature          = ARGUS_ENV_SIGNATURE;
     env->odbc_version       = SQL_OV_ODBC3;
     env->connection_pooling = SQL_CP_OFF;
@@ -184,6 +192,8 @@ SQLRETURN argus_free_env(argus_env_t *env)
     g_mutex_clear(&env->mutex);
     env->signature = 0;
     free(env);
+    if (g_atomic_int_dec_and_test(&g_live_envs))
+        argus_library_quiesce();
     return SQL_SUCCESS;
 }
 

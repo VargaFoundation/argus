@@ -126,4 +126,11 @@ int argus_obs_hook_connect_gate(const void *dbc, const char *backend,
     return 1;   /* Apache-2.0 community build admits every connection */
 }
 
+ARGUS_OBS_WEAK
+int argus_obs_hook_unload(int may_wait)
+{
+    (void)may_wait;
+    return 1;   /* the open driver's taps start no thread */
+}
+
 #endif /* ARGUS_OBS_HOOKS_EXTERNAL */

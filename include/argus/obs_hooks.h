@@ -18,6 +18,8 @@
  *  - Observability taps fire PER STATEMENT / PER CONNECTION, never per row
  *    (hot-path invariant). The statement tap fires once per statement handle,
  *    at release, with cumulative counters; `bytes` is 0 when untracked.
+ *  - A provider that starts threads stops them in argus_obs_hook_unload();
+ *    nothing of a provider may still run once the driver is unmapped.
  */
 #ifndef ARGUS_OBS_HOOKS_H
 #define ARGUS_OBS_HOOKS_H
@@ -86,6 +88,24 @@ int  argus_obs_hook_pick_host(const void *dbc, const char *hosts_csv,
                               int nhosts);
 void argus_obs_hook_host_result(const void *dbc, const char *hosts_csv,
                                 int idx, int ok);
+
+/* ── Driver unload ─────────────────────────────────────────────────
+ * Fires when the driver is about to become unloadable, so a provider that
+ * started threads can stop them before the code they run is unmapped. The
+ * driver calls it from SQLFreeHandle(SQL_HANDLE_ENV) when the last
+ * environment handle goes away -- a Driver Manager always does that before
+ * it dlclose()s / FreeLibrary()s a driver -- and once more, as a last
+ * resort, from the library destructor or DllMain(DLL_PROCESS_DETACH).
+ * `may_wait` is 1 in the first case: an ordinary ODBC call is in progress,
+ * so the provider should stop AND join its threads, within a bounded time
+ * (a couple of seconds at most). It is 0 in the second: the Windows loader
+ * lock is held, so the provider may only signal its threads and must never
+ * block on one. Returns 1 when no thread of the provider is left running,
+ * 0 otherwise; the driver then skips the teardown (curl_global_cleanup and
+ * the like) that a still-running thread could trip over. The tap is
+ * idempotent, and taps may fire again after it (a new environment handle),
+ * so a provider must be able to start over lazily. */
+int argus_obs_hook_unload(int may_wait);
 
 #ifdef __cplusplus
 }

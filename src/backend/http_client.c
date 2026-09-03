@@ -20,7 +20,24 @@ static size_t http_discard_cb(void *contents, size_t size, size_t nmemb,
     return size * nmemb;
 }
 
-int argus_http_post_json(const char *url, const char *body, long timeout_sec)
+struct http_abort {
+    argus_http_abort_fn fn;
+    void               *ctx;
+};
+
+/* libcurl progress callback: a non-zero return makes curl_easy_perform()
+ * fail with CURLE_ABORTED_BY_CALLBACK. */
+static int http_xferinfo_cb(void *clientp, curl_off_t dltotal,
+                            curl_off_t dlnow, curl_off_t ultotal,
+                            curl_off_t ulnow)
+{
+    const struct http_abort *a = clientp;
+    (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+    return a->fn(a->ctx) ? 1 : 0;
+}
+
+int argus_http_post_json(const char *url, const char *body, long timeout_sec,
+                         argus_http_abort_fn should_abort, void *ctx)
 {
     if (!url || !*url || !body)
         return -1;
@@ -29,6 +46,13 @@ int argus_http_post_json(const char *url, const char *body, long timeout_sec)
     if (!curl)
         return -1;
     argus_curl_apply_baseline(curl);
+
+    struct http_abort abort_ctx = { should_abort, ctx };
+    if (should_abort) {
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, http_xferinfo_cb);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &abort_ctx);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    }
 
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "Content-Type: application/json");

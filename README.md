@@ -328,10 +328,10 @@ Log levels: 0=OFF, 1=FATAL, 2=ERROR, 3=WARN, 4=INFO, 5=DEBUG, 6=TRACE
 
 ## Observability hooks (`obs_hooks`)
 
-The driver exposes eleven weak no-op tap points (`include/argus/obs_hooks.h`) —
+The driver exposes twelve weak no-op tap points (`include/argus/obs_hooks.h`) —
 connection/statement observation, secret resolution, token caching, host
-selection and a connection-admission gate. In this Apache-2.0 build they are
-inert (the gate always allows). They exist so an out-of-tree add-on — including
+selection, a connection-admission gate and an unload notification. In this
+Apache-2.0 build they are inert (the gate always allows). They exist so an out-of-tree add-on — including
 proprietary ones, such as a commercial enterprise edition — can link strong
 definitions in. Forks are free to ignore or remove them; nothing in the open
 driver depends on them. This is disclosed here so adopters know the seam exists.
