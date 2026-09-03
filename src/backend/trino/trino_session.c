@@ -3,6 +3,7 @@
 #include "argus/error.h"
 #include "argus/log.h"
 #include "argus/obs_hooks.h"
+#include "../browser.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -26,7 +27,8 @@ typedef int argus_sock_t;
 /* Forward declarations for the OAuth2 token-refresh path. */
 static int trino_refresh_oauth_token(trino_conn_t *conn);
 static int trino_fetch_device_token(trino_conn_t *conn, char **out_token);
-static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token);
+static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token,
+                                      char *why, size_t why_size);
 static void trino_oidc_discover(trino_conn_t *conn, const char *issuer);
 
 /* ── Helper: Apply SSL and timeout settings to curl ─────────────── */
@@ -619,27 +621,27 @@ static int trino_loopback_get_code(argus_sock_t fd, char *code, size_t clen, int
     return ret;
 }
 
-static void trino_open_browser(const char *url)
-{
-    const char *b = getenv("BROWSER");
-    char cmd[4200];
-#ifdef _WIN32
-    if (b && *b) snprintf(cmd, sizeof(cmd), "%s \"%s\"", b, url);
-    else         snprintf(cmd, sizeof(cmd), "start \"\" \"%s\"", url);
-#else
-    if (b && *b) snprintf(cmd, sizeof(cmd), "%s '%s' >/dev/null 2>&1 &", b, url);
-    else         snprintf(cmd, sizeof(cmd),
-                          "xdg-open '%s' >/dev/null 2>&1 || open '%s' >/dev/null 2>&1 &", url, url);
-#endif
-    int rc = system(cmd);
-    (void)rc;
-}
-
-static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token)
+/*
+ * Authorization-code grant with PKCE: send the user's browser to the IdP,
+ * collect the code on a loopback listener, exchange it at the token
+ * endpoint. `why` receives a short reason on failure (may stay empty).
+ */
+static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token,
+                                      char *why, size_t why_size)
 {
     *out_token = NULL;
+    if (why_size) why[0] = '\0';
     if (!conn->oauth_auth_url || !conn->oauth_token_url || !conn->oauth_client_id)
         return -1;
+
+    /* The endpoint comes from the DSN (or OIDC discovery) and is handed to
+     * the browser launcher: only a well-formed https:// URL goes out. */
+    if (!argus_browser_url_ok(conn->oauth_auth_url)) {
+        snprintf(why, why_size, "OAuth2AuthEndpoint must be an https:// URL "
+                 "without spaces or quotes (got '%.80s')", conn->oauth_auth_url);
+        ARGUS_LOG_ERROR("Trino auth-code: %s", why);
+        return -1;
+    }
 
     char verifier[128] = {0}, challenge[128] = {0};
     if (trino_pkce(verifier, sizeof(verifier), challenge, sizeof(challenge)) != 0)
@@ -660,8 +662,7 @@ static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token)
     char *eredir = curl_easy_escape(e, redirect, 0);
     char *escope = curl_easy_escape(e, conn->oauth_scope ? conn->oauth_scope : "openid", 0);
     char *estate = curl_easy_escape(e, state, 0);
-    char url[2048];
-    snprintf(url, sizeof(url),
+    char *url = g_strdup_printf(
              "%s%sresponse_type=code&client_id=%s&redirect_uri=%s&scope=%s"
              "&state=%s&code_challenge=%s&code_challenge_method=S256",
              conn->oauth_auth_url, strchr(conn->oauth_auth_url, '?') ? "&" : "?",
@@ -672,7 +673,11 @@ static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token)
     fprintf(stderr, "\n[Argus][Trino] Opening your browser to sign in. If it does not "
                     "open, visit:\n  %s\n\n", url);
     ARGUS_LOG_WARN("Trino auth-code: open %s", url);
-    trino_open_browser(url);
+    char berr[256];
+    if (argus_browser_open(url, berr, sizeof(berr)) != 0)
+        ARGUS_LOG_WARN("Trino auth-code: could not start a browser (%s); "
+                       "waiting for the URL above to be opened by hand", berr);
+    g_free(url);
 
     char code[2048] = {0};
     int gc = trino_loopback_get_code(srv, code, sizeof(code), 300);
@@ -904,9 +909,10 @@ int trino_connect(argus_dbc_t *dbc,
 
         char *tok = NULL;
         const char *how = NULL;
+        char why[256] = {0};
         if (is_authcode && conn->oauth_auth_url && conn->oauth_token_url) {
             how = "authorization-code (browser SSO)";
-            trino_fetch_authcode_token(conn, &tok);
+            trino_fetch_authcode_token(conn, &tok, why, sizeof(why));
         } else if (is_device && conn->oauth_device_url && conn->oauth_token_url) {
             how = "device-code";
             trino_fetch_device_token(conn, &tok);
@@ -921,9 +927,10 @@ int trino_connect(argus_dbc_t *dbc,
             conn->password = tok;
             ARGUS_LOG_INFO("Trino: obtained OAuth2 access token via %s", how);
         } else if (how) {
-            char msg[160];
+            char msg[512];
             snprintf(msg, sizeof(msg),
-                     "[Argus][Trino] OAuth2 %s authorization failed", how);
+                     "[Argus][Trino] OAuth2 %s authorization failed%s%s",
+                     how, why[0] ? ": " : "", why);
             argus_set_error(&dbc->diag, "08001", msg, 0);
             curl_easy_cleanup(conn->curl);
             free(conn->base_url); free(conn->user); free(conn->password);

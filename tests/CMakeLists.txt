@@ -80,6 +80,9 @@ endif()
 
 if(ARGUS_BUILD_TRINO)
     argus_add_unit_test(test_trino_types unit/test_trino_types.c)
+    # Browser launcher behind the authorization-code SSO flow.
+    argus_add_unit_test(test_browser unit/test_browser.c)
+    target_include_directories(test_browser PRIVATE ${PROJECT_SOURCE_DIR}/src/backend)
 endif()
 
 if(ARGUS_BUILD_PHOENIX)

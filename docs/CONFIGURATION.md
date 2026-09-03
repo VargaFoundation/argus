@@ -181,11 +181,16 @@ DRIVER=Argus;BACKEND=trino;HOST=trino.example.com;PORT=8080;UID=analyst;DATABASE
     `ClientId`, optional `Scope`.
   - `AUTH_CODE` / `BROWSER` / `SSO`: OAuth2 **authorization-code grant with PKCE**
     and a **browser + loopback redirect** — the standard interactive cloud-BI
-    flow. Argus opens the system browser (honoring `$BROWSER`) to the
-    authorization endpoint, listens on `127.0.0.1:<ephemeral>` for the redirect,
-    exchanges the code (with the PKCE `code_verifier`) at the token endpoint, and
-    uses the access token as the bearer. Params: `OAuth2AuthEndpoint` (`AuthURI`),
+    flow. Argus opens the system browser to the authorization endpoint,
+    listens on `127.0.0.1:<ephemeral>` for the redirect, exchanges the code
+    (with the PKCE `code_verifier`) at the token endpoint, and uses the access
+    token as the bearer. Params: `OAuth2AuthEndpoint` (`AuthURI`),
     `OAuth2TokenEndpoint`, `ClientId`, optional `ClientSecret`/`Scope`.
+    The authorization endpoint must be an `https://` URL (plain `http://` is
+    accepted only for `localhost`/`127.0.0.1`); it is never passed through a
+    shell. `$BROWSER` is honored as a program name with optional arguments
+    (a `%s` argument receives the URL); otherwise `xdg-open`, then `open`
+    (macOS) are tried, and on Windows the URL goes to `ShellExecute`.
   - **OIDC discovery**: instead of giving each endpoint, set `OAuth2Issuer`
     (`Issuer`) and Argus fetches `<issuer>/.well-known/openid-configuration` to
     discover the authorization, token and device endpoints automatically. Works

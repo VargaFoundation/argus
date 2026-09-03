@@ -58,12 +58,13 @@ list(APPEND ARGUS_COMPILE_DEFS
 )
 
 # Windows: the installer setup entry points (ConfigDSN), winsock for the
-# Trino OAuth2 loopback, odbccp32 for the installer API and advapi32 for
-# registry DSN lookup. Added to ARGUS_LINK_LIBS so the static library
-# (unit tests) gets them too, not just the shared driver target.
+# Trino OAuth2 loopback, shell32 for ShellExecute (browser SSO), odbccp32
+# for the installer API and advapi32 for registry DSN lookup. Added to
+# ARGUS_LINK_LIBS so the static library (unit tests) gets them too, not
+# just the shared driver target.
 if(WIN32)
     list(APPEND ARGUS_SOURCES odbc/setup.c)
-    list(APPEND ARGUS_LINK_LIBS ws2_32 odbccp32 advapi32)
+    list(APPEND ARGUS_LINK_LIBS ws2_32 shell32 odbccp32 advapi32)
 endif()
 
 # Conditionally add Hive/Impala backends (require Thrift C GLib)
@@ -140,6 +141,7 @@ if(ARGUS_BUILD_TRINO)
         backend/trino/trino_metadata.c
         backend/trino/trino_types.c
         backend/trino/trino_spooling.c
+        backend/browser.c
     )
     list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS
         ${CMAKE_CURRENT_SOURCE_DIR}/backend/trino
