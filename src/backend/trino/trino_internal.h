@@ -120,6 +120,19 @@ int trino_http_get_plain(trino_conn_t *conn, const char *url,
 /* Query operations */
 int trino_cancel(argus_backend_conn_t conn, argus_backend_op_t op);
 
+/* Catalog query builders (trino_metadata.c). Pure text: every pattern and
+ * name is quoted for Trino. NULL when a value cannot be quoted (embedded
+ * NUL). Caller frees with g_free(). */
+char *trino_build_tables_query(const char *catalog, const char *schema,
+                               const char *table_name, const char *table_types);
+char *trino_build_columns_query(const char *catalog, const char *schema,
+                                const char *table_name, const char *column_name);
+char *trino_build_schemas_query(const char *catalog, const char *schema);
+char *trino_build_primary_keys_query(const char *catalog, const char *schema,
+                                     const char *table_name);
+char *trino_build_statistics_query(const char *catalog, const char *schema,
+                                   const char *table_name);
+
 /* Parse column metadata from Trino JSON response */
 int trino_parse_columns(JsonNode *columns_node,
                         argus_column_desc_t *columns,

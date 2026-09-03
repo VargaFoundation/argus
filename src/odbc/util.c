@@ -239,6 +239,49 @@ char *argus_connstr_redact(const char *conn_str)
     return out;
 }
 
+/* ── SQL text helpers ────────────────────────────────────────── */
+
+static char *quote_text(const char *value, size_t len, char quote,
+                        bool double_backslash)
+{
+    if (!value) return NULL;
+    size_t extra = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (value[i] == '\0') return NULL;
+        if (value[i] == quote || (double_backslash && value[i] == '\\'))
+            extra++;
+    }
+    char *out = malloc(len + extra + 3);
+    if (!out) return NULL;
+    char *dst = out;
+    *dst++ = quote;
+    for (size_t i = 0; i < len; i++) {
+        if (value[i] == quote || (double_backslash && value[i] == '\\'))
+            *dst++ = value[i];
+        *dst++ = value[i];
+    }
+    *dst++ = quote;
+    *dst = '\0';
+    return out;
+}
+
+char *argus_sql_quote_literal_n(const char *value, size_t len,
+                                bool backslash_escapes)
+{
+    return quote_text(value, len, '\'', backslash_escapes);
+}
+
+char *argus_sql_quote_literal(const char *value, bool backslash_escapes)
+{
+    return value ? quote_text(value, strlen(value), '\'', backslash_escapes)
+                 : NULL;
+}
+
+char *argus_sql_quote_ident(const char *name, char quote)
+{
+    return name ? quote_text(name, strlen(name), quote, false) : NULL;
+}
+
 const char *argus_conn_params_get(const argus_conn_params_t *params,
                                   const char *key)
 {

@@ -44,6 +44,17 @@ int mywire_execute(argus_backend_conn_t conn, const char *query,
                    argus_backend_op_t *out_op);
 
 /* ── mywire_metadata.c ───────────────────────────────────────── */
+/* Catalog query builders. Pure text over an initialised MYSQL handle (the
+ * escaping needs its charset). NULL on OOM. Caller frees with g_free(). */
+char *mywire_build_tables_query(MYSQL *mysql, const char *catalog,
+                                const char *schema, const char *table_name,
+                                const char *table_types);
+char *mywire_build_columns_query(MYSQL *mysql, const char *catalog,
+                                 const char *schema, const char *table_name,
+                                 const char *column_name);
+char *mywire_build_primary_keys_query(MYSQL *mysql, const char *catalog,
+                                      const char *schema,
+                                      const char *table_name);
 int mywire_get_tables(argus_backend_conn_t conn, const char *catalog,
                       const char *schema, const char *table_name,
                       const char *table_types, argus_backend_op_t *out_op);

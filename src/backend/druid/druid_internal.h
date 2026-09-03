@@ -53,4 +53,13 @@ SQLULEN     druid_type_column_size(SQLSMALLINT sql_type);
 int druid_execute(argus_backend_conn_t conn, const char *query,
                   argus_backend_op_t *out_op);
 
+/* Catalog query builders (druid_backend.c). Pure text: every pattern is
+ * quoted for Druid SQL. NULL when a value cannot be quoted (embedded NUL).
+ * Caller frees with g_free(). */
+char *druid_build_tables_query(const char *catalog, const char *schema,
+                               const char *table_name, const char *table_types);
+char *druid_build_columns_query(const char *catalog, const char *schema,
+                                const char *table_name, const char *column_name);
+char *druid_build_schemas_query(const char *catalog, const char *schema);
+
 #endif /* ARGUS_DRUID_INTERNAL_H */

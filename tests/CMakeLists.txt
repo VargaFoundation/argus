@@ -32,6 +32,7 @@ endfunction()
 argus_add_unit_test(test_handle unit/test_handle.c)
 argus_add_unit_test(test_connect_string unit/test_connect_string.c)
 argus_add_unit_test(test_driver_connect unit/test_driver_connect.c)
+argus_add_unit_test(test_sql_quote unit/test_sql_quote.c)
 argus_add_unit_test(test_diag unit/test_diag.c)
 argus_add_unit_test(test_thread_safety unit/test_thread_safety.c)
 argus_add_unit_test(test_info unit/test_info.c)
@@ -92,6 +93,13 @@ if(ARGUS_BUILD_TRINO)
         ${LIBCURL_INCLUDE_DIRS}
         ${JSON_GLIB_INCLUDE_DIRS}
     )
+    # information_schema queries built from ODBC search patterns.
+    argus_add_unit_test(test_trino_catalog_sql unit/test_trino_catalog_sql.c)
+    target_include_directories(test_trino_catalog_sql PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/backend/trino
+        ${LIBCURL_INCLUDE_DIRS}
+        ${JSON_GLIB_INCLUDE_DIRS}
+    )
 endif()
 
 if(LIBCURL_FOUND)
@@ -112,6 +120,20 @@ endif()
 
 if(ARGUS_BUILD_DRUID)
     argus_add_unit_test(test_druid_types unit/test_druid_types.c)
+    argus_add_unit_test(test_druid_catalog_sql unit/test_druid_catalog_sql.c)
+    target_include_directories(test_druid_catalog_sql PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/backend/druid
+        ${LIBCURL_INCLUDE_DIRS}
+        ${JSON_GLIB_INCLUDE_DIRS}
+    )
+endif()
+
+if(ARGUS_BUILD_MYSQL)
+    argus_add_unit_test(test_mywire_catalog_sql unit/test_mywire_catalog_sql.c)
+    target_include_directories(test_mywire_catalog_sql PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/backend/mysql
+        ${LIBMARIADB_INCLUDE_DIRS}
+    )
 endif()
 
 if(ARGUS_BUILD_BIGQUERY)

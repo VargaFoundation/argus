@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <glib.h>
 
 /*
  * Catalog operations are implemented as SQL queries against
@@ -12,6 +13,11 @@
  * The MySQL data model has a single namespace level (the database), so
  * we follow the MySQL Connector/ODBC convention: a database is reported
  * as a CATALOG (TABLE_CAT) and the schema column is left empty.
+ *
+ * Every ODBC search pattern reaches the query text through
+ * mysql_real_escape_string(): the patterns come from the application, and
+ * the client library knows the connection charset and whether the server
+ * runs with NO_BACKSLASH_ESCAPES — the driver cannot guess either.
  */
 
 /* ── Helper: run a query and hand back the operation ─────────── */
@@ -22,17 +28,75 @@ static int mywire_run(argus_backend_conn_t conn, const char *query,
     return mywire_execute(conn, query, out_op);
 }
 
-/* ── GetTables via information_schema.tables ─────────────────── */
+/* ── Query builders (pure: an initialised MYSQL handle, unit-tested) ── */
 
-int mywire_get_tables(argus_backend_conn_t conn,
-                      const char *catalog,
-                      const char *schema,
-                      const char *table_name,
-                      const char *table_types,
-                      argus_backend_op_t *out_op)
+/* Append " AND <column> <op> '<value>'" with the value escaped for this
+ * connection; a NULL or empty value adds nothing. Returns false on OOM. */
+static bool append_filter(GString *q, MYSQL *mysql, const char *column,
+                          const char *op, const char *value)
 {
-    char query[2048];
-    int off = snprintf(query, sizeof(query),
+    if (!value || !*value) return true;
+    size_t len = strlen(value);
+    char *esc = malloc(len * 2 + 1);
+    if (!esc) return false;
+    unsigned long n = mysql_real_escape_string(mysql, esc, value,
+                                               (unsigned long)len);
+    g_string_append_printf(q, " AND %s %s '", column, op);
+    g_string_append_len(q, esc, (gssize)n);
+    g_string_append_c(q, '\'');
+    free(esc);
+    return true;
+}
+
+/* The ODBC type list ("TABLE,VIEW", possibly quoted) must be turned into a
+ * proper quoted IN list, translating the ODBC name "TABLE" to
+ * information_schema's "BASE TABLE". */
+static bool append_table_types(GString *q, MYSQL *mysql,
+                               const char *table_types)
+{
+    if (!table_types || !*table_types) return true;
+    GString *in_list = g_string_new(NULL);
+    char **toks = g_strsplit(table_types, ",", -1);
+    bool ok = true;
+    for (int i = 0; ok && toks[i]; i++) {
+        char *tok = toks[i];
+        while (*tok == ' ' || *tok == '\'' || *tok == '"') tok++;
+        char *end = tok + strlen(tok);
+        while (end > tok &&
+               (end[-1] == ' ' || end[-1] == '\'' || end[-1] == '"'))
+            *--end = '\0';
+        if (!*tok) continue;
+        const char *mapped = (strcmp(tok, "TABLE") == 0) ? "BASE TABLE" : tok;
+        size_t len = strlen(mapped);
+        char *esc = malloc(len * 2 + 1);
+        if (!esc) { ok = false; break; }
+        unsigned long n = mysql_real_escape_string(mysql, esc, mapped,
+                                                   (unsigned long)len);
+        if (in_list->len) g_string_append_c(in_list, ',');
+        g_string_append_c(in_list, '\'');
+        g_string_append_len(in_list, esc, (gssize)n);
+        g_string_append_c(in_list, '\'');
+        free(esc);
+    }
+    g_strfreev(toks);
+    if (ok && in_list->len)
+        g_string_append_printf(q, " AND table_type IN (%s)", in_list->str);
+    g_string_free(in_list, TRUE);
+    return ok;
+}
+
+static char *finish(GString *q, bool ok, const char *order_by)
+{
+    if (!ok) { g_string_free(q, TRUE); return NULL; }
+    g_string_append(q, order_by);
+    return g_string_free(q, FALSE);
+}
+
+char *mywire_build_tables_query(MYSQL *mysql, const char *catalog,
+                                const char *schema, const char *table_name,
+                                const char *table_types)
+{
+    GString *q = g_string_new(
         "SELECT "
         "table_schema AS TABLE_CAT, "
         "NULL AS TABLE_SCHEM, "
@@ -41,62 +105,22 @@ int mywire_get_tables(argus_backend_conn_t conn,
         "AS TABLE_TYPE, "
         "table_comment AS REMARKS "
         "FROM information_schema.tables WHERE 1=1");
-
+    bool ok;
     /* Database is reported as catalog; accept either arg as the filter. */
     if (catalog && *catalog)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_schema = '%s'", catalog);
-    else if (schema && *schema)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_schema LIKE '%s'", schema);
-    if (table_name && *table_name)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_name LIKE '%s'", table_name);
-    if (table_types && *table_types) {
-        /* The ODBC type list ("TABLE,VIEW", possibly quoted) must be turned
-         * into a proper quoted IN list, translating the ODBC name "TABLE" to
-         * information_schema's "BASE TABLE". */
-        char in_list[256];
-        int n = 0;
-        char tmp[256];
-        strncpy(tmp, table_types, sizeof(tmp) - 1);
-        tmp[sizeof(tmp) - 1] = '\0';
-        char *save = NULL;
-        for (char *tok = strtok_r(tmp, ",", &save); tok;
-             tok = strtok_r(NULL, ",", &save)) {
-            while (*tok == ' ' || *tok == '\'' || *tok == '"') tok++;
-            char *end = tok + strlen(tok);
-            while (end > tok &&
-                   (end[-1] == ' ' || end[-1] == '\'' || end[-1] == '"'))
-                *--end = '\0';
-            if (!*tok) continue;
-            const char *mapped =
-                (strcmp(tok, "TABLE") == 0) ? "BASE TABLE" : tok;
-            n += snprintf(in_list + n, sizeof(in_list) - (size_t)n,
-                          "%s'%s'", n ? "," : "", mapped);
-        }
-        if (n > 0)
-            off += snprintf(query + off, sizeof(query) - (size_t)off,
-                            " AND table_type IN (%s)", in_list);
-    }
-
-    snprintf(query + off, sizeof(query) - (size_t)off,
-             " ORDER BY table_schema, table_name");
-
-    return mywire_run(conn, query, out_op);
+        ok = append_filter(q, mysql, "table_schema", "=", catalog);
+    else
+        ok = append_filter(q, mysql, "table_schema", "LIKE", schema);
+    ok = ok && append_filter(q, mysql, "table_name", "LIKE", table_name) &&
+         append_table_types(q, mysql, table_types);
+    return finish(q, ok, " ORDER BY table_schema, table_name");
 }
 
-/* ── GetColumns via information_schema.columns ───────────────── */
-
-int mywire_get_columns(argus_backend_conn_t conn,
-                       const char *catalog,
-                       const char *schema,
-                       const char *table_name,
-                       const char *column_name,
-                       argus_backend_op_t *out_op)
+char *mywire_build_columns_query(MYSQL *mysql, const char *catalog,
+                                 const char *schema, const char *table_name,
+                                 const char *column_name)
 {
-    char query[2048];
-    int off = snprintf(query, sizeof(query),
+    GString *q = g_string_new(
         "SELECT "
         "table_schema AS TABLE_CAT, "
         "NULL AS TABLE_SCHEM, "
@@ -118,24 +142,80 @@ int mywire_get_columns(argus_backend_conn_t conn,
         "is_nullable AS IS_NULLABLE, "
         "column_comment AS REMARKS "
         "FROM information_schema.columns WHERE 1=1");
-
+    bool ok;
     if (catalog && *catalog)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_schema = '%s'", catalog);
-    else if (schema && *schema)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_schema LIKE '%s'", schema);
-    if (table_name && *table_name)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_name LIKE '%s'", table_name);
-    if (column_name && *column_name)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND column_name LIKE '%s'", column_name);
+        ok = append_filter(q, mysql, "table_schema", "=", catalog);
+    else
+        ok = append_filter(q, mysql, "table_schema", "LIKE", schema);
+    ok = ok && append_filter(q, mysql, "table_name", "LIKE", table_name) &&
+         append_filter(q, mysql, "column_name", "LIKE", column_name);
+    return finish(q, ok, " ORDER BY table_schema, table_name, ordinal_position");
+}
 
-    snprintf(query + off, sizeof(query) - (size_t)off,
-             " ORDER BY table_schema, table_name, ordinal_position");
+char *mywire_build_primary_keys_query(MYSQL *mysql, const char *catalog,
+                                      const char *schema,
+                                      const char *table_name)
+{
+    GString *q = g_string_new(
+        "SELECT "
+        "table_schema AS TABLE_CAT, "
+        "NULL AS TABLE_SCHEM, "
+        "table_name AS TABLE_NAME, "
+        "column_name AS COLUMN_NAME, "
+        "ordinal_position AS KEY_SEQ, "
+        "'PRIMARY' AS PK_NAME "
+        "FROM information_schema.columns "
+        "WHERE column_key = 'PRI'");
+    bool ok;
+    if (catalog && *catalog)
+        ok = append_filter(q, mysql, "table_schema", "=", catalog);
+    else
+        ok = append_filter(q, mysql, "table_schema", "=", schema);
+    ok = ok && append_filter(q, mysql, "table_name", "=", table_name);
+    return finish(q, ok, " ORDER BY table_schema, table_name, ordinal_position");
+}
 
-    return mywire_run(conn, query, out_op);
+static int run_built_query(argus_backend_conn_t conn, char *query,
+                           argus_backend_op_t *out_op)
+{
+    if (!query) return -1;
+    int rc = mywire_run(conn, query, out_op);
+    g_free(query);
+    return rc;
+}
+
+/* ── GetTables via information_schema.tables ─────────────────── */
+
+int mywire_get_tables(argus_backend_conn_t conn,
+                      const char *catalog,
+                      const char *schema,
+                      const char *table_name,
+                      const char *table_types,
+                      argus_backend_op_t *out_op)
+{
+    mywire_conn_t *c = (mywire_conn_t *)conn;
+    if (!c || !c->mysql) return -1;
+    return run_built_query(conn,
+                           mywire_build_tables_query(c->mysql, catalog, schema,
+                                                     table_name, table_types),
+                           out_op);
+}
+
+/* ── GetColumns via information_schema.columns ───────────────── */
+
+int mywire_get_columns(argus_backend_conn_t conn,
+                       const char *catalog,
+                       const char *schema,
+                       const char *table_name,
+                       const char *column_name,
+                       argus_backend_op_t *out_op)
+{
+    mywire_conn_t *c = (mywire_conn_t *)conn;
+    if (!c || !c->mysql) return -1;
+    return run_built_query(conn,
+                           mywire_build_columns_query(c->mysql, catalog, schema,
+                                                      table_name, column_name),
+                           out_op);
 }
 
 /* ── GetSchemas (empty: databases are reported as catalogs) ──── */
@@ -207,30 +287,10 @@ int mywire_get_primary_keys(argus_backend_conn_t conn,
                             const char *table_name,
                             argus_backend_op_t *out_op)
 {
-    char query[2048];
-    int off = snprintf(query, sizeof(query),
-        "SELECT "
-        "table_schema AS TABLE_CAT, "
-        "NULL AS TABLE_SCHEM, "
-        "table_name AS TABLE_NAME, "
-        "column_name AS COLUMN_NAME, "
-        "ordinal_position AS KEY_SEQ, "
-        "'PRIMARY' AS PK_NAME "
-        "FROM information_schema.columns "
-        "WHERE column_key = 'PRI'");
-
-    if (catalog && *catalog)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_schema = '%s'", catalog);
-    else if (schema && *schema)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_schema = '%s'", schema);
-    if (table_name && *table_name)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_name = '%s'", table_name);
-
-    snprintf(query + off, sizeof(query) - (size_t)off,
-             " ORDER BY table_schema, table_name, ordinal_position");
-
-    return mywire_run(conn, query, out_op);
+    mywire_conn_t *c = (mywire_conn_t *)conn;
+    if (!c || !c->mysql) return -1;
+    return run_built_query(conn,
+                           mywire_build_primary_keys_query(c->mysql, catalog,
+                                                           schema, table_name),
+                           out_op);
 }

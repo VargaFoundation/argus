@@ -162,4 +162,21 @@ bool  argus_connstr_key_is_secret(const char *key);
  * caller frees the result with free(). */
 char *argus_connstr_redact(const char *conn_str);
 
+/* ── SQL text helpers ────────────────────────────────────────── */
+/* Shared by the parameter renderer and every backend that builds catalog
+ * queries from ODBC search patterns: a value that reaches a query string
+ * goes through one of these, never through snprintf("'%s'"). */
+
+/* `value` (len bytes) as a quoted SQL string literal: quotes doubled, and
+ * backslashes doubled when the dialect treats them as escapes. NULL when
+ * the value carries an embedded NUL byte (which would truncate the query)
+ * or on OOM. Caller frees with free(). */
+char *argus_sql_quote_literal_n(const char *value, size_t len,
+                                bool backslash_escapes);
+char *argus_sql_quote_literal(const char *value, bool backslash_escapes);
+
+/* `name` as a delimited identifier: wrapped in `quote` with embedded quote
+ * characters doubled. NULL on embedded NUL or OOM. Caller frees with free(). */
+char *argus_sql_quote_ident(const char *name, char quote);
+
 #endif /* ARGUS_TYPES_H */

@@ -3,11 +3,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <glib.h>
 
 /*
  * Trino does not have dedicated catalog API endpoints like Hive/Impala.
  * Instead, we implement catalog operations via SQL queries against
  * information_schema.
+ *
+ * Every ODBC search pattern or name reaches the query text through
+ * argus_sql_quote_literal / argus_sql_quote_ident: the patterns come from
+ * the application, and information_schema filters are as much SQL as any
+ * other statement. Trino string literals are ANSI (no backslash escapes).
  */
 
 /* Forward declaration */
@@ -27,20 +33,64 @@ static int trino_execute_query(trino_conn_t *conn, const char *query,
     return 0;
 }
 
-/* ── GetTables via information_schema ────────────────────────── */
+/* ── Query builders (pure: no connection, unit-tested) ────────── */
 
-int trino_get_tables(argus_backend_conn_t raw_conn,
-                     const char *catalog,
-                     const char *schema,
-                     const char *table_name,
-                     const char *table_types,
-                     argus_backend_op_t *out_op)
+/* Append " AND <column> <op> '<value>'" with the value quoted; a NULL or
+ * empty value adds nothing. Returns false on a value that cannot be quoted
+ * (embedded NUL). */
+static bool append_filter(GString *q, const char *column, const char *op,
+                          const char *value)
 {
-    trino_conn_t *conn = (trino_conn_t *)raw_conn;
-    if (!conn) return -1;
+    if (!value || !*value) return true;
+    char *lit = argus_sql_quote_literal(value, false);
+    if (!lit) return false;
+    g_string_append_printf(q, " AND %s %s %s", column, op, lit);
+    free(lit);
+    return true;
+}
 
-    char query[2048];
-    int off = snprintf(query, sizeof(query),
+/* ODBC clients ask for "TABLE"; Trino's information_schema reports the
+ * SQL-standard "BASE TABLE". Parse the comma-separated (possibly quoted)
+ * list into a quoted IN clause, translating "TABLE" -> "BASE TABLE". */
+static bool append_table_types(GString *q, const char *table_types)
+{
+    if (!table_types || !*table_types) return true;
+    GString *in_list = g_string_new(NULL);
+    char **toks = g_strsplit(table_types, ",", -1);
+    bool ok = true;
+    for (int i = 0; ok && toks[i]; i++) {
+        char *tok = toks[i];
+        while (*tok == ' ' || *tok == '\'' || *tok == '"') tok++;
+        char *end = tok + strlen(tok);
+        while (end > tok &&
+               (end[-1] == ' ' || end[-1] == '\'' || end[-1] == '"'))
+            *--end = '\0';
+        if (!*tok) continue;
+        const char *mapped = (strcmp(tok, "TABLE") == 0) ? "BASE TABLE" : tok;
+        char *lit = argus_sql_quote_literal(mapped, false);
+        if (!lit) { ok = false; break; }
+        if (in_list->len) g_string_append_c(in_list, ',');
+        g_string_append(in_list, lit);
+        free(lit);
+    }
+    g_strfreev(toks);
+    if (ok && in_list->len)
+        g_string_append_printf(q, " AND table_type IN (%s)", in_list->str);
+    g_string_free(in_list, TRUE);
+    return ok;
+}
+
+static char *finish(GString *q, bool ok, const char *order_by)
+{
+    if (!ok) { g_string_free(q, TRUE); return NULL; }
+    g_string_append(q, order_by);
+    return g_string_free(q, FALSE);
+}
+
+char *trino_build_tables_query(const char *catalog, const char *schema,
+                               const char *table_name, const char *table_types)
+{
+    GString *q = g_string_new(
         "SELECT "
         "table_catalog AS TABLE_CAT, "
         "table_schema AS TABLE_SCHEM, "
@@ -49,53 +99,124 @@ int trino_get_tables(argus_backend_conn_t raw_conn,
         "AS TABLE_TYPE, "
         "CAST(NULL AS VARCHAR) AS REMARKS "
         "FROM information_schema.tables WHERE 1=1");
+    bool ok = append_filter(q, "table_catalog", "=", catalog) &&
+              append_filter(q, "table_schema", "LIKE", schema) &&
+              append_filter(q, "table_name", "LIKE", table_name) &&
+              append_table_types(q, table_types);
+    return finish(q, ok, " ORDER BY table_catalog, table_schema, table_name");
+}
 
-    if (catalog && *catalog)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_catalog = '%s'", catalog);
-    if (schema && *schema)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_schema LIKE '%s'", schema);
-    if (table_name && *table_name)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_name LIKE '%s'", table_name);
-    if (table_types && *table_types) {
-        /* ODBC clients ask for "TABLE"; Trino's information_schema reports the
-         * SQL-standard "BASE TABLE". Parse the comma-separated (possibly quoted)
-         * list into a proper IN clause, translating "TABLE" -> "BASE TABLE". */
-        char in_list[256];
-        int n = 0;
-        char tmp[256];
-        strncpy(tmp, table_types, sizeof(tmp) - 1);
-        tmp[sizeof(tmp) - 1] = '\0';
-        char *save = NULL;
-        for (char *tok = strtok_r(tmp, ",", &save); tok;
-             tok = strtok_r(NULL, ",", &save)) {
-            while (*tok == ' ' || *tok == '\'' || *tok == '"') tok++;
-            char *end = tok + strlen(tok);
-            while (end > tok &&
-                   (end[-1] == ' ' || end[-1] == '\'' || end[-1] == '"'))
-                *--end = '\0';
-            if (!*tok) continue;
-            const char *mapped =
-                (strcmp(tok, "TABLE") == 0) ? "BASE TABLE" : tok;
-            n += snprintf(in_list + n, sizeof(in_list) - (size_t)n,
-                          "%s'%s'", n ? "," : "", mapped);
-        }
-        if (n > 0)
-            off += snprintf(query + off, sizeof(query) - (size_t)off,
-                            " AND table_type IN (%s)", in_list);
+char *trino_build_columns_query(const char *catalog, const char *schema,
+                                const char *table_name, const char *column_name)
+{
+    GString *q = g_string_new(
+        "SELECT "
+        "table_catalog AS TABLE_CAT, "
+        "table_schema AS TABLE_SCHEM, "
+        "table_name AS TABLE_NAME, "
+        "column_name AS COLUMN_NAME, "
+        /* DATA_TYPE: numeric ODBC SQL type code (column 5 per the spec). */
+        "CASE "
+        "WHEN data_type LIKE 'bigint%' THEN -5 "
+        "WHEN data_type LIKE 'integer%' THEN 4 "
+        "WHEN data_type LIKE 'smallint%' THEN 5 "
+        "WHEN data_type LIKE 'tinyint%' THEN -6 "
+        "WHEN data_type LIKE 'double%' THEN 8 "
+        "WHEN data_type LIKE 'real%' THEN 7 "
+        "WHEN data_type LIKE 'decimal%' THEN 3 "
+        "WHEN data_type LIKE 'boolean%' THEN -7 "
+        "WHEN data_type LIKE 'date%' THEN 91 "
+        "WHEN data_type LIKE 'timestamp%' THEN 93 "
+        "ELSE 12 END AS DATA_TYPE, "
+        "data_type AS TYPE_NAME, "
+        "ordinal_position AS ORDINAL_POSITION, "
+        "is_nullable AS IS_NULLABLE "
+        "FROM information_schema.columns WHERE 1=1");
+    bool ok = append_filter(q, "table_catalog", "=", catalog) &&
+              append_filter(q, "table_schema", "LIKE", schema) &&
+              append_filter(q, "table_name", "LIKE", table_name) &&
+              append_filter(q, "column_name", "LIKE", column_name);
+    return finish(q, ok, " ORDER BY table_catalog, table_schema, table_name, "
+                         "ordinal_position");
+}
+
+char *trino_build_schemas_query(const char *catalog, const char *schema)
+{
+    GString *q = g_string_new(
+        "SELECT DISTINCT "
+        "schema_name AS TABLE_SCHEM, "
+        "catalog_name AS TABLE_CATALOG "
+        "FROM information_schema.schemata WHERE 1=1");
+    bool ok = append_filter(q, "catalog_name", "=", catalog) &&
+              append_filter(q, "schema_name", "LIKE", schema);
+    return finish(q, ok, " ORDER BY catalog_name, schema_name");
+}
+
+char *trino_build_primary_keys_query(const char *catalog, const char *schema,
+                                     const char *table_name)
+{
+    GString *q = g_string_new(
+        "SELECT table_cat, table_schem, table_name, "
+        "column_name, key_seq, pk_name "
+        "FROM system.jdbc.primary_keys "
+        "WHERE 1=1");
+    bool ok = append_filter(q, "table_cat", "=", catalog) &&
+              append_filter(q, "table_schem", "=", schema) &&
+              append_filter(q, "table_name", "=", table_name);
+    return finish(q, ok, "");
+}
+
+/* SHOW STATS takes a table *name*, so each part is a delimited identifier:
+ * a name that came back from SQLTables round-trips exactly. */
+char *trino_build_statistics_query(const char *catalog, const char *schema,
+                                   const char *table_name)
+{
+    if (!table_name || !*table_name) return NULL;
+    GString *q = g_string_new("SHOW STATS FOR ");
+    bool ok = true;
+    const char *parts[3] = { NULL, NULL, table_name };
+    if (schema && *schema) {
+        parts[1] = schema;
+        if (catalog && *catalog) parts[0] = catalog;
     }
+    bool first = true;
+    for (int i = 0; i < 3 && ok; i++) {
+        if (!parts[i]) continue;
+        char *ident = argus_sql_quote_ident(parts[i], '"');
+        if (!ident) { ok = false; break; }
+        if (!first) g_string_append_c(q, '.');
+        g_string_append(q, ident);
+        free(ident);
+        first = false;
+    }
+    return finish(q, ok, "");
+}
 
-    snprintf(query + off, sizeof(query) - (size_t)off,
-             " ORDER BY table_catalog, table_schema, table_name");
+/* ── GetTables via information_schema ────────────────────────── */
 
+static int run_built_query(trino_conn_t *conn, char *query,
+                           argus_backend_op_t *out_op)
+{
+    if (!conn || !query) { g_free(query); return -1; }
     trino_operation_t *op = NULL;
     int rc = trino_execute_query(conn, query, &op);
+    g_free(query);
     if (rc != 0) return -1;
-
     *out_op = op;
     return 0;
+}
+
+int trino_get_tables(argus_backend_conn_t raw_conn,
+                     const char *catalog,
+                     const char *schema,
+                     const char *table_name,
+                     const char *table_types,
+                     argus_backend_op_t *out_op)
+{
+    return run_built_query((trino_conn_t *)raw_conn,
+                           trino_build_tables_query(catalog, schema,
+                                                    table_name, table_types),
+                           out_op);
 }
 
 /* ── GetColumns via information_schema ───────────────────────── */
@@ -107,56 +228,10 @@ int trino_get_columns(argus_backend_conn_t raw_conn,
                       const char *column_name,
                       argus_backend_op_t *out_op)
 {
-    trino_conn_t *conn = (trino_conn_t *)raw_conn;
-    if (!conn) return -1;
-
-    char query[2048];
-    int off = snprintf(query, sizeof(query),
-        "SELECT "
-        "table_catalog AS TABLE_CAT, "
-        "table_schema AS TABLE_SCHEM, "
-        "table_name AS TABLE_NAME, "
-        "column_name AS COLUMN_NAME, "
-        /* DATA_TYPE: numeric ODBC SQL type code (column 5 per the spec). */
-        "CASE "
-        "WHEN data_type LIKE 'bigint%%' THEN -5 "
-        "WHEN data_type LIKE 'integer%%' THEN 4 "
-        "WHEN data_type LIKE 'smallint%%' THEN 5 "
-        "WHEN data_type LIKE 'tinyint%%' THEN -6 "
-        "WHEN data_type LIKE 'double%%' THEN 8 "
-        "WHEN data_type LIKE 'real%%' THEN 7 "
-        "WHEN data_type LIKE 'decimal%%' THEN 3 "
-        "WHEN data_type LIKE 'boolean%%' THEN -7 "
-        "WHEN data_type LIKE 'date%%' THEN 91 "
-        "WHEN data_type LIKE 'timestamp%%' THEN 93 "
-        "ELSE 12 END AS DATA_TYPE, "
-        "data_type AS TYPE_NAME, "
-        "ordinal_position AS ORDINAL_POSITION, "
-        "is_nullable AS IS_NULLABLE "
-        "FROM information_schema.columns WHERE 1=1");
-
-    if (catalog && *catalog)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_catalog = '%s'", catalog);
-    if (schema && *schema)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_schema LIKE '%s'", schema);
-    if (table_name && *table_name)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND table_name LIKE '%s'", table_name);
-    if (column_name && *column_name)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND column_name LIKE '%s'", column_name);
-
-    snprintf(query + off, sizeof(query) - (size_t)off,
-             " ORDER BY table_catalog, table_schema, table_name, ordinal_position");
-
-    trino_operation_t *op = NULL;
-    int rc = trino_execute_query(conn, query, &op);
-    if (rc != 0) return -1;
-
-    *out_op = op;
-    return 0;
+    return run_built_query((trino_conn_t *)raw_conn,
+                           trino_build_columns_query(catalog, schema,
+                                                     table_name, column_name),
+                           out_op);
 }
 
 /* ── GetTypeInfo (static type list) ──────────────────────────── */
@@ -208,32 +283,9 @@ int trino_get_schemas(argus_backend_conn_t raw_conn,
                       const char *schema,
                       argus_backend_op_t *out_op)
 {
-    trino_conn_t *conn = (trino_conn_t *)raw_conn;
-    if (!conn) return -1;
-
-    char query[1024];
-    int off = snprintf(query, sizeof(query),
-        "SELECT DISTINCT "
-        "schema_name AS TABLE_SCHEM, "
-        "catalog_name AS TABLE_CATALOG "
-        "FROM information_schema.schemata WHERE 1=1");
-
-    if (catalog && *catalog)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND catalog_name = '%s'", catalog);
-    if (schema && *schema)
-        off += snprintf(query + off, sizeof(query) - (size_t)off,
-                        " AND schema_name LIKE '%s'", schema);
-
-    snprintf(query + off, sizeof(query) - (size_t)off,
-             " ORDER BY catalog_name, schema_name");
-
-    trino_operation_t *op = NULL;
-    int rc = trino_execute_query(conn, query, &op);
-    if (rc != 0) return -1;
-
-    *out_op = op;
-    return 0;
+    return run_built_query((trino_conn_t *)raw_conn,
+                           trino_build_schemas_query(catalog, schema),
+                           out_op);
 }
 
 /* ── GetCatalogs ─────────────────────────────────────────────── */
@@ -262,37 +314,10 @@ int trino_get_primary_keys(argus_backend_conn_t raw_conn,
                             const char *table_name,
                             argus_backend_op_t *out_op)
 {
-    trino_conn_t *conn = (trino_conn_t *)raw_conn;
-    if (!conn) return -1;
-
-    char query[2048];
-    snprintf(query, sizeof(query),
-             "SELECT table_cat, table_schem, table_name, "
-             "column_name, key_seq, pk_name "
-             "FROM system.jdbc.primary_keys "
-             "WHERE 1=1");
-
-    size_t pos = strlen(query);
-    if (catalog && *catalog) {
-        pos += (size_t)snprintf(query + pos, sizeof(query) - pos,
-                 " AND table_cat = '%s'", catalog);
-    }
-    if (schema && *schema) {
-        pos += (size_t)snprintf(query + pos, sizeof(query) - pos,
-                 " AND table_schem = '%s'", schema);
-    }
-    if (table_name && *table_name) {
-        pos += (size_t)snprintf(query + pos, sizeof(query) - pos,
-                 " AND table_name = '%s'", table_name);
-    }
-    (void)pos;
-
-    trino_operation_t *op = NULL;
-    int rc = trino_execute_query(conn, query, &op);
-    if (rc != 0) return -1;
-
-    *out_op = op;
-    return 0;
+    return run_built_query((trino_conn_t *)raw_conn,
+                           trino_build_primary_keys_query(catalog, schema,
+                                                          table_name),
+                           out_op);
 }
 
 /* ── GetStatistics via SHOW STATS ────────────────────────────── */
@@ -307,29 +332,8 @@ int trino_get_statistics(argus_backend_conn_t raw_conn,
 {
     (void)unique;
     (void)reserved;
-
-    trino_conn_t *conn = (trino_conn_t *)raw_conn;
-    if (!conn || !table_name || !*table_name) return -1;
-
-    char query[2048];
-    if (schema && *schema) {
-        if (catalog && *catalog) {
-            snprintf(query, sizeof(query),
-                     "SHOW STATS FOR %s.%s.%s",
-                     catalog, schema, table_name);
-        } else {
-            snprintf(query, sizeof(query),
-                     "SHOW STATS FOR %s.%s", schema, table_name);
-        }
-    } else {
-        snprintf(query, sizeof(query),
-                 "SHOW STATS FOR %s", table_name);
-    }
-
-    trino_operation_t *op = NULL;
-    int rc = trino_execute_query(conn, query, &op);
-    if (rc != 0) return -1;
-
-    *out_op = op;
-    return 0;
+    return run_built_query((trino_conn_t *)raw_conn,
+                           trino_build_statistics_query(catalog, schema,
+                                                        table_name),
+                           out_op);
 }

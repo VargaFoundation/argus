@@ -57,39 +57,8 @@ static int count_param_markers(const char *sql)
 static char *sql_escape_string(const char *value, size_t len,
                                bool backslash_escapes)
 {
-    /* Reject embedded NUL bytes to prevent SQL injection via truncation */
-    for (size_t i = 0; i < len; i++) {
-        if (value[i] == '\0') return NULL;
-    }
-
-    /* Count characters that need escaping to determine output size */
-    size_t num_special = 0;
-    for (size_t i = 0; i < len; i++) {
-        if (value[i] == '\'' || (backslash_escapes && value[i] == '\\'))
-            num_special++;
-    }
-
-    /* Output: quote + escaped_data + quote + NUL */
-    size_t out_len = 1 + len + num_special + 1 + 1;
-    char *out = malloc(out_len);
-    if (!out) return NULL;
-
-    char *dst = out;
-    *dst++ = '\'';
-    for (size_t i = 0; i < len; i++) {
-        if (value[i] == '\'') {
-            *dst++ = '\'';
-            *dst++ = '\'';
-        } else if (backslash_escapes && value[i] == '\\') {
-            *dst++ = '\\';
-            *dst++ = '\\';
-        } else {
-            *dst++ = value[i];
-        }
-    }
-    *dst++ = '\'';
-    *dst = '\0';
-    return out;
+    /* NULL for an embedded NUL byte, which would truncate the query. */
+    return argus_sql_quote_literal_n(value, len, backslash_escapes);
 }
 
 /* ── Internal: render a bound parameter as a SQL literal ──────── */

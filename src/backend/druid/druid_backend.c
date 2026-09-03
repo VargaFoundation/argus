@@ -414,39 +414,49 @@ static bool druid_get_last_error(argus_backend_conn_t raw, char *buf,
 
 /* ── Catalog operations via INFORMATION_SCHEMA ───────────────── */
 
-static int druid_get_tables(argus_backend_conn_t conn, const char *catalog,
-                            const char *schema, const char *table_name,
-                            const char *table_types, argus_backend_op_t *out_op)
+/* Every ODBC search pattern reaches the query text through
+ * argus_sql_quote_literal: the patterns come from the application. Druid SQL
+ * (Calcite) string literals are ANSI — no backslash escapes. */
+
+static bool append_filter(GString *q, const char *column, const char *op,
+                          const char *value)
 {
-    char q[2048];
-    int off = snprintf(q, sizeof(q),
+    if (!value || !*value) return true;
+    char *lit = argus_sql_quote_literal(value, false);
+    if (!lit) return false;
+    g_string_append_printf(q, " AND %s %s %s", column, op, lit);
+    free(lit);
+    return true;
+}
+
+static char *finish(GString *q, bool ok, const char *order_by)
+{
+    if (!ok) { g_string_free(q, TRUE); return NULL; }
+    g_string_append(q, order_by);
+    return g_string_free(q, FALSE);
+}
+
+char *druid_build_tables_query(const char *catalog, const char *schema,
+                               const char *table_name, const char *table_types)
+{
+    GString *q = g_string_new(
         "SELECT TABLE_CATALOG AS TABLE_CAT, TABLE_SCHEMA AS TABLE_SCHEM, "
         "TABLE_NAME, TABLE_TYPE, CAST(NULL AS VARCHAR) AS REMARKS "
         "FROM INFORMATION_SCHEMA.TABLES WHERE 1=1");
-    if (catalog && *catalog)
-        off += snprintf(q + off, sizeof(q) - (size_t)off,
-                        " AND TABLE_CATALOG = '%s'", catalog);
-    if (schema && *schema)
-        off += snprintf(q + off, sizeof(q) - (size_t)off,
-                        " AND TABLE_SCHEMA LIKE '%s'", schema);
-    if (table_name && *table_name)
-        off += snprintf(q + off, sizeof(q) - (size_t)off,
-                        " AND TABLE_NAME LIKE '%s'", table_name);
-    /* ODBC "TABLE" vs SQL-standard "BASE TABLE": accept both. */
-    if (table_types && *table_types && strstr(table_types, "TABLE"))
-        off += snprintf(q + off, sizeof(q) - (size_t)off,
-                        " AND TABLE_TYPE IN ('TABLE','BASE TABLE')");
-    snprintf(q + off, sizeof(q) - (size_t)off,
-             " ORDER BY TABLE_SCHEMA, TABLE_NAME");
-    return druid_execute(conn, q, out_op);
+    bool ok = append_filter(q, "TABLE_CATALOG", "=", catalog) &&
+              append_filter(q, "TABLE_SCHEMA", "LIKE", schema) &&
+              append_filter(q, "TABLE_NAME", "LIKE", table_name);
+    /* ODBC "TABLE" vs SQL-standard "BASE TABLE": accept both. The list is
+     * only ever inspected, never copied into the query. */
+    if (ok && table_types && *table_types && strstr(table_types, "TABLE"))
+        g_string_append(q, " AND TABLE_TYPE IN ('TABLE','BASE TABLE')");
+    return finish(q, ok, " ORDER BY TABLE_SCHEMA, TABLE_NAME");
 }
 
-static int druid_get_columns(argus_backend_conn_t conn, const char *catalog,
-                             const char *schema, const char *table_name,
-                             const char *column_name, argus_backend_op_t *out_op)
+char *druid_build_columns_query(const char *catalog, const char *schema,
+                                const char *table_name, const char *column_name)
 {
-    char q[2048];
-    int off = snprintf(q, sizeof(q),
+    GString *q = g_string_new(
         "SELECT TABLE_CATALOG AS TABLE_CAT, TABLE_SCHEMA AS TABLE_SCHEM, "
         "TABLE_NAME, COLUMN_NAME, "
         "CASE "
@@ -464,38 +474,58 @@ static int druid_get_columns(argus_backend_conn_t conn, const char *catalog,
         "DATA_TYPE AS TYPE_NAME, "
         "ORDINAL_POSITION, IS_NULLABLE "
         "FROM INFORMATION_SCHEMA.COLUMNS WHERE 1=1");
-    if (catalog && *catalog)
-        off += snprintf(q + off, sizeof(q) - (size_t)off,
-                        " AND TABLE_CATALOG = '%s'", catalog);
-    if (schema && *schema)
-        off += snprintf(q + off, sizeof(q) - (size_t)off,
-                        " AND TABLE_SCHEMA LIKE '%s'", schema);
-    if (table_name && *table_name)
-        off += snprintf(q + off, sizeof(q) - (size_t)off,
-                        " AND TABLE_NAME LIKE '%s'", table_name);
-    if (column_name && *column_name)
-        off += snprintf(q + off, sizeof(q) - (size_t)off,
-                        " AND COLUMN_NAME LIKE '%s'", column_name);
-    snprintf(q + off, sizeof(q) - (size_t)off,
-             " ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION");
-    return druid_execute(conn, q, out_op);
+    bool ok = append_filter(q, "TABLE_CATALOG", "=", catalog) &&
+              append_filter(q, "TABLE_SCHEMA", "LIKE", schema) &&
+              append_filter(q, "TABLE_NAME", "LIKE", table_name) &&
+              append_filter(q, "COLUMN_NAME", "LIKE", column_name);
+    return finish(q, ok, " ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION");
+}
+
+char *druid_build_schemas_query(const char *catalog, const char *schema)
+{
+    GString *q = g_string_new(
+        "SELECT SCHEMA_NAME AS TABLE_SCHEM, CATALOG_NAME AS TABLE_CATALOG "
+        "FROM INFORMATION_SCHEMA.SCHEMATA WHERE 1=1");
+    bool ok = append_filter(q, "CATALOG_NAME", "=", catalog) &&
+              append_filter(q, "SCHEMA_NAME", "LIKE", schema);
+    return finish(q, ok, " ORDER BY SCHEMA_NAME");
+}
+
+static int run_built_query(argus_backend_conn_t conn, char *query,
+                           argus_backend_op_t *out_op)
+{
+    if (!query) return -1;
+    int rc = druid_execute(conn, query, out_op);
+    g_free(query);
+    return rc;
+}
+
+static int druid_get_tables(argus_backend_conn_t conn, const char *catalog,
+                            const char *schema, const char *table_name,
+                            const char *table_types, argus_backend_op_t *out_op)
+{
+    return run_built_query(conn,
+                           druid_build_tables_query(catalog, schema,
+                                                    table_name, table_types),
+                           out_op);
+}
+
+static int druid_get_columns(argus_backend_conn_t conn, const char *catalog,
+                             const char *schema, const char *table_name,
+                             const char *column_name, argus_backend_op_t *out_op)
+{
+    return run_built_query(conn,
+                           druid_build_columns_query(catalog, schema,
+                                                     table_name, column_name),
+                           out_op);
 }
 
 static int druid_get_schemas(argus_backend_conn_t conn, const char *catalog,
                              const char *schema, argus_backend_op_t *out_op)
 {
-    char q[1024];
-    int off = snprintf(q, sizeof(q),
-        "SELECT SCHEMA_NAME AS TABLE_SCHEM, CATALOG_NAME AS TABLE_CATALOG "
-        "FROM INFORMATION_SCHEMA.SCHEMATA WHERE 1=1");
-    if (catalog && *catalog)
-        off += snprintf(q + off, sizeof(q) - (size_t)off,
-                        " AND CATALOG_NAME = '%s'", catalog);
-    if (schema && *schema)
-        off += snprintf(q + off, sizeof(q) - (size_t)off,
-                        " AND SCHEMA_NAME LIKE '%s'", schema);
-    snprintf(q + off, sizeof(q) - (size_t)off, " ORDER BY SCHEMA_NAME");
-    return druid_execute(conn, q, out_op);
+    return run_built_query(conn,
+                           druid_build_schemas_query(catalog, schema),
+                           out_op);
 }
 
 /* ── Backend vtable ──────────────────────────────────────────── */
