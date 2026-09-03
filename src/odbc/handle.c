@@ -89,6 +89,7 @@ SQLRETURN argus_alloc_stmt(argus_dbc_t *dbc, argus_stmt_t **out)
     stmt->signature       = ARGUS_STMT_SIGNATURE;
     stmt->dbc             = dbc;
     g_mutex_init(&stmt->mutex);
+    g_mutex_init(&stmt->cancel_lock);
     stmt->row_count       = -1;
     stmt->row_array_size  = 1;
     stmt->row_bind_type   = SQL_BIND_BY_COLUMN;
@@ -322,14 +323,59 @@ void argus_stmt_drop_result(argus_stmt_t *stmt)
     stmt->getdata_offset   = 0;
 }
 
+void argus_stmt_async_join(argus_stmt_t *stmt)
+{
+    GThread *worker = stmt->async_thread;
+    if (!worker) return;
+    stmt->async_thread = NULL;
+
+    if (g_atomic_int_get(&stmt->async_done)) {
+        /* Finished and out of the lock: only the thread is left to reap. */
+        g_thread_join(worker);
+        return;
+    }
+    /* Still to run, or running: it needs the statement lock we hold. */
+    ARGUS_STMT_UNLOCK(stmt);
+    g_thread_join(worker);
+    ARGUS_STMT_LOCK(stmt);
+}
+
+void argus_stmt_request_cancel(argus_stmt_t *stmt)
+{
+    g_mutex_lock(&stmt->cancel_lock);
+    stmt->cancel_requested = true;
+    g_mutex_unlock(&stmt->cancel_lock);
+}
+
+SQLRETURN argus_stmt_cancel_checkpoint(argus_stmt_t *stmt)
+{
+    g_mutex_lock(&stmt->cancel_lock);
+    bool requested = stmt->cancel_requested;
+    stmt->cancel_requested = false;
+    g_mutex_unlock(&stmt->cancel_lock);
+    if (!requested) return SQL_SUCCESS;
+
+    /* This thread owns the operation, so the backend's cancel is safe to
+     * call here even where it shares the connection's transport. A backend
+     * whose cancel is safe from any thread already had it sent by SQLCancel
+     * itself. */
+    argus_dbc_t *dbc = stmt->dbc;
+    if (stmt->op && dbc && dbc->backend && dbc->backend->cancel &&
+        !dbc->backend->cancel_from_any_thread) {
+        ARGUS_LOG_INFO("Cancelling statement operation");
+        dbc->backend->cancel(dbc->backend_conn, stmt->op);
+    }
+    argus_stmt_drop_result(stmt);
+    stmt->executed = false;
+    return argus_set_error(&stmt->diag, "HY008",
+                           "[Argus] Operation canceled", 0);
+}
+
 void argus_stmt_close_cursor(argus_stmt_t *stmt)
 {
     /* A worker thread may still be running an execute and owns the
      * operation and the execution fields: join it before touching them. */
-    if (stmt->async_thread) {
-        g_thread_join(stmt->async_thread);
-        stmt->async_thread = NULL;
-    }
+    argus_stmt_async_join(stmt);
     stmt->async_state = ARGUS_ASYNC_IDLE;
     g_atomic_int_set(&stmt->async_done, 0);
     free(stmt->async_query);
@@ -409,6 +455,7 @@ SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
     ARGUS_STMT_UNLOCK(stmt);
 
     g_mutex_clear(&stmt->mutex);
+    g_mutex_clear(&stmt->cancel_lock);
     free(stmt->cursor_name);
     free(stmt->columns);
     /* Free the statement's own array, not stmt->bindings, which may currently

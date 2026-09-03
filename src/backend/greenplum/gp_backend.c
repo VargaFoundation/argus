@@ -97,6 +97,7 @@ static const argus_backend_t greenplum_backend = {
     .get_operation_status  = pg_get_operation_status,
     .close_operation       = pg_close_operation,
     .cancel                = pg_cancel,
+    .cancel_from_any_thread = true,
     .fetch_results         = pg_fetch_results,
     .get_result_metadata   = pg_get_result_metadata,
     .get_tables            = pg_get_tables,

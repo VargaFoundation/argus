@@ -143,6 +143,10 @@ static SQLRETURN fetch_batch(argus_stmt_t *stmt)
                      ? dbc->fetch_buffer_size
                      : ARGUS_DEFAULT_BATCH_SIZE;
 
+    /* An SQLCancel raised while the previous batch was on the wire. */
+    SQLRETURN canceled = argus_stmt_cancel_checkpoint(stmt);
+    if (canceled != SQL_SUCCESS) return canceled;
+
     int num_cols = 0;
     int rc = dbc->backend->fetch_results(
         dbc->backend_conn, stmt->op,
@@ -151,6 +155,10 @@ static SQLRETURN fetch_batch(argus_stmt_t *stmt)
         stmt->columns, &num_cols);
 
     if (rc != 0) {
+        /* A cancel sent while the batch was on the wire (backends whose
+         * cancel is safe to send then) is reported as the cancel it is. */
+        canceled = argus_stmt_cancel_checkpoint(stmt);
+        if (canceled != SQL_SUCCESS) return canceled;
         set_fetch_error(stmt);
         return SQL_ERROR;
     }
@@ -898,6 +906,16 @@ static SQLRETURN build_scroll_cache(argus_stmt_t *stmt)
 
     while (1) {
         argus_row_cache_clear(&stmt->row_cache);
+
+        /* Batches keep coming until the result is exhausted: an SQLCancel
+         * from another thread is answered between two of them. */
+        if (argus_stmt_cancel_checkpoint(stmt) != SQL_SUCCESS) {
+            for (size_t i = 0; i < total; i++)
+                argus_row_free(&all_rows[i], stmt->num_cols);
+            free(all_rows);
+            return SQL_ERROR;
+        }
+
         int num_cols = 0;
         int rc = dbc->backend->fetch_results(
             dbc->backend_conn, stmt->op,
@@ -910,6 +928,8 @@ static SQLRETURN build_scroll_cache(argus_stmt_t *stmt)
             for (size_t i = 0; i < total; i++)
                 argus_row_free(&all_rows[i], stmt->num_cols);
             free(all_rows);
+            if (argus_stmt_cancel_checkpoint(stmt) != SQL_SUCCESS)
+                return SQL_ERROR;
             set_fetch_error(stmt);
             return SQL_ERROR;
         }
@@ -1136,6 +1156,14 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
         return err;
     }
 
+    /* An SQLCancel that arrived during the previous fetch ends the cursor
+     * now, rather than after the rows still buffered from that fetch. */
+    SQLRETURN canceled = argus_stmt_cancel_checkpoint(stmt);
+    if (canceled != SQL_SUCCESS) {
+        ARGUS_STMT_UNLOCK(stmt);
+        return canceled;
+    }
+
     SQLULEN array_size = stmt->row_array_size > 0 ? stmt->row_array_size : 1;
     SQLULEN rows_fetched = 0;
     SQLULEN status_filled = 0;   /* row status slots already written */
@@ -1222,6 +1250,12 @@ SQLRETURN SQL_API SQLFetchScroll(
                                "[Argus] Function sequence error: not executed", 0);
         ARGUS_STMT_UNLOCK(stmt);
         return err;
+    }
+
+    SQLRETURN canceled = argus_stmt_cancel_checkpoint(stmt);
+    if (canceled != SQL_SUCCESS) {
+        ARGUS_STMT_UNLOCK(stmt);
+        return canceled;
     }
 
     if (!stmt->scroll_cached) {

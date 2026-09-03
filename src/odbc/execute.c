@@ -532,21 +532,18 @@ static char *substitute_params(const char *sql,
 static SQLRETURN async_poll(argus_stmt_t *stmt)
 {
     /*
-     * The execute runs on a background worker thread (async_worker below). A
-     * poll just checks whether it has finished: while the worker runs, only the
-     * async_done atomic is read here — never the execution fields the worker
-     * writes — so there is no data race. On completion, g_thread_join is a
-     * memory barrier that publishes all of the worker's writes to this thread.
+     * The execute runs on a background worker thread (async_worker below),
+     * under the statement lock. A poll reaches this point only once the
+     * worker has released it (see the pre-lock check in the callers), so
+     * only the async_done atomic is read while it runs; on completion,
+     * g_thread_join publishes all of the worker's writes to this thread.
      */
     if (!g_atomic_int_get(&stmt->async_done)) {
         stmt->async_state = ARGUS_ASYNC_RUNNING;
         return SQL_STILL_EXECUTING;
     }
 
-    if (stmt->async_thread) {
-        g_thread_join(stmt->async_thread);
-        stmt->async_thread = NULL;
-    }
+    argus_stmt_async_join(stmt);
 
     SQLRETURN ret = stmt->async_result;
     stmt->async_state = (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO)
@@ -590,6 +587,14 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
     stmt->execute_time_ms = (double)(exec_end - exec_start) / 1000.0;
 
     if (rc != 0) {
+        /* An SQLCancel sent to the backend while it was executing (a backend
+         * whose cancel is safe from another thread) surfaces as this failure:
+         * report the cancel, not the backend's account of the abort. */
+        if (argus_stmt_cancel_checkpoint(stmt) != SQL_SUCCESS) {
+            ARGUS_LOG_INFO("Query execution canceled (%.1f ms)",
+                           stmt->execute_time_ms);
+            return SQL_ERROR;
+        }
         ARGUS_LOG_ERROR("Query execution failed: rc=%d, query=%.100s (%.1f ms)",
                         rc, query, stmt->execute_time_ms);
         stmt->errors_total++;
@@ -630,6 +635,14 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
                                   : "HY000",
                               stmt->diag.count > 0
                                   ? (long)stmt->diag.records[0].native_error : 0);
+        return SQL_ERROR;
+    }
+
+    /* SQLCancel from another thread while the backend was executing: the
+     * operation is stopped and dropped here, by the thread that owns it. */
+    if (argus_stmt_cancel_checkpoint(stmt) != SQL_SUCCESS) {
+        ARGUS_LOG_INFO("Query execution canceled (%.1f ms)",
+                       stmt->execute_time_ms);
         return SQL_ERROR;
     }
 
@@ -832,17 +845,44 @@ static char *apply_escapes(argus_stmt_t *stmt, char *query)
 /*
  * Runs the (blocking) backend execute on a background thread so SQLExecDirect /
  * SQLExecute can return SQL_STILL_EXECUTING immediately and the application can
- * poll for completion. While this runs, the polling side reads only the
- * async_done atomic — never the execution fields written here — so there is no
- * data race; the g_thread_join on the polling side publishes these writes.
+ * poll for completion. The execute runs under the statement lock, exactly as a
+ * synchronous one does: every other call on the statement (an SQLGetDiagRec,
+ * an SQLFreeStmt from another thread) waits for it instead of reading the
+ * diagnostics, columns and operation while they are written. The polling
+ * calls check async_done before taking the lock, so they do not wait; the
+ * flag is raised only after the lock is released, and the g_thread_join on
+ * the polling side then publishes the worker's writes.
  */
 static gpointer async_worker(gpointer data)
 {
     argus_stmt_t *stmt = (argus_stmt_t *)data;
-    SQLRETURN ret = do_execute(stmt, stmt->async_query);
-    stmt->async_result = ret;
+    ARGUS_STMT_LOCK(stmt);
+    stmt->async_result = do_execute(stmt, stmt->async_query);
+    ARGUS_STMT_UNLOCK(stmt);
     g_atomic_int_set(&stmt->async_done, 1);
     return NULL;
+}
+
+/* True while a worker owns the statement: the polling entry points answer
+ * SQL_STILL_EXECUTING from here rather than wait on the lock it holds. Read
+ * without the lock; the fields are written by the application thread only,
+ * except async_done, which is atomic. */
+static bool async_in_flight(const argus_stmt_t *stmt)
+{
+    return stmt->async_enabled &&
+           (stmt->async_state == ARGUS_ASYNC_SUBMITTED ||
+            stmt->async_state == ARGUS_ASYNC_RUNNING) &&
+           stmt->async_thread &&
+           !g_atomic_int_get(&stmt->async_done);
+}
+
+/* A cancel that landed before this execute began (while a brief call on
+ * another thread held the statement, say) was for something else. */
+static void discard_stale_cancel(argus_stmt_t *stmt)
+{
+    g_mutex_lock(&stmt->cancel_lock);
+    stmt->cancel_requested = false;
+    g_mutex_unlock(&stmt->cancel_lock);
 }
 
 /* ── Internal: execute or poll async ─────────────────────────── */
@@ -885,10 +925,12 @@ SQLRETURN SQL_API SQLExecDirect(
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
-    ARGUS_STMT_LOCK(stmt);
-    argus_diag_clear(&stmt->diag);
+    if (async_in_flight(stmt)) return SQL_STILL_EXECUTING;
 
-    /* If async polling is in progress, continue it */
+    ARGUS_STMT_LOCK(stmt);
+
+    /* If async polling is in progress, complete it. The diagnostics are the
+     * worker's (its error, or HY008 after a cancel): they are not cleared. */
     if (stmt->async_enabled &&
         (stmt->async_state == ARGUS_ASYNC_SUBMITTED ||
          stmt->async_state == ARGUS_ASYNC_RUNNING)) {
@@ -896,6 +938,8 @@ SQLRETURN SQL_API SQLExecDirect(
         ARGUS_STMT_UNLOCK(stmt);
         return ret;
     }
+    argus_diag_clear(&stmt->diag);
+    discard_stale_cancel(stmt);
 
     if (!StatementText) {
         SQLRETURN err = argus_set_error(&stmt->diag, "HY009",
@@ -1088,10 +1132,12 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT StatementHandle)
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
-    ARGUS_STMT_LOCK(stmt);
-    argus_diag_clear(&stmt->diag);
+    if (async_in_flight(stmt)) return SQL_STILL_EXECUTING;
 
-    /* If async polling is in progress, continue it */
+    ARGUS_STMT_LOCK(stmt);
+
+    /* If async polling is in progress, complete it (the diagnostics are the
+     * worker's and are kept, as in SQLExecDirect). */
     if (stmt->async_enabled &&
         (stmt->async_state == ARGUS_ASYNC_SUBMITTED ||
          stmt->async_state == ARGUS_ASYNC_RUNNING)) {
@@ -1105,6 +1151,8 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT StatementHandle)
         ARGUS_STMT_UNLOCK(stmt);
         return ret;
     }
+    argus_diag_clear(&stmt->diag);
+    discard_stale_cancel(stmt);
 
     if (!stmt->query || !stmt->prepared) {
         SQLRETURN err = argus_set_error(&stmt->diag, "HY010",
@@ -1293,28 +1341,57 @@ SQLRETURN SQL_API SQLNativeSql(
 
 /* ── ODBC API: SQLCancel ─────────────────────────────────────── */
 
+/*
+ * SQLCancel is the one call an application makes on a statement another
+ * thread is using, so it must not wait for that thread. When the statement
+ * lock is taken, whoever holds it (a synchronous SQLExecDirect or SQLFetch,
+ * or the asynchronous worker) is asked to stop: the request is raised under
+ * cancel_lock and answered at the running call's next checkpoint, where the
+ * operation is cancelled and dropped by the thread that owns it and the call
+ * returns SQL_ERROR with HY008. Cancelling the backend from here instead
+ * would run a second request on the transport the running call is using.
+ */
+/* Ask the backend to stop the call another thread is blocked in, where its
+ * cancel is safe to send from here (PostgreSQL); the others stop when that
+ * call returns on its own. Without the statement lock: the connection's
+ * backend does not change while a statement of it is running. */
+static void interrupt_running_call(argus_stmt_t *stmt)
+{
+    argus_dbc_t *dbc = stmt->dbc;
+    if (dbc && dbc->backend && dbc->backend->cancel &&
+        dbc->backend->cancel_from_any_thread)
+        dbc->backend->cancel(dbc->backend_conn, NULL);
+}
+
 SQLRETURN SQL_API SQLCancel(SQLHSTMT StatementHandle)
 {
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
-    ARGUS_STMT_LOCK(stmt);
+    if (!g_mutex_trylock(&stmt->mutex)) {
+        argus_stmt_request_cancel(stmt);
+        ARGUS_LOG_INFO("Cancel requested for a running statement call");
+        interrupt_running_call(stmt);
+        return SQL_SUCCESS;
+    }
     argus_diag_clear(&stmt->diag);
 
     /* A data-at-execution cycle in progress is abandoned: the statement
      * goes back to its prepared state and the next SQLExecute asks again. */
     argus_stmt_dae_clear(stmt);
 
-    /* Async in flight: the worker owns async_query and the execution fields, so
-     * it must be joined before we touch either. Joining waits for the in-flight
-     * statement to finish (the driver does not offer a mid-flight interrupt of a
-     * running backend call); this is a valid, if blocking, cancel. */
     if (stmt->async_state == ARGUS_ASYNC_SUBMITTED ||
         stmt->async_state == ARGUS_ASYNC_RUNNING) {
-        if (stmt->async_thread) {
-            g_thread_join(stmt->async_thread);
-            stmt->async_thread = NULL;
+        if (stmt->async_thread && !g_atomic_int_get(&stmt->async_done)) {
+            /* The worker has not taken the lock yet: it will find the
+             * request when it does, and the poll then reports HY008. */
+            argus_stmt_request_cancel(stmt);
+            ARGUS_STMT_UNLOCK(stmt);
+            return SQL_SUCCESS;
         }
+        /* Finished but not polled (or bookkeeping without a worker): the
+         * result is discarded and the statement goes back to idle. */
+        argus_stmt_async_join(stmt);
         stmt->async_state = ARGUS_ASYNC_IDLE;
         g_atomic_int_set(&stmt->async_done, 0);
         free(stmt->async_query);
@@ -1346,18 +1423,18 @@ SQLRETURN SQL_API SQLCancel(SQLHSTMT StatementHandle)
 
     ARGUS_LOG_INFO("Cancelling statement operation");
 
-    /* Call backend cancel function */
+    /* Nothing runs on the statement: the backend cancel is safe here. */
+    SQLRETURN ret = SQL_SUCCESS;
     int rc = dbc->backend->cancel(dbc->backend_conn, stmt->op);
-    ARGUS_STMT_UNLOCK(stmt);
-
     if (rc != 0) {
         ARGUS_LOG_ERROR("Cancel operation failed: rc=%d", rc);
-        return argus_set_error(&stmt->diag, "HY008",
-                               "[Argus] Operation cancelled", 0);
+        ret = argus_set_error(&stmt->diag, "HY008",
+                              "[Argus] Operation cancelled", 0);
+    } else {
+        ARGUS_LOG_DEBUG("Operation cancelled successfully");
     }
-
-    ARGUS_LOG_DEBUG("Operation cancelled successfully");
-    return SQL_SUCCESS;
+    ARGUS_STMT_UNLOCK(stmt);
+    return ret;
 }
 
 /* ── ODBC 3.8 API: SQLCancelHandle ───────────────────────────── */
@@ -1412,10 +1489,8 @@ SQLRETURN SQL_API SQLCompleteAsync(SQLSMALLINT HandleType, SQLHANDLE Handle,
         return SQL_SUCCESS;
     }
 
-    if (stmt->async_thread) {
-        g_thread_join(stmt->async_thread);
-        stmt->async_thread = NULL;
-    }
+    /* Waits for the worker, giving up the lock while it runs. */
+    argus_stmt_async_join(stmt);
     SQLRETURN ret = stmt->async_result;
     stmt->async_state = (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO)
                         ? ARGUS_ASYNC_DONE : ARGUS_ASYNC_ERROR;

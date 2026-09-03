@@ -208,6 +208,15 @@ typedef struct argus_backend {
     /* Static capability descriptor for SQLGetInfo (argus/caps.h).
      * NULL → the pre-capabilities answers. */
     const struct argus_backend_caps *caps;
+
+    /* True when cancel() may be called from another thread while execute()
+     * or fetch_results() is blocked on the same connection, and with a NULL
+     * op (libpq's PQcancel opens a connection of its own to reach the
+     * server). SQLCancel then sends the cancel at once, so the blocked call
+     * returns early; a backend whose cancel shares the transport of the
+     * running call leaves this false and is cancelled when that call
+     * returns on its own. */
+    bool cancel_from_any_thread;
 } argus_backend_t;
 
 /* Backend registry. The array is a handful of pointers, so the bound exists

@@ -63,11 +63,15 @@ The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery
 - **Wide Char**: UTF-8 to UTF-16LE conversion
 
 #### Query Management
-- **SQLCancel**: cancels in-flight queries on the async-capable backends
-  (Hive, Impala, Trino, Phoenix, BigQuery, Flight SQL, Kudu). On the
-  synchronous HTTP/wire backends (Pinot, Druid, MySQL-wire) execution has
-  already completed by the time a cancel can land, so cancel is a no-op
-  success per ODBC semantics
+- **SQLCancel** from another thread never waits for the call it interrupts:
+  the running `SQLExecDirect`/`SQLExecute`/`SQLFetch` (or the asynchronous
+  worker) returns `SQL_ERROR`/`HY008` at its next checkpoint and the
+  operation is closed. On the PostgreSQL family the cancel reaches the server
+  at once (libpq's out-of-band cancel request), so a blocked call returns
+  early. On the other backends it takes effect when the backend call in
+  progress returns; the server-side operation is then cancelled where the
+  backend has a cancel (Hive, Impala, Trino, Phoenix, BigQuery, Kudu) and
+  simply closed where it does not (Flight SQL, Pinot, Druid, MySQL-wire)
 - **Application Name**: Identify queries with a custom app name (`X-Trino-Source`, `hive.query.source`)
 
 #### Fetch Optimization

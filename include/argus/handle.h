@@ -306,6 +306,15 @@ struct argus_stmt {
     gint                    async_done;     /* atomic flag: worker has finished */
     SQLRETURN               async_result;   /* worker's return code, valid once done */
 
+    /* A cancel raised from another thread. SQLCancel cannot take the
+     * statement lock while the call it is cancelling holds it, so it sets
+     * this flag under cancel_lock instead, and the running call answers
+     * HY008 at its next checkpoint (once the backend execute returns, before
+     * each fetch batch). cancel_lock guards the flag only and is taken with
+     * or without the statement lock held. */
+    GMutex                  cancel_lock;
+    bool                    cancel_requested;
+
     /* Data-at-execution state */
     argus_dae_state_t       dae_state;
     int                     dae_current_param;  /* 0-based index */
@@ -383,6 +392,23 @@ void argus_stmt_drop_result(argus_stmt_t *stmt);
  * prepared SQL, the parameter and column bindings and the statement
  * attributes survive, so the application can SQLExecute again. */
 void argus_stmt_close_cursor(argus_stmt_t *stmt);
+
+/* Join the asynchronous worker, if one was started. Called with the
+ * statement lock held: the worker runs its execute under that same lock, so
+ * when it has not finished yet the lock is given up while it runs and taken
+ * again before returning. The thread is claimed first, so a concurrent
+ * joiner finds nothing to join. */
+void argus_stmt_async_join(argus_stmt_t *stmt);
+
+/* Raise a cancel request for the call currently running on the statement
+ * (SQLCancel from another thread). */
+void argus_stmt_request_cancel(argus_stmt_t *stmt);
+
+/* Cancel checkpoint for a running call, with the statement lock held: when a
+ * request is pending it is consumed, the backend operation is cancelled and
+ * dropped, and HY008 is set on the statement, returning SQL_ERROR; otherwise
+ * SQL_SUCCESS and nothing changes. */
+SQLRETURN argus_stmt_cancel_checkpoint(argus_stmt_t *stmt);
 
 /* Close the cursor and discard the SQL as well (catalog functions and
  * SQLFreeStmt(SQL_DROP)). Bindings survive here too: only SQL_UNBIND,
