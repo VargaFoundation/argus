@@ -1,0 +1,10 @@
+# GNU ld version script (ELF): the driver exports its ODBC entry points and
+# nothing else. Hidden visibility on the driver's own sources is not enough
+# on its own: whatever static archive the link pulls in keeps its default
+# visibility — thrift_c_glib where the platform has no shared runtime,
+# libgcov under --coverage — and every such symbol would be exported. The
+# anonymous node (no version name) keeps the entry points unversioned.
+{
+    global: SQL*;
+    local: *;
+};

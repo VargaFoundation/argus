@@ -454,6 +454,25 @@ if(NOT WIN32 AND NOT APPLE)
     target_link_options(argus_odbc PRIVATE "LINKER:-Bsymbolic-functions")
 endif()
 
+# The export list, enforced at link time. C_VISIBILITY_PRESET only covers the
+# objects this project compiles; a static archive linked into the driver
+# (thrift_c_glib's portable subset on macOS and Windows, libgcov under
+# --coverage) keeps default visibility and would leak through. The linker
+# scripts pin the exported set to SQL* on ELF and Mach-O; on Windows the
+# presence of __declspec(dllexport) entry points already disables ld's
+# export-everything default. scripts/check-exports.sh reads the result back.
+if(APPLE)
+    set_property(TARGET argus_odbc APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/argus_odbc.exports")
+    target_link_options(argus_odbc PRIVATE
+        "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/argus_odbc.exports")
+elseif(NOT WIN32)
+    set_property(TARGET argus_odbc APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/argus_odbc.map")
+    target_link_options(argus_odbc PRIVATE
+        "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/argus_odbc.map")
+endif()
+
 # Static library for unit tests (all symbols visible)
 if(BUILD_TESTING)
     add_library(argus_odbc_static STATIC ${ARGUS_SOURCES})

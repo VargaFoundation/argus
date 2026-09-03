@@ -333,7 +333,17 @@ static void test_result_doubles_ignore_locale(void **state)
     argus_test_restore_c_locale();
 }
 
-#endif /* !_WIN32 */
+#else /* _WIN32 */
+
+/* The fake Trino above is a POSIX socket listener; an empty test table is
+ * a compile error, so say explicitly that nothing runs here. */
+static void test_loopback_listener_is_posix_only(void **state)
+{
+    (void)state;
+    skip();
+}
+
+#endif /* _WIN32 */
 
 int main(void)
 {
@@ -345,6 +355,8 @@ int main(void)
         cmocka_unit_test(test_next_uri_on_another_host_gets_no_credentials),
         cmocka_unit_test(test_basic_credentials_stay_on_the_origin),
         cmocka_unit_test(test_result_doubles_ignore_locale),
+#else
+        cmocka_unit_test(test_loopback_listener_is_posix_only),
 #endif
     };
     int rc = cmocka_run_group_tests(tests, NULL, NULL);

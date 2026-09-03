@@ -141,7 +141,11 @@ those `BACKEND=` values with `Unknown backend: postgres`.
 - The generated Thrift code is built with hidden visibility like the rest of
   the driver: 104 `SQL*` exports instead of 385 (281 of them
   `t_c_l_i_service_*`/`toString_*` internals that two Thrift c_glib drivers in
-  one process resolved against each other).
+  one process resolved against each other). The export set is also pinned at
+  link time (`src/argus_odbc.map` on ELF, `src/argus_odbc.exports` on Mach-O),
+  because hidden visibility does not reach the static archives the link pulls
+  in: the portable `thrift_c_glib` subset leaked 163 symbols from the macOS
+  driver, and libgcov leaked seven from a `--coverage` build.
 - `scripts/check-exports.sh` and `scripts/check-hardening.sh` read both
   properties back out of a `.so`/`.dylib`/`.dll`; `ctest -L unit` runs them as
   `check_exports`/`check_hardening` on every platform, and the release
