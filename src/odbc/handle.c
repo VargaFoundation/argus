@@ -98,6 +98,7 @@ SQLRETURN argus_alloc_stmt(argus_dbc_t *dbc, argus_stmt_t **out)
     stmt->param_bind_type = SQL_PARAM_BIND_BY_COLUMN;
     argus_diag_clear(&stmt->diag);
     argus_row_cache_init(&stmt->row_cache);
+    argus_getdata_reset(&stmt->getdata);
 
     /* Guardrail taps: cap rows / duration when the application has not set
      * stricter limits itself (the open build is a no-op). */
@@ -319,8 +320,7 @@ void argus_stmt_drop_result(argus_stmt_t *stmt)
     stmt->metadata_fetched = false;
     stmt->fetch_started    = false;
     stmt->row_count        = -1;
-    stmt->getdata_col      = 0;
-    stmt->getdata_offset   = 0;
+    argus_getdata_reset(&stmt->getdata);
 }
 
 void argus_stmt_async_join(argus_stmt_t *stmt)

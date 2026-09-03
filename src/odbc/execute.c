@@ -1502,8 +1502,7 @@ SQLRETURN SQL_API SQLMoreResults(SQLHSTMT StatementHandle)
     stmt->num_cols = 0;
     stmt->metadata_fetched = false;
     stmt->fetch_started = false;
-    stmt->getdata_col = 0;
-    stmt->getdata_offset = 0;
+    argus_getdata_reset(&stmt->getdata);
 
     return SQL_NO_DATA;
 }

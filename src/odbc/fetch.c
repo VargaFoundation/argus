@@ -5,13 +5,12 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <glib.h>
 
 extern SQLSMALLINT argus_copy_string(const char *src,
                                       SQLCHAR *dst, SQLSMALLINT dst_len);
-extern int argus_hex_decode(const char *hex, size_t hex_len,
-                             unsigned char *out, size_t out_capacity);
 
 /* ── Row cache implementation ─────────────────────────────────── */
 
@@ -47,6 +46,91 @@ void argus_row_free(argus_row_t *row, int num_cols)
 static void free_row(argus_row_t *row, int num_cols)
 {
     argus_row_free(row, num_cols);
+}
+
+/* ── Binary cells: decode the engine's text encoding into bytes ── */
+
+static int hex_nibble(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+int argus_cell_decode_hex(argus_cell_t *cell)
+{
+    if (!cell || cell->is_null || cell->native_kind == ARGUS_NATIVE_BINARY)
+        return 0;
+    if (cell->native_kind != ARGUS_NATIVE_NONE || (!cell->data && cell->data_len))
+        return -1;
+
+    const char *src = cell->data ? cell->data : "";
+    size_t len = cell->data_len;
+    if (len >= 2 && (src[0] == '0' || src[0] == '\\') &&
+        (src[1] == 'x' || src[1] == 'X')) {
+        src += 2;
+        len -= 2;
+    }
+    if (len % 2) return -1;
+    for (size_t i = 0; i < len; i++)
+        if (hex_nibble(src[i]) < 0) return -1;
+
+    /* Byte i comes from characters 2i and 2i+1 at or beyond it: writing
+     * forward never overtakes the read cursor. */
+    unsigned char *out = (unsigned char *)cell->data;
+    size_t n = len / 2;
+    for (size_t i = 0; i < n; i++)
+        out[i] = (unsigned char)((hex_nibble(src[2 * i]) << 4) |
+                                 hex_nibble(src[2 * i + 1]));
+    if (cell->data) cell->data[n] = '\0';
+    cell->data_len = n;
+    cell->native_kind = ARGUS_NATIVE_BINARY;
+    return 0;
+}
+
+static int b64_value(char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+' || c == '-') return 62;   /* '-' and '_': the URL alphabet */
+    if (c == '/' || c == '_') return 63;
+    return -1;
+}
+
+int argus_cell_decode_base64(argus_cell_t *cell)
+{
+    if (!cell || cell->is_null || cell->native_kind == ARGUS_NATIVE_BINARY)
+        return 0;
+    if (cell->native_kind != ARGUS_NATIVE_NONE || (!cell->data && cell->data_len))
+        return -1;
+
+    const char *src = cell->data ? cell->data : "";
+    size_t len = cell->data_len;
+    while (len && src[len - 1] == '=') len--;      /* padding */
+    if (len % 4 == 1) return -1;                   /* no such encoding */
+    for (size_t i = 0; i < len; i++)
+        if (b64_value(src[i]) < 0) return -1;
+
+    /* Four characters become three bytes; the write cursor trails the read
+     * cursor, so the decode is safe in place. */
+    unsigned char *out = (unsigned char *)cell->data;
+    size_t o = 0;
+    unsigned acc = 0;
+    int bits = 0;
+    for (size_t i = 0; i < len; i++) {
+        acc = (acc << 6) | (unsigned)b64_value(src[i]);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out[o++] = (unsigned char)((acc >> bits) & 0xFF);
+        }
+    }
+    if (cell->data) cell->data[o] = '\0';
+    cell->data_len = o;
+    cell->native_kind = ARGUS_NATIVE_BINARY;
+    return 0;
 }
 
 void argus_row_cache_free(argus_row_cache_t *cache)
@@ -179,12 +263,578 @@ static SQLRETURN fetch_batch(argus_stmt_t *stmt)
 
 /* ── Internal: convert cell to target type ────────────────────── */
 
+/*
+ * One conversion, from a row-cache cell to the application's buffer.
+ *
+ * Character and binary targets take the value in pieces: `gd` is the
+ * SQLGetData continuation state — how many source units (UTF-8 bytes of a
+ * text value, bytes of a binary one) earlier calls already delivered — and
+ * this call advances it by what it copies. Bound columns pass NULL and
+ * always receive the value from the start. Fixed-length targets ignore it.
+ *
+ * Numeric targets follow the ODBC conversion rules for character data:
+ * 22018 when the text is not a number, 22003 when the value does not fit
+ * the target, 01S07 when a fraction is dropped on the way to an integer.
+ * A binary value converts to SQL_C_BINARY (the bytes) and to the character
+ * types (as hex); anything else is 07006.
+ */
+
+static SQLRETURN err_out_of_range(argus_diag_t *diag)
+{
+    return argus_set_error(diag, "22003",
+                           "[Argus] Numeric value out of range", 0);
+}
+
+static SQLRETURN err_not_numeric(argus_diag_t *diag)
+{
+    return argus_set_error(diag, "22018",
+                           "[Argus] Invalid character value for cast specification", 0);
+}
+
+static SQLRETURN truncated(argus_diag_t *diag)
+{
+    argus_diag_push(diag, "01004", "[Argus] String data, right truncated", 0);
+    return SQL_SUCCESS_WITH_INFO;
+}
+
+static bool is_blank(char c)
+{
+    return c == ' ' || c == '\t';
+}
+
+/* Where a continuation resumes in a value of src_len units. */
+static size_t resume_at(const argus_getdata_state_t *gd, size_t src_len)
+{
+    size_t off = gd ? gd->offset : 0;
+    return off < src_len ? off : src_len;
+}
+
+static void advance(argus_getdata_state_t *gd, size_t off, size_t copied,
+                    bool all)
+{
+    if (!gd) return;
+    gd->offset = off + copied;
+    gd->done = all;
+}
+
+/* Text into a SQL_C_CHAR buffer, NUL-terminated. A chunk boundary never
+ * splits a UTF-8 sequence when the buffer holds at least one whole
+ * character. */
+static SQLRETURN put_char_bytes(const char *src, size_t src_len,
+                                SQLPOINTER target_value, SQLLEN buffer_length,
+                                SQLLEN *str_len_or_ind,
+                                argus_getdata_state_t *gd, argus_diag_t *diag)
+{
+    size_t off = resume_at(gd, src_len);
+    size_t remaining = src_len - off;
+    if (str_len_or_ind) *str_len_or_ind = (SQLLEN)remaining;
+
+    size_t room = (target_value && buffer_length > 0)
+                  ? (size_t)buffer_length - 1 : 0;
+    size_t copy = remaining < room ? remaining : room;
+    if (copy < remaining) {
+        size_t cut = copy;
+        while (cut > 0 && ((unsigned char)src[off + cut] & 0xC0) == 0x80)
+            cut--;
+        if (cut > 0) copy = cut;
+    }
+    if (target_value && buffer_length > 0) {
+        memcpy(target_value, src + off, copy);
+        ((char *)target_value)[copy] = '\0';
+    }
+    advance(gd, off, copy, copy == remaining);
+    return copy < remaining ? truncated(diag) : SQL_SUCCESS;
+}
+
+/* Bytes into a SQL_C_BINARY buffer: no terminator, every byte counts. */
+static SQLRETURN put_bytes(const char *src, size_t src_len,
+                           SQLPOINTER target_value, SQLLEN buffer_length,
+                           SQLLEN *str_len_or_ind,
+                           argus_getdata_state_t *gd, argus_diag_t *diag)
+{
+    size_t off = resume_at(gd, src_len);
+    size_t remaining = src_len - off;
+    if (str_len_or_ind) *str_len_or_ind = (SQLLEN)remaining;
+
+    size_t room = (target_value && buffer_length > 0)
+                  ? (size_t)buffer_length : 0;
+    size_t copy = remaining < room ? remaining : room;
+    if (copy) memcpy(target_value, src + off, copy);
+    advance(gd, off, copy, copy == remaining);
+    return copy < remaining ? truncated(diag) : SQL_SUCCESS;
+}
+
+/* Bytes as hex digits, two per byte, into a SQL_C_CHAR or SQL_C_WCHAR
+ * buffer; the continuation offset counts bytes, so a chunk always ends
+ * between two digits of different bytes. */
+static SQLRETURN put_hex(const unsigned char *src, size_t src_len, bool wide,
+                         SQLPOINTER target_value, SQLLEN buffer_length,
+                         SQLLEN *str_len_or_ind,
+                         argus_getdata_state_t *gd, argus_diag_t *diag)
+{
+    static const char digits[] = "0123456789ABCDEF";
+    size_t unit = wide ? sizeof(SQLWCHAR) : 1;
+    size_t off = resume_at(gd, src_len);
+    size_t remaining = src_len - off;
+    if (str_len_or_ind) *str_len_or_ind = (SQLLEN)(remaining * 2 * unit);
+
+    size_t room_units = (target_value && buffer_length >= (SQLLEN)unit)
+                        ? (size_t)buffer_length / unit - 1 : 0;
+    size_t copy = remaining < room_units / 2 ? remaining : room_units / 2;
+    if (target_value && buffer_length >= (SQLLEN)unit) {
+        if (wide) {
+            SQLWCHAR *dst = (SQLWCHAR *)target_value;
+            for (size_t i = 0; i < copy; i++) {
+                dst[2 * i]     = (SQLWCHAR)digits[src[off + i] >> 4];
+                dst[2 * i + 1] = (SQLWCHAR)digits[src[off + i] & 0x0F];
+            }
+            dst[2 * copy] = 0;
+        } else {
+            char *dst = (char *)target_value;
+            for (size_t i = 0; i < copy; i++) {
+                dst[2 * i]     = digits[src[off + i] >> 4];
+                dst[2 * i + 1] = digits[src[off + i] & 0x0F];
+            }
+            dst[2 * copy] = '\0';
+        }
+    }
+    advance(gd, off, copy, copy == remaining);
+    return copy < remaining ? truncated(diag) : SQL_SUCCESS;
+}
+
+/* UTF-8 text as UTF-16 into a SQL_C_WCHAR buffer. Walks the text one code
+ * point at a time so a chunk never ends inside a surrogate pair and the
+ * continuation offset stays a UTF-8 byte count. The indicator is the
+ * UTF-16 size of what remains; a continuation call reuses the count the
+ * first call made instead of walking the rest of the value again. */
+static SQLRETURN put_wchars(const char *src, size_t src_len,
+                            SQLPOINTER target_value, SQLLEN buffer_length,
+                            SQLLEN *str_len_or_ind,
+                            argus_getdata_state_t *gd, argus_diag_t *diag)
+{
+    size_t off = resume_at(gd, src_len);
+    const char *p = src + off, *end = src + src_len;
+    SQLWCHAR *dst = (target_value && buffer_length >= (SQLLEN)sizeof(SQLWCHAR))
+                    ? (SQLWCHAR *)target_value : NULL;
+    size_t room = dst ? (size_t)buffer_length / sizeof(SQLWCHAR) - 1 : 0;
+    bool counted = gd && off > 0 && gd->wchar_left >= 0;
+    size_t total = counted ? (size_t)gd->wchar_left : 0;
+    size_t written = 0, consumed = 0;
+    bool copying = true;
+
+    while (p < end && (copying || !counted)) {
+        gunichar c = g_utf8_get_char_validated(p, (gssize)(end - p));
+        if (c == (gunichar)-1 || c == (gunichar)-2)
+            return argus_set_error(diag, "22018", "[Argus] Invalid UTF-8 data", 0);
+        const char *next = g_utf8_next_char(p);
+        size_t need = (c >= 0x10000) ? 2 : 1;
+        if (copying) {
+            if (written + need <= room) {
+                if (need == 2) {
+                    c -= 0x10000;
+                    dst[written++] = (SQLWCHAR)(0xD800 | (c >> 10));
+                    dst[written++] = (SQLWCHAR)(0xDC00 | (c & 0x3FF));
+                } else {
+                    dst[written++] = (SQLWCHAR)c;
+                }
+                consumed = (size_t)(next - (src + off));
+            } else {
+                copying = false;
+            }
+        }
+        if (!counted) total += need;
+        p = next;
+    }
+    if (dst) dst[written] = 0;
+    if (str_len_or_ind)
+        *str_len_or_ind = (SQLLEN)(total * sizeof(SQLWCHAR));
+    if (gd) {
+        gd->offset = off + consumed;
+        gd->wchar_left = (long)(total - written);
+        gd->done = (written == total);
+    }
+    return written < total ? truncated(diag) : SQL_SUCCESS;
+}
+
+/* ── Integers ── */
+
+/* An integer on its way to a C integer target: the sign and magnitude of
+ * the integer part, and whether a non-zero fraction was dropped. */
+typedef struct int_value {
+    bool               negative;
+    unsigned long long magnitude;
+    bool               fractional;
+} int_value_t;
+
+static SQLRETURN int_from_double(double v, int_value_t *r, argus_diag_t *diag)
+{
+    if (isnan(v) || !(v < 18446744073709551616.0 && v > -18446744073709551616.0))
+        return err_out_of_range(diag);
+    double t = trunc(v);
+    r->negative = t < 0;
+    r->magnitude = (unsigned long long)fabs(t);
+    r->fractional = (t != v);
+    return SQL_SUCCESS;
+}
+
+static void int_from_i64(long long v, int_value_t *r)
+{
+    r->negative = v < 0;
+    r->magnitude = v < 0 ? (unsigned long long)(-(v + 1)) + 1ULL
+                         : (unsigned long long)v;
+    r->fractional = false;
+}
+
+/* A number as the engines print one: blanks, a sign, digits, an optional
+ * fraction and exponent. Boolean text ("true"/"false") counts as 1/0 so a
+ * BOOLEAN column reads into any integer type. */
+static SQLRETURN int_from_text(const char *s, int_value_t *r, argus_diag_t *diag)
+{
+    const char *p = s;
+    while (is_blank(*p)) p++;
+    if (g_ascii_strcasecmp(p, "true") == 0 || g_ascii_strcasecmp(p, "false") == 0) {
+        r->negative = false;
+        r->magnitude = (*p == 't' || *p == 'T') ? 1 : 0;
+        r->fractional = false;
+        return SQL_SUCCESS;
+    }
+
+    const char *start = p;
+    r->negative = false;
+    r->magnitude = 0;
+    r->fractional = false;
+    if (*p == '-') { r->negative = true; p++; }
+    else if (*p == '+') p++;
+
+    size_t ndigits = 0;
+    bool overflow = false;
+    for (; *p >= '0' && *p <= '9'; p++, ndigits++) {
+        unsigned d = (unsigned)(*p - '0');
+        if (r->magnitude > (ULLONG_MAX - d) / 10) overflow = true;
+        else r->magnitude = r->magnitude * 10 + d;
+    }
+    const char *frac = NULL;
+    size_t nfrac = 0;
+    if (*p == '.') {
+        p++;
+        frac = p;
+        while (*p >= '0' && *p <= '9') p++;
+        nfrac = (size_t)(p - frac);
+    }
+    if (ndigits == 0 && nfrac == 0) return err_not_numeric(diag);
+
+    bool has_exp = false;
+    if (*p == 'e' || *p == 'E') {
+        const char *q = p + 1;
+        if (*q == '+' || *q == '-') q++;
+        if (!(*q >= '0' && *q <= '9')) return err_not_numeric(diag);
+        while (*q >= '0' && *q <= '9') q++;
+        p = q;
+        has_exp = true;
+    }
+    while (is_blank(*p)) p++;
+    if (*p) return err_not_numeric(diag);
+
+    /* "1.0E10" is how Hive prints a double: let the double parser place
+     * the point, then truncate. */
+    if (has_exp) return int_from_double(argus_strtod(start, NULL), r, diag);
+
+    if (overflow) return err_out_of_range(diag);
+    for (size_t i = 0; i < nfrac; i++)
+        if (frac[i] != '0') { r->fractional = true; break; }
+    return SQL_SUCCESS;
+}
+
+static bool is_int_target(SQLSMALLINT t)
+{
+    switch (t) {
+    case SQL_C_SLONG: case SQL_C_LONG: case SQL_C_ULONG:
+    case SQL_C_SSHORT: case SQL_C_SHORT: case SQL_C_USHORT:
+    case SQL_C_STINYINT: case SQL_C_TINYINT: case SQL_C_UTINYINT:
+    case SQL_C_SBIGINT: case SQL_C_UBIGINT: case SQL_C_BIT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Range-check and store an integer in its C target. The bounds are the
+ * magnitudes allowed on each side of zero. */
+static SQLRETURN store_int(const int_value_t *r, SQLSMALLINT target_type,
+                           SQLPOINTER target_value, SQLLEN *str_len_or_ind,
+                           argus_diag_t *diag)
+{
+    unsigned long long max_pos, max_neg;
+    size_t size;
+    switch (target_type) {
+    case SQL_C_SLONG: case SQL_C_LONG:
+        max_pos = 2147483647ULL; max_neg = 2147483648ULL; size = 4; break;
+    case SQL_C_ULONG:
+        max_pos = 4294967295ULL; max_neg = 0; size = 4; break;
+    case SQL_C_SSHORT: case SQL_C_SHORT:
+        max_pos = 32767; max_neg = 32768; size = 2; break;
+    case SQL_C_USHORT:
+        max_pos = 65535; max_neg = 0; size = 2; break;
+    case SQL_C_STINYINT: case SQL_C_TINYINT:
+        max_pos = 127; max_neg = 128; size = 1; break;
+    case SQL_C_UTINYINT:
+        max_pos = 255; max_neg = 0; size = 1; break;
+    case SQL_C_SBIGINT:
+        max_pos = 9223372036854775807ULL; max_neg = 9223372036854775808ULL; size = 8; break;
+    case SQL_C_UBIGINT:
+        max_pos = ULLONG_MAX; max_neg = 0; size = 8; break;
+    case SQL_C_BIT:
+        max_pos = 1; max_neg = 0; size = 1; break;
+    default:
+        return argus_set_error(diag, "HY003", "[Argus] Program type out of range", 0);
+    }
+
+    if (r->negative && r->magnitude) {
+        if (r->magnitude > max_neg) return err_out_of_range(diag);
+    } else if (r->magnitude > max_pos) {
+        return err_out_of_range(diag);
+    }
+
+    if (target_value) {
+        /* Two's complement of the magnitude, truncated to the target width. */
+        unsigned long long u = r->negative ? 0ULL - r->magnitude : r->magnitude;
+        switch (size) {
+        case 1: *(uint8_t *)target_value = (uint8_t)u; break;
+        case 2: *(uint16_t *)target_value = (uint16_t)u; break;
+        case 4: *(uint32_t *)target_value = (uint32_t)u; break;
+        default: *(uint64_t *)target_value = (uint64_t)u; break;
+        }
+    }
+    if (str_len_or_ind) *str_len_or_ind = (SQLLEN)size;
+    if (r->fractional) {
+        argus_diag_push(diag, "01S07", "[Argus] Fractional truncation", 0);
+        return SQL_SUCCESS_WITH_INFO;
+    }
+    return SQL_SUCCESS;
+}
+
+/* ── Floating point ── */
+
+static SQLRETURN double_from_text(const char *s, double *out, argus_diag_t *diag)
+{
+    char *end = NULL;
+    errno = 0;
+    double v = argus_strtod(s, &end);
+    if (end == s) return err_not_numeric(diag);
+    while (is_blank(*end)) end++;
+    if (*end) return err_not_numeric(diag);
+    if (errno == ERANGE && isinf(v)) return err_out_of_range(diag);
+    *out = v;
+    return SQL_SUCCESS;
+}
+
+static SQLRETURN store_double(double v, SQLSMALLINT target_type,
+                              SQLPOINTER target_value, SQLLEN *str_len_or_ind,
+                              argus_diag_t *diag)
+{
+    if (target_type == SQL_C_FLOAT) {
+        float f = (float)v;
+        if (isinf(f) && !isinf(v)) return err_out_of_range(diag);
+        if (target_value) *(SQLREAL *)target_value = f;
+        if (str_len_or_ind) *str_len_or_ind = sizeof(SQLREAL);
+    } else {
+        if (target_value) *(SQLDOUBLE *)target_value = v;
+        if (str_len_or_ind) *str_len_or_ind = sizeof(SQLDOUBLE);
+    }
+    return SQL_SUCCESS;
+}
+
+/* ── SQL_NUMERIC_STRUCT ── */
+
+/* (hi:lo) = (hi:lo) * 10 + digit; false on 128-bit overflow. */
+static bool u128_mul10_add(unsigned long long *hi, unsigned long long *lo,
+                           unsigned digit)
+{
+    unsigned long long lo_x10, carry;
+#if defined(__GNUC__) || defined(__clang__)
+    __extension__ typedef unsigned __int128 u128;
+    u128 full = (u128)*lo * 10;
+    lo_x10 = (unsigned long long)full;
+    carry  = (unsigned long long)(full >> 64);
+#else
+    /* 64x64->128 via 32-bit halves (MSVC) */
+    unsigned long long a_lo = *lo & 0xFFFFFFFFULL;
+    unsigned long long a_hi = *lo >> 32;
+    unsigned long long r0 = a_lo * 10;
+    unsigned long long r1 = a_hi * 10 + (r0 >> 32);
+    lo_x10 = (r0 & 0xFFFFFFFFULL) | ((r1 & 0xFFFFFFFFULL) << 32);
+    carry  = r1 >> 32;
+#endif
+    if (*hi > (0xFFFFFFFFFFFFFFFFULL - carry) / 10) return false;
+    *hi = *hi * 10 + carry;
+    *lo = lo_x10 + digit;
+    if (*lo < lo_x10) (*hi)++;
+    return true;
+}
+
+/* Decimal text — digits, an optional point, an optional exponent — to the
+ * little-endian 128-bit SQL_NUMERIC_STRUCT. The value keeps its own scale
+ * ("1.50" has scale 2, "1E3" is 1000 with scale 0); the ODBC descriptor
+ * scale is not applied. More than 38 significant digits is 22003. */
+static SQLRETURN numeric_from_text(const char *s, SQL_NUMERIC_STRUCT *num,
+                                   argus_diag_t *diag)
+{
+    memset(num, 0, sizeof(*num));
+    const char *p = s;
+    while (is_blank(*p)) p++;
+    num->sign = 1;
+    if (*p == '-') { num->sign = 0; p++; }
+    else if (*p == '+') p++;
+
+    unsigned long long lo = 0, hi = 0;
+    int scale = 0, digits = 0;
+    bool point = false, any = false;
+    for (;; p++) {
+        if (*p == '.') {
+            if (point) return err_not_numeric(diag);
+            point = true;
+            continue;
+        }
+        if (*p < '0' || *p > '9') break;
+        any = true;
+        unsigned d = (unsigned)(*p - '0');
+        if (point) scale++;
+        if (digits == 0 && d == 0) continue;          /* leading zero */
+        if (++digits > 38 || !u128_mul10_add(&hi, &lo, d))
+            return err_out_of_range(diag);
+    }
+    if (!any) return err_not_numeric(diag);
+
+    if (*p == 'e' || *p == 'E') {
+        p++;
+        int esign = 1, exp = 0;
+        if (*p == '-') { esign = -1; p++; }
+        else if (*p == '+') p++;
+        if (!(*p >= '0' && *p <= '9')) return err_not_numeric(diag);
+        for (; *p >= '0' && *p <= '9'; p++)
+            if (exp < 1000) exp = exp * 10 + (*p - '0');
+        scale -= esign * exp;
+    }
+    while (is_blank(*p)) p++;
+    if (*p) return err_not_numeric(diag);
+
+    /* A positive exponent beyond the fraction becomes trailing zeros. */
+    while (scale < 0) {
+        if (digits && (++digits > 38 || !u128_mul10_add(&hi, &lo, 0)))
+            return err_out_of_range(diag);
+        scale++;
+    }
+    if (scale > 127) return err_out_of_range(diag);
+    if (digits == 0) scale = 0;                       /* zero is 0 */
+
+    int precision = digits > scale ? digits : scale;
+    num->precision = (SQLCHAR)(precision > 0 ? precision : 1);
+    num->scale = (SQLSCHAR)scale;
+    memcpy(num->val, &lo, 8);
+    memcpy(num->val + 8, &hi, 8);
+    return SQL_SUCCESS;
+}
+
+/* ── Date and time ── */
+
+/* "YYYY-MM-DD", "HH:MM[:SS[.fraction]]", or both joined by a space or 'T',
+ * followed by an optional zone the driver reads past but does not apply
+ * ('Z', "+05:00", "-0800", " UTC", " Europe/Paris"): the application gets
+ * the wall-clock time the engine printed. `fraction` is in nanoseconds. */
+static bool parse_datetime(const char *s, SQL_TIMESTAMP_STRUCT *ts,
+                           bool *has_date, bool *has_time)
+{
+    const char *p = s;
+    while (is_blank(*p)) p++;
+    memset(ts, 0, sizeof(*ts));
+    *has_date = *has_time = false;
+
+    unsigned y, mo, d, h, mi, sec = 0;
+    int n = 0;
+    if (sscanf(p, "%4u-%2u-%2u%n", &y, &mo, &d, &n) == 3 && n > 0) {
+        ts->year = (SQLSMALLINT)y;
+        ts->month = (SQLUSMALLINT)mo;
+        ts->day = (SQLUSMALLINT)d;
+        *has_date = true;
+        p += n;
+        if (*p == ' ' || *p == 'T') p++;
+    }
+    n = 0;
+    if (sscanf(p, "%2u:%2u%n", &h, &mi, &n) == 2 && n > 0) {
+        p += n;
+        if (*p == ':') {
+            n = 0;
+            if (sscanf(p, ":%2u%n", &sec, &n) != 1 || n == 0) return false;
+            p += n;
+        }
+        ts->hour = (SQLUSMALLINT)h;
+        ts->minute = (SQLUSMALLINT)mi;
+        ts->second = (SQLUSMALLINT)sec;
+        *has_time = true;
+        if (*p == '.') {
+            p++;
+            SQLUINTEGER frac = 0;
+            int digits = 0;
+            while (*p >= '0' && *p <= '9') {
+                if (digits < 9) {
+                    frac = frac * 10 + (SQLUINTEGER)(*p - '0');
+                    digits++;
+                }
+                p++;
+            }
+            if (digits == 0) return false;
+            for (; digits < 9; digits++) frac *= 10;
+            ts->fraction = frac;
+        }
+    }
+    if (!*has_date && !*has_time) return false;
+
+    /* Zone suffix: 'Z' or a numeric offset may touch the time; a zone name
+     * ("UTC", "Europe/Paris", or a legacy one like "Japan") follows a blank,
+     * which is how every engine prints it and what keeps "10:20x" invalid. */
+    bool spaced = is_blank(*p);
+    while (is_blank(*p)) p++;
+    if (*p == 'Z' || *p == 'z') {
+        p++;
+    } else if (*p == '+' || *p == '-') {
+        p++;
+        if (!(*p >= '0' && *p <= '9')) return false;
+        while (*p >= '0' && *p <= '9') p++;
+        if (*p == ':') p++;
+        while (*p >= '0' && *p <= '9') p++;
+    } else if (spaced && g_ascii_isalpha(*p)) {
+        while (g_ascii_isalnum(*p) || *p == '/' || *p == '_' || *p == '-' ||
+               *p == '+' || *p == ':')
+            p++;
+    }
+    while (is_blank(*p)) p++;
+    return *p == '\0';
+}
+
+static bool datetime_in_range(const SQL_TIMESTAMP_STRUCT *ts, bool has_date,
+                              bool has_time)
+{
+    if (has_date && (ts->month < 1 || ts->month > 12 || ts->day < 1 || ts->day > 31))
+        return false;
+    if (has_time && (ts->hour > 23 || ts->minute > 59 || ts->second > 59))
+        return false;
+    return true;
+}
+
+static SQLRETURN err_datetime(argus_diag_t *diag, const char *what)
+{
+    char msg[80];
+    snprintf(msg, sizeof(msg), "[Argus] Invalid %s value", what);
+    return argus_set_error(diag, "22007", msg, 0);
+}
+
 static SQLRETURN convert_cell_to_target(
     const argus_cell_t *cell,
     SQLSMALLINT target_type,
     SQLPOINTER target_value,
     SQLLEN buffer_length,
     SQLLEN *str_len_or_ind,
+    argus_getdata_state_t *gd,
     argus_diag_t *diag)
 {
     if (cell->is_null) {
@@ -193,391 +843,152 @@ static SQLRETURN convert_cell_to_target(
         return SQL_SUCCESS;
     }
 
-    /* Typed fast path: a cell carrying a native value converts straight to a
-     * numeric C type, skipping the strtoll/strtod round-trip. Non-numeric
-     * targets fall through to the text path below (materializing text from the
-     * native value first when the cell has no string form). */
-    if (cell->native_kind != ARGUS_NATIVE_NONE) {
-        long long iv = (cell->native_kind == ARGUS_NATIVE_I64)
-                       ? cell->native.i64 : (long long)cell->native.f64;
-        double dv = (cell->native_kind == ARGUS_NATIVE_F64)
-                    ? cell->native.f64 : (double)cell->native.i64;
+    /* A binary value: the bytes, or their hex rendering. */
+    if (cell->native_kind == ARGUS_NATIVE_BINARY) {
+        const char *bytes = cell->data ? cell->data : "";
         switch (target_type) {
-        case SQL_C_SLONG:
-        case SQL_C_LONG:
-            if (target_value) *(SQLINTEGER *)target_value = (SQLINTEGER)iv;
-            if (str_len_or_ind) *str_len_or_ind = sizeof(SQLINTEGER);
-            return SQL_SUCCESS;
-        case SQL_C_SSHORT:
-        case SQL_C_SHORT:
-            if (iv < -32768 || iv > 32767)
-                return argus_set_error(diag, "22003",
-                                       "[Argus] Numeric value out of range", 0);
-            if (target_value) *(SQLSMALLINT *)target_value = (SQLSMALLINT)iv;
-            if (str_len_or_ind) *str_len_or_ind = sizeof(SQLSMALLINT);
-            return SQL_SUCCESS;
-        case SQL_C_STINYINT:
-        case SQL_C_TINYINT:
-            if (iv < -128 || iv > 127)
-                return argus_set_error(diag, "22003",
-                                       "[Argus] Numeric value out of range", 0);
-            if (target_value) *(SQLSCHAR *)target_value = (SQLSCHAR)iv;
-            if (str_len_or_ind) *str_len_or_ind = sizeof(SQLSCHAR);
-            return SQL_SUCCESS;
-        case SQL_C_SBIGINT:
-            if (target_value) *(SQLBIGINT *)target_value = (SQLBIGINT)iv;
-            if (str_len_or_ind) *str_len_or_ind = sizeof(SQLBIGINT);
-            return SQL_SUCCESS;
-        case SQL_C_FLOAT:
-            if (target_value) *(SQLREAL *)target_value = (SQLREAL)dv;
-            if (str_len_or_ind) *str_len_or_ind = sizeof(SQLREAL);
-            return SQL_SUCCESS;
-        case SQL_C_DOUBLE:
-            if (target_value) *(SQLDOUBLE *)target_value = (SQLDOUBLE)dv;
-            if (str_len_or_ind) *str_len_or_ind = sizeof(SQLDOUBLE);
-            return SQL_SUCCESS;
-        case SQL_C_BIT:
-            if (target_value) *(unsigned char *)target_value = (iv != 0) ? 1 : 0;
-            if (str_len_or_ind) *str_len_or_ind = 1;
-            return SQL_SUCCESS;
+        case SQL_C_BINARY:
+        case SQL_C_DEFAULT:
+            return put_bytes(bytes, cell->data_len, target_value, buffer_length,
+                             str_len_or_ind, gd, diag);
+        case SQL_C_CHAR:
+        case SQL_C_WCHAR:
+            return put_hex((const unsigned char *)bytes, cell->data_len,
+                           target_type == SQL_C_WCHAR, target_value,
+                           buffer_length, str_len_or_ind, gd, diag);
         default:
-            break;   /* text-ish target: handled below */
-        }
-
-        if (!cell->data) {
-            /* No string form yet: format the native value and reuse the text
-             * path unchanged via a plain (text-only) cell. */
-            char tmp[64];
-            int n = (cell->native_kind == ARGUS_NATIVE_I64)
-                    ? snprintf(tmp, sizeof(tmp), "%lld", iv)
-                    : (int)argus_dtoa(tmp, sizeof(tmp), 17, dv);
-            argus_cell_t tc;
-            tc.data = tmp;
-            tc.data_len = (n > 0) ? (size_t)n : 0;
-            tc.is_null = false;
-            tc.native_kind = ARGUS_NATIVE_NONE;
-            return convert_cell_to_target(&tc, target_type, target_value,
-                                          buffer_length, str_len_or_ind, diag);
+            return argus_set_error(diag, "07006",
+                                   "[Argus] Restricted data type attribute violation", 0);
         }
     }
+
+    /* Typed fast path: a cell carrying a native value converts straight to
+     * a numeric C type, skipping the text round-trip. Other targets take
+     * the text form, made from the native value when the backend gave
+     * none. */
+    const char *text = cell->data;
+    size_t text_len = cell->data ? cell->data_len : 0;
+    char tmp[64];
+    if (cell->native_kind == ARGUS_NATIVE_I64 ||
+        cell->native_kind == ARGUS_NATIVE_F64) {
+        bool is_i64 = cell->native_kind == ARGUS_NATIVE_I64;
+        if (is_int_target(target_type)) {
+            int_value_t iv;
+            if (is_i64) {
+                int_from_i64(cell->native.i64, &iv);
+            } else {
+                SQLRETURN r = int_from_double(cell->native.f64, &iv, diag);
+                if (r != SQL_SUCCESS) return r;
+            }
+            return store_int(&iv, target_type, target_value, str_len_or_ind, diag);
+        }
+        if (target_type == SQL_C_FLOAT || target_type == SQL_C_DOUBLE)
+            return store_double(is_i64 ? (double)cell->native.i64 : cell->native.f64,
+                                target_type, target_value, str_len_or_ind, diag);
+        if (!text) {
+            text_len = is_i64
+                ? (size_t)snprintf(tmp, sizeof(tmp), "%lld", (long long)cell->native.i64)
+                : argus_dtoa_shortest(tmp, sizeof(tmp), cell->native.f64);
+            text = tmp;
+        }
+    }
+    if (!text) text = "";
 
     switch (target_type) {
     case SQL_C_CHAR:
-    case SQL_C_DEFAULT: {
-        size_t data_len = cell->data_len;
-        if (str_len_or_ind)
-            *str_len_or_ind = (SQLLEN)data_len;
+    case SQL_C_DEFAULT:
+        return put_char_bytes(text, text_len, target_value, buffer_length,
+                              str_len_or_ind, gd, diag);
 
-        if (target_value && buffer_length > 0) {
-            size_t copy = data_len < (size_t)(buffer_length - 1)
-                          ? data_len : (size_t)(buffer_length - 1);
-            memcpy(target_value, cell->data, copy);
-            ((char *)target_value)[copy] = '\0';
+    case SQL_C_WCHAR:
+        return put_wchars(text, text_len, target_value, buffer_length,
+                          str_len_or_ind, gd, diag);
 
-            if (data_len >= (size_t)buffer_length) {
-                /* Data truncated */
-                argus_diag_push(diag, "01004",
-                                "[Argus] String data, right truncated", 0);
-                return SQL_SUCCESS_WITH_INFO;
-            }
-        }
-        return SQL_SUCCESS;
+    case SQL_C_BINARY:
+        /* Character data to a binary target is copied byte for byte; the
+         * engine's encoding of a BINARY column is decoded by the backend,
+         * never guessed from the text here. */
+        return put_bytes(text, text_len, target_value, buffer_length,
+                         str_len_or_ind, gd, diag);
+
+    case SQL_C_SLONG: case SQL_C_LONG: case SQL_C_ULONG:
+    case SQL_C_SSHORT: case SQL_C_SHORT: case SQL_C_USHORT:
+    case SQL_C_STINYINT: case SQL_C_TINYINT: case SQL_C_UTINYINT:
+    case SQL_C_SBIGINT: case SQL_C_UBIGINT: case SQL_C_BIT: {
+        int_value_t iv;
+        SQLRETURN r = int_from_text(text, &iv, diag);
+        if (r != SQL_SUCCESS) return r;
+        return store_int(&iv, target_type, target_value, str_len_or_ind, diag);
     }
 
-    case SQL_C_SLONG:
-    case SQL_C_LONG: {
-        errno = 0;
-        long val = strtol(cell->data, NULL, 10);
-        if (errno) {
-            return argus_set_error(diag, "22003",
-                                   "[Argus] Numeric value out of range", 0);
-        }
-        if (target_value)
-            *(SQLINTEGER *)target_value = (SQLINTEGER)val;
-        if (str_len_or_ind)
-            *str_len_or_ind = sizeof(SQLINTEGER);
-        return SQL_SUCCESS;
-    }
-
-    case SQL_C_SSHORT:
-    case SQL_C_SHORT: {
-        errno = 0;
-        long val = strtol(cell->data, NULL, 10);
-        if (errno || val < -32768 || val > 32767) {
-            return argus_set_error(diag, "22003",
-                                   "[Argus] Numeric value out of range", 0);
-        }
-        if (target_value)
-            *(SQLSMALLINT *)target_value = (SQLSMALLINT)val;
-        if (str_len_or_ind)
-            *str_len_or_ind = sizeof(SQLSMALLINT);
-        return SQL_SUCCESS;
-    }
-
-    case SQL_C_STINYINT:
-    case SQL_C_TINYINT: {
-        errno = 0;
-        long val = strtol(cell->data, NULL, 10);
-        if (errno || val < -128 || val > 127) {
-            return argus_set_error(diag, "22003",
-                                   "[Argus] Numeric value out of range", 0);
-        }
-        if (target_value)
-            *(SQLSCHAR *)target_value = (SQLSCHAR)val;
-        if (str_len_or_ind)
-            *str_len_or_ind = sizeof(SQLSCHAR);
-        return SQL_SUCCESS;
-    }
-
-    case SQL_C_SBIGINT: {
-        errno = 0;
-        long long val = strtoll(cell->data, NULL, 10);
-        if (errno) {
-            return argus_set_error(diag, "22003",
-                                   "[Argus] Numeric value out of range", 0);
-        }
-        if (target_value)
-            *(SQLBIGINT *)target_value = (SQLBIGINT)val;
-        if (str_len_or_ind)
-            *str_len_or_ind = sizeof(SQLBIGINT);
-        return SQL_SUCCESS;
-    }
-
-    case SQL_C_FLOAT: {
-        errno = 0;
-        double dval = argus_strtod(cell->data, NULL);
-        float val = (float)dval;
-        if (errno || (isinf(val) && !isinf(dval))) {
-            return argus_set_error(diag, "22003",
-                                   "[Argus] Numeric value out of range", 0);
-        }
-        if (target_value)
-            *(SQLREAL *)target_value = val;
-        if (str_len_or_ind)
-            *str_len_or_ind = sizeof(SQLREAL);
-        return SQL_SUCCESS;
-    }
-
+    case SQL_C_FLOAT:
     case SQL_C_DOUBLE: {
-        errno = 0;
-        double val = argus_strtod(cell->data, NULL);
-        if (errno) {
-            return argus_set_error(diag, "22003",
-                                   "[Argus] Numeric value out of range", 0);
-        }
-        if (target_value)
-            *(SQLDOUBLE *)target_value = val;
-        if (str_len_or_ind)
-            *str_len_or_ind = sizeof(SQLDOUBLE);
-        return SQL_SUCCESS;
+        double v;
+        SQLRETURN r = double_from_text(text, &v, diag);
+        if (r != SQL_SUCCESS) return r;
+        return store_double(v, target_type, target_value, str_len_or_ind, diag);
     }
 
-    case SQL_C_BIT: {
-        unsigned char bit_val;
-        if (g_ascii_strcasecmp(cell->data, "true") == 0) {
-            bit_val = 1;
-        } else if (g_ascii_strcasecmp(cell->data, "false") == 0) {
-            bit_val = 0;
-        } else {
-            bit_val = strtol(cell->data, NULL, 10) ? 1 : 0;
+    case SQL_C_TYPE_DATE:
+    case SQL_C_DATE: {
+        SQL_TIMESTAMP_STRUCT ts;
+        bool has_date, has_time;
+        if (!parse_datetime(text, &ts, &has_date, &has_time) || !has_date ||
+            !datetime_in_range(&ts, has_date, has_time))
+            return err_datetime(diag, "date");
+        if (target_value) {
+            SQL_DATE_STRUCT *date = (SQL_DATE_STRUCT *)target_value;
+            date->year = ts.year;
+            date->month = ts.month;
+            date->day = ts.day;
         }
-        if (target_value)
-            *(unsigned char *)target_value = bit_val;
-        if (str_len_or_ind)
-            *str_len_or_ind = 1;
-        return SQL_SUCCESS;
-    }
-
-    case SQL_C_WCHAR: {
-        /* UTF-8 to UTF-16 conversion using GLib */
-        GError *err = NULL;
-        glong items_written = 0;
-        gunichar2 *utf16 = g_utf8_to_utf16(
-            cell->data, (glong)cell->data_len,
-            NULL, &items_written, &err);
-
-        if (!utf16) {
-            if (err) {
-                argus_set_error(diag, "22018",
-                                "[Argus] Invalid UTF-8 data", 0);
-                g_error_free(err);
-            }
-            return SQL_ERROR;
-        }
-
-        /* str_len_or_ind = total byte count of UTF-16 data (excl NUL) */
-        size_t utf16_bytes = (size_t)items_written * sizeof(SQLWCHAR);
-        if (str_len_or_ind)
-            *str_len_or_ind = (SQLLEN)utf16_bytes;
-
-        if (target_value && buffer_length > 0 &&
-            buffer_length < (SQLLEN)sizeof(SQLWCHAR)) {
-            /* Buffer too small for even one character + NUL */
-            g_free(utf16);
-            argus_diag_push(diag, "01004",
-                            "[Argus] String data, right truncated", 0);
-            return SQL_SUCCESS_WITH_INFO;
-        }
-
-        if (target_value && buffer_length >= (SQLLEN)sizeof(SQLWCHAR)) {
-            size_t max_chars = (size_t)(buffer_length / (SQLLEN)sizeof(SQLWCHAR)) - 1;
-            size_t copy_chars = (size_t)items_written < max_chars
-                                ? (size_t)items_written : max_chars;
-            SQLWCHAR *dst = (SQLWCHAR *)target_value;
-            memcpy(dst, utf16, copy_chars * sizeof(SQLWCHAR));
-            dst[copy_chars] = 0;
-
-            if ((size_t)items_written > max_chars) {
-                g_free(utf16);
-                argus_diag_push(diag, "01004",
-                                "[Argus] String data, right truncated", 0);
-                return SQL_SUCCESS_WITH_INFO;
-            }
-        }
-
-        g_free(utf16);
-        return SQL_SUCCESS;
-    }
-
-    /* Unsigned integer types */
-    case SQL_C_ULONG: {
-        errno = 0;
-        unsigned long val = strtoul(cell->data, NULL, 10);
-        if (errno) {
-            return argus_set_error(diag, "22003",
-                                   "[Argus] Numeric value out of range", 0);
-        }
-        if (target_value)
-            *(SQLUINTEGER *)target_value = (SQLUINTEGER)val;
-        if (str_len_or_ind)
-            *str_len_or_ind = sizeof(SQLUINTEGER);
-        return SQL_SUCCESS;
-    }
-
-    case SQL_C_USHORT: {
-        errno = 0;
-        unsigned long val = strtoul(cell->data, NULL, 10);
-        if (errno || val > 65535) {
-            return argus_set_error(diag, "22003",
-                                   "[Argus] Numeric value out of range", 0);
-        }
-        if (target_value)
-            *(SQLUSMALLINT *)target_value = (SQLUSMALLINT)val;
-        if (str_len_or_ind)
-            *str_len_or_ind = sizeof(SQLUSMALLINT);
-        return SQL_SUCCESS;
-    }
-
-    case SQL_C_UTINYINT: {
-        errno = 0;
-        unsigned long val = strtoul(cell->data, NULL, 10);
-        if (errno || val > 255) {
-            return argus_set_error(diag, "22003",
-                                   "[Argus] Numeric value out of range", 0);
-        }
-        if (target_value)
-            *(SQLCHAR *)target_value = (SQLCHAR)val;
-        if (str_len_or_ind)
-            *str_len_or_ind = sizeof(SQLCHAR);
-        return SQL_SUCCESS;
-    }
-
-    case SQL_C_UBIGINT: {
-        errno = 0;
-        unsigned long long val = strtoull(cell->data, NULL, 10);
-        if (errno) {
-            return argus_set_error(diag, "22003",
-                                   "[Argus] Numeric value out of range", 0);
-        }
-        if (target_value)
-            *(SQLUBIGINT *)target_value = (SQLUBIGINT)val;
-        if (str_len_or_ind)
-            *str_len_or_ind = sizeof(SQLUBIGINT);
-        return SQL_SUCCESS;
-    }
-
-    /* Date/Time types */
-    case SQL_C_TYPE_DATE: {
-        /* Parse "YYYY-MM-DD" */
-        SQL_DATE_STRUCT date;
-        if (sscanf(cell->data, "%4hd-%2hu-%2hu",
-                   &date.year, &date.month, &date.day) != 3) {
-            return argus_set_error(diag, "22007",
-                                   "[Argus] Invalid date format", 0);
-        }
-        if (date.month < 1 || date.month > 12 ||
-            date.day < 1 || date.day > 31) {
-            return argus_set_error(diag, "22007",
-                                   "[Argus] Date value out of range", 0);
-        }
-        if (target_value)
-            *(SQL_DATE_STRUCT *)target_value = date;
         if (str_len_or_ind)
             *str_len_or_ind = sizeof(SQL_DATE_STRUCT);
+        if (has_time && (ts.hour || ts.minute || ts.second || ts.fraction)) {
+            argus_diag_push(diag, "01S07", "[Argus] Fractional truncation", 0);
+            return SQL_SUCCESS_WITH_INFO;
+        }
         return SQL_SUCCESS;
     }
 
-    case SQL_C_TYPE_TIME: {
-        /* Parse "HH:MM:SS" */
-        SQL_TIME_STRUCT time;
-        if (sscanf(cell->data, "%2hu:%2hu:%2hu",
-                   &time.hour, &time.minute, &time.second) != 3) {
-            return argus_set_error(diag, "22007",
-                                   "[Argus] Invalid time format", 0);
+    case SQL_C_TYPE_TIME:
+    case SQL_C_TIME: {
+        SQL_TIMESTAMP_STRUCT ts;
+        bool has_date, has_time;
+        if (!parse_datetime(text, &ts, &has_date, &has_time) || !has_time ||
+            !datetime_in_range(&ts, has_date, has_time))
+            return err_datetime(diag, "time");
+        if (target_value) {
+            SQL_TIME_STRUCT *time = (SQL_TIME_STRUCT *)target_value;
+            time->hour = ts.hour;
+            time->minute = ts.minute;
+            time->second = ts.second;
         }
-        if (time.hour > 23 || time.minute > 59 || time.second > 59) {
-            return argus_set_error(diag, "22007",
-                                   "[Argus] Time value out of range", 0);
-        }
-        if (target_value)
-            *(SQL_TIME_STRUCT *)target_value = time;
         if (str_len_or_ind)
             *str_len_or_ind = sizeof(SQL_TIME_STRUCT);
+        if (ts.fraction) {
+            argus_diag_push(diag, "01S07", "[Argus] Fractional truncation", 0);
+            return SQL_SUCCESS_WITH_INFO;
+        }
         return SQL_SUCCESS;
     }
 
-    case SQL_C_TYPE_TIMESTAMP: {
-        /* Parse "YYYY-MM-DD HH:MM:SS[.fff]" with either a space or an ISO-8601
-         * 'T' between the date and time — Druid and other engines return
-         * "2026-07-01T10:00:00.000Z". The %*[ T] scanset consumes whichever
-         * separator is present. A trailing fraction and 'Z' are handled below /
-         * ignored. A date with no time part is accepted as midnight. */
+    case SQL_C_TYPE_TIMESTAMP:
+    case SQL_C_TIMESTAMP: {
         SQL_TIMESTAMP_STRUCT ts;
-        memset(&ts, 0, sizeof(ts));
-        int n = sscanf(cell->data, "%4hd-%2hu-%2hu%*[ T]%2hu:%2hu:%2hu",
-                       &ts.year, &ts.month, &ts.day,
-                       &ts.hour, &ts.minute, &ts.second);
-        if (n != 6 && n != 3) {
-            return argus_set_error(diag, "22007",
-                                   "[Argus] Invalid timestamp format", 0);
-        }
-        /* Parse fractional seconds and normalize to nanoseconds.
-         * ODBC SQL_TIMESTAMP_STRUCT.fraction is in nanoseconds (0-999999999).
-         * We must count the digits to scale correctly:
-         *   ".1"   -> 100000000 ns
-         *   ".12"  -> 120000000 ns
-         *   ".123" -> 123000000 ns
-         *   ".123456789" -> 123456789 ns */
-        const char *dot = strchr(cell->data, '.');
-        if (dot) {
-            dot++;
-            SQLUINTEGER frac = 0;
-            int digits = 0;
-            while (*dot >= '0' && *dot <= '9' && digits < 9) {
-                frac = frac * 10 + (SQLUINTEGER)(*dot - '0');
-                dot++;
-                digits++;
+        bool has_date, has_time;
+        if (!parse_datetime(text, &ts, &has_date, &has_time) ||
+            !datetime_in_range(&ts, has_date, has_time))
+            return err_datetime(diag, "timestamp");
+        if (!has_date) {
+            /* A time alone takes today's date, as ODBC specifies. */
+            GDateTime *now = g_date_time_new_now_local();
+            if (now) {
+                ts.year = (SQLSMALLINT)g_date_time_get_year(now);
+                ts.month = (SQLUSMALLINT)g_date_time_get_month(now);
+                ts.day = (SQLUSMALLINT)g_date_time_get_day_of_month(now);
+                g_date_time_unref(now);
             }
-            /* Pad to 9 digits (nanoseconds) */
-            for (int pad = digits; pad < 9; pad++)
-                frac *= 10;
-            ts.fraction = frac;
-        }
-        if (ts.month < 1 || ts.month > 12 ||
-            ts.day < 1 || ts.day > 31 ||
-            ts.hour > 23 || ts.minute > 59 || ts.second > 59) {
-            return argus_set_error(diag, "22007",
-                                   "[Argus] Timestamp value out of range", 0);
         }
         if (target_value)
             *(SQL_TIMESTAMP_STRUCT *)target_value = ts;
@@ -587,67 +998,9 @@ static SQLRETURN convert_cell_to_target(
     }
 
     case SQL_C_NUMERIC: {
-        /* Parse decimal string to SQL_NUMERIC_STRUCT */
         SQL_NUMERIC_STRUCT num;
-        memset(&num, 0, sizeof(num));
-
-        /* Parse sign and skip whitespace */
-        const char *p = cell->data;
-        while (*p == ' ') p++;
-        num.sign = (*p == '-') ? 0 : 1;
-        if (*p == '-' || *p == '+') p++;
-
-        /* Parse digits and build 128-bit little-endian value.
-         * Use two 64-bit halves for MSVC portability (__uint128_t
-         * is a GCC/Clang extension not available on Windows). */
-        unsigned long long lo = 0, hi = 0;
-        int scale = 0;
-        int total_digits = 0;
-        bool past_decimal = false;
-        while (*p) {
-            if (*p == '.') {
-                past_decimal = true;
-            } else if (*p >= '0' && *p <= '9') {
-                unsigned digit = (unsigned)(*p - '0');
-                /* Multiply (hi:lo) by 10 and add digit */
-                unsigned long long lo_x10, carry;
-#if defined(__GNUC__) || defined(__clang__)
-                {
-                    unsigned __int128 full = (unsigned __int128)lo * 10;
-                    lo_x10 = (unsigned long long)full;
-                    carry   = (unsigned long long)(full >> 64);
-                }
-#else
-                /* Manual 64×64→128 via 32-bit halves (MSVC path) */
-                {
-                    unsigned long long a_lo = lo & 0xFFFFFFFFULL;
-                    unsigned long long a_hi = lo >> 32;
-                    unsigned long long r0 = a_lo * 10;
-                    unsigned long long r1 = a_hi * 10 + (r0 >> 32);
-                    lo_x10 = (r0 & 0xFFFFFFFFULL) | ((r1 & 0xFFFFFFFFULL) << 32);
-                    carry  = r1 >> 32;
-                }
-#endif
-                /* Check for 128-bit overflow: hi*10 + carry must fit */
-                if (hi > (0xFFFFFFFFFFFFFFFFULL - carry) / 10) {
-                    return argus_set_error(diag, "22003",
-                                           "[Argus] Numeric value out of range", 0);
-                }
-                hi = hi * 10 + carry;
-                lo = lo_x10 + digit;
-                if (lo < lo_x10) hi++;  /* addition carry */
-                total_digits++;
-                if (past_decimal) scale++;
-            }
-            p++;
-        }
-
-        /* Store in little-endian format */
-        num.precision = (SQLCHAR)(total_digits > 0 ? total_digits : 1);
-        num.scale = (SQLSCHAR)scale;
-        memcpy(num.val, &lo, 8);
-        memcpy(num.val + 8, &hi, 8);
-
+        SQLRETURN r = numeric_from_text(text, &num, diag);
+        if (r != SQL_SUCCESS) return r;
         if (target_value)
             *(SQL_NUMERIC_STRUCT *)target_value = num;
         if (str_len_or_ind)
@@ -664,7 +1017,7 @@ static SQLRETURN convert_cell_to_target(
         memset(&guid, 0, sizeof(guid));
         unsigned int d1, d2, d3;
         unsigned int d4[8];
-        int n = sscanf(cell->data,
+        int n = sscanf(text,
             "%8x-%4x-%4x-%2x%2x-%2x%2x%2x%2x%2x%2x",
             &d1, &d2, &d3,
             &d4[0], &d4[1], &d4[2], &d4[3],
@@ -682,62 +1035,6 @@ static SQLRETURN convert_cell_to_target(
             *(SQLGUID *)target_value = guid;
         if (str_len_or_ind)
             *str_len_or_ind = sizeof(SQLGUID);
-        return SQL_SUCCESS;
-    }
-
-    case SQL_C_BINARY: {
-        /*
-         * Backends return binary data as hex strings ("48656C6C6F").
-         * Detect hex encoding and decode, otherwise copy raw bytes.
-         */
-        bool is_hex = (cell->data_len >= 2 && cell->data_len % 2 == 0);
-        if (is_hex) {
-            for (size_t i = 0; i < cell->data_len; i++) {
-                char c = cell->data[i];
-                if (!((c >= '0' && c <= '9') ||
-                      (c >= 'A' && c <= 'F') ||
-                      (c >= 'a' && c <= 'f'))) {
-                    is_hex = false;
-                    break;
-                }
-            }
-        }
-
-        if (is_hex) {
-            size_t decoded_len = cell->data_len / 2;
-            if (str_len_or_ind)
-                *str_len_or_ind = (SQLLEN)decoded_len;
-
-            if (target_value && buffer_length > 0) {
-                size_t copy = decoded_len < (size_t)buffer_length
-                              ? decoded_len : (size_t)buffer_length;
-                /* Decode only the bytes that fit */
-                argus_hex_decode(cell->data, copy * 2,
-                                 (unsigned char *)target_value, copy);
-
-                if (decoded_len > (size_t)buffer_length) {
-                    argus_diag_push(diag, "01004",
-                                    "[Argus] Binary data truncated", 0);
-                    return SQL_SUCCESS_WITH_INFO;
-                }
-            }
-        } else {
-            /* Raw binary data — no hex encoding */
-            if (str_len_or_ind)
-                *str_len_or_ind = (SQLLEN)cell->data_len;
-
-            if (target_value && buffer_length > 0) {
-                size_t copy = cell->data_len < (size_t)buffer_length
-                              ? cell->data_len : (size_t)buffer_length;
-                memcpy(target_value, cell->data, copy);
-
-                if (cell->data_len > (size_t)buffer_length) {
-                    argus_diag_push(diag, "01004",
-                                    "[Argus] Binary data truncated", 0);
-                    return SQL_SUCCESS_WITH_INFO;
-                }
-            }
-        }
         return SQL_SUCCESS;
     }
 
@@ -762,7 +1059,7 @@ static SQLRETURN convert_cell_to_target(
         SQL_INTERVAL_STRUCT *iv = (SQL_INTERVAL_STRUCT *)target_value;
         memset(iv, 0, sizeof(*iv));
 
-        const char *s = cell->data;
+        const char *s = text;
         int sign = SQL_FALSE;
         if (*s == '-') { sign = SQL_TRUE; s++; }
         else if (*s == '+') { s++; }
@@ -859,16 +1156,8 @@ static SQLRETURN convert_cell_to_target(
     }
 
     default:
-        /* Fall back to string conversion */
-        if (str_len_or_ind)
-            *str_len_or_ind = (SQLLEN)cell->data_len;
-        if (target_value && buffer_length > 0) {
-            size_t copy = cell->data_len < (size_t)(buffer_length - 1)
-                          ? cell->data_len : (size_t)(buffer_length - 1);
-            memcpy(target_value, cell->data, copy);
-            ((char *)target_value)[copy] = '\0';
-        }
-        return SQL_SUCCESS;
+        return argus_set_error(diag, "HY003",
+                               "[Argus] Program type out of range", 0);
     }
 }
 
@@ -1057,7 +1346,7 @@ static SQLRETURN deliver_scroll_row(argus_stmt_t *stmt, size_t row_idx,
         SQLRETURN ret = convert_cell_to_target(
             cell, bind->target_type,
             target, bind->buffer_length,
-            ind_ptr, &stmt->diag);
+            ind_ptr, NULL, &stmt->diag);
 
         if (ret == SQL_SUCCESS_WITH_INFO)
             final_ret = SQL_SUCCESS_WITH_INFO;
@@ -1122,7 +1411,7 @@ static SQLRETURN fetch_single_row(argus_stmt_t *stmt, SQLULEN rowset_idx)
         SQLRETURN ret = convert_cell_to_target(
             cell, bind->target_type,
             target, bind->buffer_length,
-            ind_ptr, &stmt->diag);
+            ind_ptr, NULL, &stmt->diag);
 
         if (ret == SQL_SUCCESS_WITH_INFO)
             final_ret = SQL_SUCCESS_WITH_INFO;
@@ -1145,8 +1434,7 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT StatementHandle)
     argus_diag_clear(&stmt->diag);
 
     /* Reset SQLGetData multi-call state on new row */
-    stmt->getdata_col = 0;
-    stmt->getdata_offset = 0;
+    argus_getdata_reset(&stmt->getdata);
 
     if (!stmt->executed) {
         SQLRETURN err = argus_set_error(&stmt->diag, "HY010",
@@ -1314,8 +1602,7 @@ SQLRETURN SQL_API SQLFetchScroll(
     }
 
     /* Reset GetData state */
-    stmt->getdata_col = 0;
-    stmt->getdata_offset = 0;
+    argus_getdata_reset(&stmt->getdata);
 
     /* Fetch rows for the rowset */
     SQLULEN array_size = stmt->row_array_size > 0 ? stmt->row_array_size : 1;
@@ -1406,90 +1693,34 @@ SQLRETURN SQL_API SQLGetData(
     argus_row_t *row = &stmt->row_cache.rows[row_idx];
     argus_cell_t *cell = &row->cells[ColumnNumber - 1];
 
-    /* If column changed, reset offset */
-    if (stmt->getdata_col != ColumnNumber) {
-        stmt->getdata_col = ColumnNumber;
-        stmt->getdata_offset = 0;
-    }
-
-    /* Multi-call support for character/binary data */
-    if (cell->is_null) {
-        if (StrLen_or_Ind)
-            *StrLen_or_Ind = SQL_NULL_DATA;
-        stmt->getdata_offset = 0;
+    /* Character and binary targets may take the value in pieces: the
+     * continuation state follows the column, and once the whole value has
+     * gone out the next call on that column reports SQL_NO_DATA, which is
+     * what ends an application's "until SQL_NO_DATA" loop. Reading the same
+     * column again into a fixed-length type stays possible. */
+    bool piecewise = (TargetType == SQL_C_CHAR || TargetType == SQL_C_DEFAULT ||
+                      TargetType == SQL_C_WCHAR || TargetType == SQL_C_BINARY);
+    if (piecewise && BufferLength < 0) {
+        SQLRETURN err = argus_set_error(&stmt->diag, "HY090",
+                               "[Argus] Invalid string or buffer length", 0);
         ARGUS_STMT_UNLOCK(stmt);
-        return SQL_SUCCESS;
+        return err;
     }
 
-    if ((TargetType == SQL_C_CHAR || TargetType == SQL_C_DEFAULT ||
-         TargetType == SQL_C_BINARY || TargetType == SQL_C_WCHAR) &&
-        stmt->getdata_offset > 0) {
-        /* Continuation call — return remaining data from offset */
-        size_t data_len = cell->data_len;
-        size_t remaining = (stmt->getdata_offset < data_len)
-                           ? data_len - stmt->getdata_offset : 0;
-
-        if (remaining == 0) {
-            if (StrLen_or_Ind) *StrLen_or_Ind = 0;
-            ARGUS_STMT_UNLOCK(stmt);
-            return SQL_NO_DATA;
-        }
-
-        if (TargetType == SQL_C_BINARY) {
-            if (StrLen_or_Ind)
-                *StrLen_or_Ind = (SQLLEN)remaining;
-            if (TargetValue && BufferLength > 0) {
-                size_t copy = remaining < (size_t)BufferLength
-                              ? remaining : (size_t)BufferLength;
-                memcpy(TargetValue,
-                       cell->data + stmt->getdata_offset, copy);
-                stmt->getdata_offset += copy;
-                if (remaining > (size_t)BufferLength) {
-                    argus_diag_push(&stmt->diag, "01004",
-                                    "[Argus] Binary data truncated", 0);
-                    ARGUS_STMT_UNLOCK(stmt);
-                    return SQL_SUCCESS_WITH_INFO;
-                }
-            }
-            ARGUS_STMT_UNLOCK(stmt);
-            return SQL_SUCCESS;
-        }
-
-        /* SQL_C_CHAR / SQL_C_DEFAULT continuation */
-        if (StrLen_or_Ind)
-            *StrLen_or_Ind = (SQLLEN)remaining;
-        if (TargetValue && BufferLength > 0) {
-            size_t copy = remaining < (size_t)(BufferLength - 1)
-                          ? remaining : (size_t)(BufferLength - 1);
-            memcpy(TargetValue,
-                   cell->data + stmt->getdata_offset, copy);
-            ((char *)TargetValue)[copy] = '\0';
-            stmt->getdata_offset += copy;
-            if (remaining >= (size_t)BufferLength) {
-                argus_diag_push(&stmt->diag, "01004",
-                                "[Argus] String data, right truncated", 0);
-                ARGUS_STMT_UNLOCK(stmt);
-                return SQL_SUCCESS_WITH_INFO;
-            }
-        }
+    argus_getdata_state_t *gd = &stmt->getdata;
+    if (gd->col != ColumnNumber) {
+        argus_getdata_reset(gd);
+        gd->col = ColumnNumber;
+    }
+    if (piecewise && gd->done && !cell->is_null) {
         ARGUS_STMT_UNLOCK(stmt);
-        return SQL_SUCCESS;
+        return SQL_NO_DATA;
     }
 
-    /* First call — use standard conversion */
     SQLRETURN ret = convert_cell_to_target(cell, TargetType, TargetValue,
                                             BufferLength, StrLen_or_Ind,
+                                            piecewise ? gd : NULL,
                                             &stmt->diag);
-
-    /* Track offset for multi-call if data was truncated */
-    if (ret == SQL_SUCCESS_WITH_INFO &&
-        (TargetType == SQL_C_CHAR || TargetType == SQL_C_DEFAULT ||
-         TargetType == SQL_C_BINARY || TargetType == SQL_C_WCHAR)) {
-        if (BufferLength > 1)
-            stmt->getdata_offset = (size_t)(BufferLength - 1);
-        else if (BufferLength > 0)
-            stmt->getdata_offset = (size_t)BufferLength;
-    }
 
     ARGUS_STMT_UNLOCK(stmt);
     return ret;

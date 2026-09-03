@@ -43,6 +43,28 @@ static inline double argus_strtod(const char *s, char **end)
     return g_ascii_strtod(s, end);
 }
 
+/*
+ * The shortest "%g" rendering that reads back as the same value: 15
+ * significant digits when they round-trip (0.1 stays "0.1"), the 17 a
+ * double can need otherwise (0.1 + 0.2 is "0.30000000000000004", not the
+ * "0.3" a fixed %.15g would print). Floats likewise try 7 digits, then 9.
+ */
+static inline size_t argus_dtoa_shortest(char *buf, size_t size, double v)
+{
+    size_t n = argus_dtoa(buf, size, 15, v);
+    if (n && argus_strtod(buf, NULL) != v)
+        n = argus_dtoa(buf, size, 17, v);
+    return n;
+}
+
+static inline size_t argus_ftoa_shortest(char *buf, size_t size, float v)
+{
+    size_t n = argus_dtoa(buf, size, 7, (double)v);
+    if (n && (float)argus_strtod(buf, NULL) != v)
+        n = argus_dtoa(buf, size, 9, (double)v);
+    return n;
+}
+
 #ifdef __cplusplus
 }
 #endif

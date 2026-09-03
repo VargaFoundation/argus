@@ -217,6 +217,24 @@ static inline bool argus_valid_desc(SQLHANDLE h) {
     return h && ((argus_desc_t *)h)->signature == ARGUS_DESC_SIGNATURE;
 }
 
+/* SQLGetData continuation state (see convert_cell_to_target in fetch.c). */
+typedef struct argus_getdata_state {
+    SQLUSMALLINT col;          /* 1-based column of the last call, 0 = none */
+    size_t       offset;       /* source units already delivered: UTF-8 bytes
+                                * of a text value, bytes of a binary one */
+    long         wchar_left;   /* UTF-16 units still to deliver to a
+                                * SQL_C_WCHAR target, -1 = not counted yet */
+    bool         done;         /* the whole value went out */
+} argus_getdata_state_t;
+
+static inline void argus_getdata_reset(argus_getdata_state_t *gd)
+{
+    gd->col = 0;
+    gd->offset = 0;
+    gd->wchar_left = -1;
+    gd->done = false;
+}
+
 /* Statement handle */
 struct argus_stmt {
     unsigned int            signature;
@@ -279,9 +297,11 @@ struct argus_stmt {
     int                     num_param_descs;
     int                     described_params;
 
-    /* SQLGetData multi-call state */
-    SQLUSMALLINT            getdata_col;     /* 1-based column of last GetData, 0=none */
-    size_t                  getdata_offset;  /* byte offset for next GetData call */
+    /* SQLGetData continuation on a character or binary column: which
+     * column, how much of the value already went out, whether all of it did
+     * (the next call on that column gets SQL_NO_DATA). Reset by every
+     * fetch. */
+    argus_getdata_state_t   getdata;
 
     /* Statement attributes */
     SQLULEN                 max_rows;

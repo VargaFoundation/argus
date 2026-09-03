@@ -52,7 +52,8 @@ typedef struct argus_col_binding {
 typedef enum argus_native_kind {
     ARGUS_NATIVE_NONE = 0,  /* value lives in `data` (string) */
     ARGUS_NATIVE_I64,       /* value lives in `native.i64` */
-    ARGUS_NATIVE_F64        /* value lives in `native.f64` */
+    ARGUS_NATIVE_F64,       /* value lives in `native.f64` */
+    ARGUS_NATIVE_BINARY     /* `data` holds data_len raw bytes, not text */
 } argus_native_kind_t;
 
 /* A single cell value in our row cache.
@@ -61,7 +62,15 @@ typedef enum argus_native_kind {
  * round-trip on numeric columns. When `native_kind` is non-zero, numeric
  * SQLGetData targets read the native value directly; text targets fall back to
  * `data` (or format the native value on demand if `data` is NULL). Backends
- * that only produce text leave `native_kind` at ARGUS_NATIVE_NONE. */
+ * that only produce text leave `native_kind` at ARGUS_NATIVE_NONE.
+ *
+ * A binary column's value is the bytes themselves (ARGUS_NATIVE_BINARY):
+ * `data` then holds data_len raw bytes, which may include NULs, and no text
+ * form. The wire encodings the engines use for those bytes — hex on Hive,
+ * Impala and Pinot, base64 on Trino, BigQuery and Avatica, \x-hex on
+ * PostgreSQL — are decoded by the backend (argus_cell_decode_hex /
+ * argus_cell_decode_base64), never guessed from the content at SQLGetData
+ * time. SQL_C_BINARY returns the bytes; character targets get them as hex. */
 typedef struct argus_cell {
     char   *data;       /* string representation of the value (owned, may be NULL) */
     size_t  data_len;   /* length of data (not including NUL) */
@@ -97,6 +106,17 @@ char *argus_row_alloc_block(argus_row_t *row, int num_cols,
 
 /* Free one row, honouring both layouts. */
 void argus_row_free(argus_row_t *row, int num_cols);
+
+/* Turn a text cell holding an encoded binary value into the raw bytes, in
+ * place: decoding only shrinks, so the cell's storage (a block row's payload
+ * or its own allocation) is reused. On success the cell is ARGUS_NATIVE_BINARY
+ * with data_len set to the byte count and a NUL kept after the bytes. Returns
+ * 0, or -1 when the text is not valid hex (an optional 0x / \x prefix, then
+ * pairs of hex digits) or base64 — the cell is then left as it was, so the
+ * application still sees the engine's text rather than nothing. NULL cells
+ * and cells that are already binary succeed without change. */
+int argus_cell_decode_hex(argus_cell_t *cell);
+int argus_cell_decode_base64(argus_cell_t *cell);
 
 /* Row cache - batch of fetched rows */
 typedef struct argus_row_cache {
