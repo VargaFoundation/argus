@@ -30,6 +30,7 @@ typedef struct {
     const argus_dialect_t *dialect;
     argus_diag_t          *diag;
     bool                   failed;
+    const char            *text;   /* the SQL being parsed, for lookbehind */
 } escape_ctx_t;
 
 static void escape_fail(escape_ctx_t *ctx, const char *sqlstate, const char *fmt, ...)
@@ -56,34 +57,42 @@ static void skip_ws(const char **p)
 }
 
 /*
- * Copy one quoted run verbatim, starting at the opening quote. Handles the SQL
- * doubling convention ('' inside '...', "" inside "..."), which is what keeps
- * a brace inside a string literal from being mistaken for an escape.
- * Returns false if the quote is never closed.
+ * Copy a run the parser must not look inside, when one starts at *p: a
+ * string literal or quoted identifier (as the dialect lexes it, so a
+ * backslash-escaped quote does not end it on Hive or MySQL wire, and
+ * PostgreSQL's E'...' and $tag$...$tag$ forms hold together), or a comment.
+ * That is what keeps a brace inside a literal from being mistaken for an
+ * escape. Returns false when nothing of the kind starts here. An unclosed
+ * literal fails the parse and consumes the rest of the text.
  */
-static bool copy_quoted(const char **p, GString *out)
+static bool copy_opaque(escape_ctx_t *ctx, const char **p, GString *out)
 {
-    char quote = **p;
+    const char *start = *p, *end;
+    char c = *start;
 
-    g_string_append_c(out, quote);
-    (*p)++;
-
-    while (**p) {
-        if (**p == quote) {
-            if (*(*p + 1) == quote) {          /* doubled: literal quote char */
-                g_string_append_c(out, quote);
-                g_string_append_c(out, quote);
-                *p += 2;
-                continue;
-            }
-            g_string_append_c(out, quote);
-            (*p)++;
-            return true;
+    if (c == '\'' || c == '"' || c == '`') {
+        end = argus_sql_skip_quoted(ctx->text, start, ctx->dialect);
+        if (!end) {
+            escape_fail(ctx, "42000", "[Argus] Unterminated string literal");
+            end = start + strlen(start);
         }
-        g_string_append_c(out, **p);
-        (*p)++;
+    } else if (c == '$') {
+        end = argus_sql_skip_dollar_quoted(ctx->text, start, ctx->dialect);
+        if (end == start) return false;
+        if (!end) {
+            escape_fail(ctx, "42000", "[Argus] Unterminated dollar-quoted string");
+            end = start + strlen(start);
+        }
+    } else if (c == '-' || c == '/') {
+        end = argus_sql_skip_comment(start);
+        if (!end) return false;
+    } else {
+        return false;
     }
-    return false;   /* unterminated */
+
+    g_string_append_len(out, start, (gssize)(end - start));
+    *p = end;
+    return true;
 }
 
 static void scan_escape(escape_ctx_t *ctx, const char **p, GString *out);
@@ -102,11 +111,7 @@ static void scan_expr(escape_ctx_t *ctx, const char **p, GString *out,
     while (**p && !ctx->failed) {
         char c = **p;
 
-        if (c == '\'' || c == '"' || c == '`') {
-            if (!copy_quoted(p, out))
-                escape_fail(ctx, "42000", "[Argus] Unterminated string literal");
-            continue;
-        }
+        if (copy_opaque(ctx, p, out)) continue;
         if (c == '{') {
             (*p)++;
             scan_escape(ctx, p, out);
@@ -289,8 +294,8 @@ static void scan_literal(escape_ctx_t *ctx, const char **p, GString *out,
     }
 
     lit = g_string_new(NULL);
-    if (!copy_quoted(p, lit)) {
-        escape_fail(ctx, "42000", "[Argus] Unterminated literal in {%s ...} escape", kind);
+    copy_opaque(ctx, p, lit);
+    if (ctx->failed) {
         g_string_free(lit, TRUE);
         return;
     }
@@ -329,11 +334,7 @@ static void scan_body(escape_ctx_t *ctx, const char **p, GString *out,
     while (**p && !ctx->failed) {
         char c = **p;
 
-        if (c == '\'' || c == '"' || c == '`') {
-            if (!copy_quoted(p, out))
-                escape_fail(ctx, "42000", "[Argus] Unterminated string literal");
-            continue;
-        }
+        if (copy_opaque(ctx, p, out)) continue;
         if (c == '}' && depth == 0) { (*p)++; return; }
         if (c == '{') {
             (*p)++;
@@ -452,7 +453,7 @@ argus_escape_result_t argus_escape_translate(const argus_dialect_t *dialect,
                                              char **out,
                                              argus_diag_t *diag)
 {
-    escape_ctx_t ctx = { dialect, diag, false };
+    escape_ctx_t ctx = { dialect, diag, false, sql };
     GString     *buf;
     const char  *p;
 
@@ -469,11 +470,7 @@ argus_escape_result_t argus_escape_translate(const argus_dialect_t *dialect,
     while (*p && !ctx.failed) {
         char c = *p;
 
-        if (c == '\'' || c == '"' || c == '`') {
-            if (!copy_quoted(&p, buf))
-                escape_fail(&ctx, "42000", "[Argus] Unterminated string literal");
-            continue;
-        }
+        if (copy_opaque(&ctx, &p, buf)) continue;
         if (c == '{') {
             p++;
             scan_escape(&ctx, &p, buf);

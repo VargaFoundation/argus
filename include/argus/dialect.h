@@ -76,6 +76,11 @@ typedef struct argus_dialect {
      * Druid, ...) treat it as an ordinary character, and doubling it there
      * silently corrupts the value ('C:\path' arrives as 'C:\\path'). */
     bool                    backslash_escapes;
+    /* The PostgreSQL lexer's string forms: E'...' escape strings, where '\'
+     * escapes although backslash_escapes is false, and $tag$...$tag$ dollar
+     * quoting. The scanners that must not look inside a literal (parameter
+     * markers, ODBC escape sequences) honour both (argus_sql_skip_quoted). */
+    bool                    pg_strings;
     const argus_fn_entry_t *fn_map;      /* terminated by odbc_name == NULL */
 
     /*
@@ -101,6 +106,33 @@ const argus_dialect_t *argus_dialect_by_name(const char *backend_name);
 
 /* Dialect for a connection (its backend's, or ANSI if not connected). */
 const argus_dialect_t *argus_dialect_for(const argus_dbc_t *dbc);
+
+/* ── Lexical helpers ────────────────────────────────────────────
+ * For the scanners that must not look inside a string literal, a quoted
+ * identifier or a comment: the parameter-marker scanner and the ODBC escape
+ * parser. text is the start of the SQL the position lies in. */
+
+/* p is at a quote (', " or `) opening a string literal or a quoted
+ * identifier. Returns the position just past the closing quote, or NULL
+ * when the run is not closed. A doubled quote is part of the run; so is a
+ * backslash-escaped character in a string literal where the dialect treats
+ * '\' as an escape (backslash_escapes), and in an E'...' escape string
+ * where the dialect has them (pg_strings). Which quotes delimit a string
+ * literal rather than an identifier follows the dialect's quote_char. */
+const char *argus_sql_skip_quoted(const char *text, const char *p,
+                                  const argus_dialect_t *dialect);
+
+/* p is at '$'. Returns the position past the $tag$...$tag$ dollar-quoted
+ * string starting here, p itself when none starts here (the dialect has no
+ * dollar quoting, or the '$' is part of an identifier or of a $1 parameter
+ * reference), or NULL when the string is not closed. */
+const char *argus_sql_skip_dollar_quoted(const char *text, const char *p,
+                                         const argus_dialect_t *dialect);
+
+/* Returns the position past the comment starting at p (-- to the end of the
+ * line, or a slash-star block), or NULL when no comment starts here. An
+ * unclosed block comment runs to the end of the text. */
+const char *argus_sql_skip_comment(const char *p);
 
 /* Find a scalar function by ODBC name (case-insensitive). NULL if the dialect
  * cannot express it — the caller must then reject {fn NAME(...)} rather than

@@ -13,39 +13,49 @@
 #include <glib.h>
 
 
-/* ── Internal: count parameter markers in a SQL string ────────── */
+/* ── Internal: parameter markers ─────────────────────────────── */
 
-static int count_param_markers(const char *sql)
+/*
+ * The first parameter marker at or after p, or NULL when there is none.
+ * Everything a '?' can hide in is stepped over: string literals, quoted
+ * identifiers, dollar-quoted strings and comments, as the dialect lexes them
+ * (argus_sql_skip_quoted): on Hive, Impala, MySQL wire and BigQuery 'a\'b?c'
+ * is one literal, not a literal, a marker and an unterminated quote. text is
+ * the start of the SQL, for the lookbehind those helpers need. An unclosed
+ * literal hides everything after it.
+ */
+static const char *next_param_marker(const char *text, const char *p,
+                                     const argus_dialect_t *dialect)
+{
+    while (*p) {
+        char c = *p;
+        const char *end;
+
+        if (c == '?') return p;
+        if (c == '\'' || c == '"' || c == '`') {
+            p = argus_sql_skip_quoted(text, p, dialect);
+            if (!p) return NULL;
+            continue;
+        }
+        if (c == '$') {
+            end = argus_sql_skip_dollar_quoted(text, p, dialect);
+            if (!end) return NULL;
+            if (end != p) { p = end; continue; }
+        } else if (c == '-' || c == '/') {
+            end = argus_sql_skip_comment(p);
+            if (end) { p = end; continue; }
+        }
+        p++;
+    }
+    return NULL;
+}
+
+static int count_param_markers(const char *sql, const argus_dialect_t *dialect)
 {
     int count = 0;
-    bool in_single_quote = false;
-    bool in_double_quote = false;
-
-    for (const char *p = sql; *p; p++) {
-        if (!in_single_quote && !in_double_quote) {
-            /* A '?' inside a comment is not a parameter marker. */
-            if (p[0] == '-' && p[1] == '-') {
-                p += 2;
-                while (*p && *p != '\n') p++;
-                if (!*p) break;
-                continue;
-            }
-            if (p[0] == '/' && p[1] == '*') {
-                p += 2;
-                while (*p && !(p[0] == '*' && p[1] == '/')) p++;
-                if (!*p) break;
-                p++; /* land on '/', loop advances past it */
-                continue;
-            }
-        }
-        if (*p == '\'' && !in_double_quote) {
-            in_single_quote = !in_single_quote;
-        } else if (*p == '"' && !in_single_quote) {
-            in_double_quote = !in_double_quote;
-        } else if (*p == '?' && !in_single_quote && !in_double_quote) {
-            count++;
-        }
-    }
+    for (const char *p = next_param_marker(sql, sql, dialect); p;
+         p = next_param_marker(sql, p + 1, dialect))
+        count++;
     return count;
 }
 
@@ -432,9 +442,10 @@ static char *substitute_params(const char *sql,
                                 const argus_param_binding_t *params,
                                 int num_params,
                                 argus_diag_t *diag,
-                                bool backslash_escapes)
+                                const argus_dialect_t *dialect)
 {
-    int marker_count = count_param_markers(sql);
+    bool backslash_escapes = dialect->backslash_escapes;
+    int marker_count = count_param_markers(sql, dialect);
     if (marker_count == 0) return strdup(sql);
 
     if (marker_count > num_params) {
@@ -480,47 +491,24 @@ static char *substitute_params(const char *sql,
         return NULL;
     }
 
-    /* Build output string */
+    /* Build output string: the text between markers verbatim, each marker
+     * replaced by its rendering. The same scanner counted the markers, so
+     * it finds marker_count of them again. */
     char *dst = out;
-    int param_idx = 0;
-    bool in_single_quote = false;
-    bool in_double_quote = false;
-
-    for (const char *p = sql; *p; p++) {
-        if (!in_single_quote && !in_double_quote) {
-            /* Copy comments verbatim: count_param_markers skipped them, so a
-             * '?' inside one must not consume a parameter here either. */
-            if (p[0] == '-' && p[1] == '-') {
-                while (*p && *p != '\n') *dst++ = *p++;
-                if (!*p) break;
-                *dst++ = *p;
-                continue;
-            }
-            if (p[0] == '/' && p[1] == '*') {
-                *dst++ = *p++; *dst++ = *p++;
-                while (*p && !(p[0] == '*' && p[1] == '/')) *dst++ = *p++;
-                if (!*p) break;
-                *dst++ = *p++; *dst++ = *p;
-                continue;
-            }
-        }
-        if (*p == '\'' && !in_double_quote) {
-            in_single_quote = !in_single_quote;
-            *dst++ = *p;
-        } else if (*p == '"' && !in_single_quote) {
-            in_double_quote = !in_double_quote;
-            *dst++ = *p;
-        } else if (*p == '?' && !in_single_quote && !in_double_quote
-                   && param_idx < marker_count) {
-            size_t rlen = strlen(rendered[param_idx]);
-            memcpy(dst, rendered[param_idx], rlen);
-            dst += rlen;
-            param_idx++;
-        } else {
-            *dst++ = *p;
-        }
+    const char *src = sql;
+    for (int i = 0; i < marker_count; i++) {
+        const char *marker = next_param_marker(sql, src, dialect);
+        if (!marker) break;
+        size_t span = (size_t)(marker - src);
+        memcpy(dst, src, span);
+        dst += span;
+        size_t rlen = strlen(rendered[i]);
+        memcpy(dst, rendered[i], rlen);
+        dst += rlen;
+        src = marker + 1;
     }
-    *dst = '\0';
+    size_t tail = strlen(src);
+    memcpy(dst, src, tail + 1);
 
     for (int i = 0; i < marker_count; i++) free(rendered[i]);
     free(rendered);
@@ -792,7 +780,7 @@ static char *resolve_query(argus_stmt_t *stmt, const char *query)
     if (stmt->num_param_bindings > 0) {
         return substitute_params(query, stmt->param_bindings,
                                  stmt->num_param_bindings, &stmt->diag,
-                                 argus_dialect_for(stmt->dbc)->backslash_escapes);
+                                 argus_dialect_for(stmt->dbc));
     }
     return strdup(query);
 }
@@ -1212,7 +1200,7 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT StatementHandle)
         char *resolved = substitute_params(
             stmt->query, row_params,
             stmt->num_param_bindings, &stmt->diag,
-            argus_dialect_for(stmt->dbc)->backslash_escapes);
+            argus_dialect_for(stmt->dbc));
         if (!resolved) {
             if (stmt->param_status_ptr)
                 stmt->param_status_ptr[r] = SQL_PARAM_ERROR;
@@ -1598,7 +1586,7 @@ SQLRETURN SQL_API SQLParamData(
     }
     char *resolved = substitute_params(stmt->query, eff,
                                        stmt->num_param_bindings, &stmt->diag,
-                                       argus_dialect_for(stmt->dbc)->backslash_escapes);
+                                       argus_dialect_for(stmt->dbc));
     free(eff);
     argus_stmt_dae_clear(stmt);
     if (!resolved) {
@@ -1749,7 +1737,8 @@ SQLRETURN SQL_API SQLNumParams(
         if (stmt_describe_params(stmt))
             *ParameterCountPtr = (SQLSMALLINT)stmt->num_param_descs;
         else if (stmt->query)
-            *ParameterCountPtr = (SQLSMALLINT)count_param_markers(stmt->query);
+            *ParameterCountPtr = (SQLSMALLINT)count_param_markers(
+                stmt->query, argus_dialect_for(stmt->dbc));
         else
             *ParameterCountPtr = 0;
     }

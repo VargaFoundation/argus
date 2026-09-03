@@ -578,18 +578,18 @@ static const argus_fn_entry_t postgres_fns[] = {
  * DATE '...' yet rejects CURRENT_DATE, so an engine's SQL-92 coverage is not
  * all-or-nothing and cannot be inferred from its lineage. */
 static const argus_dialect_t argus_dialects[] = {
-    { "trino",    "\"", ARGUS_LIT_ANSI, true,  false, trino_fns, NULL },
-    { "hive",     "`",  ARGUS_LIT_ANSI, true,  true,  hive_fns, NULL },
+    { "trino",    "\"", ARGUS_LIT_ANSI, true,  false, false, trino_fns, NULL },
+    { "hive",     "`",  ARGUS_LIT_ANSI, true,  true,  false, hive_fns, NULL },
     /* Impala rejects the ANSI TIMESTAMP '…' literal (ParseException) but accepts
      * CAST('…' AS TIMESTAMP), and CAST works for DATE too — verified live. */
-    { "impala",   "`",  ARGUS_LIT_CAST, true,  true,  impala_fns, NULL },
-    { "mysql",    "`",  ARGUS_LIT_ANSI, true,  true,  mywire_fns, NULL },
-    { "bigquery", "`",  ARGUS_LIT_ANSI, true,  true,  bigquery_fns, NULL },
-    { "phoenix",  "\"", ARGUS_LIT_ANSI, false, false, ansi_fns, NULL },
-    { "pinot",    "\"", ARGUS_LIT_ANSI, false, false, pinot_fns, NULL },
-    { "druid",    "\"", ARGUS_LIT_ANSI, false, false, ansi_fns, NULL },
-    { "flightsql","\"", ARGUS_LIT_ANSI, false, false, ansi_fns, NULL },
-    { "kudu",     "\"", ARGUS_LIT_ANSI, false, false, ansi_fns, NULL },
+    { "impala",   "`",  ARGUS_LIT_CAST, true,  true,  false, impala_fns, NULL },
+    { "mysql",    "`",  ARGUS_LIT_ANSI, true,  true,  false, mywire_fns, NULL },
+    { "bigquery", "`",  ARGUS_LIT_ANSI, true,  true,  false, bigquery_fns, NULL },
+    { "phoenix",  "\"", ARGUS_LIT_ANSI, false, false, false, ansi_fns, NULL },
+    { "pinot",    "\"", ARGUS_LIT_ANSI, false, false, false, pinot_fns, NULL },
+    { "druid",    "\"", ARGUS_LIT_ANSI, false, false, false, ansi_fns, NULL },
+    { "flightsql","\"", ARGUS_LIT_ANSI, false, false, false, ansi_fns, NULL },
+    { "kudu",     "\"", ARGUS_LIT_ANSI, false, false, false, ansi_fns, NULL },
     /* Greenplum and Cloudberry share PostgreSQL's table today; they are listed
      * separately so a divergence can be expressed without a structural change,
      * and so each carries its own verification provenance (see the header).
@@ -600,6 +600,8 @@ static const argus_dialect_t argus_dialects[] = {
      * Verified on PostgreSQL 16 — SHOW standard_conforming_strings is on and
      * length('C:\path') is 7. Greenplum 6 derives from PostgreSQL 9.4 and
      * Cloudberry from 14, so both are on the same side of that default.
+     * pg_strings is what marks the two forms that do escape or quote on this
+     * family regardless: E'...' strings and $tag$...$tag$ dollar quoting.
      *
      * The call template renders {call f(a,b)} as SELECT * FROM f(a,b), which is
      * what psqlODBC does and what an ODBC application means by it: the thing
@@ -608,13 +610,13 @@ static const argus_dialect_t argus_dialects[] = {
      * asks for one through {call}. This is also what makes SQL_PROCEDURES
      * answer "Y" for these backends — the info type promises the invocation
      * syntax works, and now it does. */
-    { "postgres",  "\"", ARGUS_LIT_ANSI, true, false, postgres_fns, "SELECT * FROM $1" },
-    { "greenplum", "\"", ARGUS_LIT_ANSI, true, false, postgres_fns, "SELECT * FROM $1" },
-    { "cloudberry","\"", ARGUS_LIT_ANSI, true, false, postgres_fns, "SELECT * FROM $1" },
+    { "postgres",  "\"", ARGUS_LIT_ANSI, true, false, true, postgres_fns, "SELECT * FROM $1" },
+    { "greenplum", "\"", ARGUS_LIT_ANSI, true, false, true, postgres_fns, "SELECT * FROM $1" },
+    { "cloudberry","\"", ARGUS_LIT_ANSI, true, false, true, postgres_fns, "SELECT * FROM $1" },
 };
 
 static const argus_dialect_t argus_ansi_dialect = {
-    "ansi", "\"", ARGUS_LIT_ANSI, false, false, ansi_fns, NULL
+    "ansi", "\"", ARGUS_LIT_ANSI, false, false, false, ansi_fns, NULL
 };
 
 #define ARGUS_DIALECT_COUNT (sizeof(argus_dialects) / sizeof(argus_dialects[0]))
@@ -635,6 +637,92 @@ const argus_dialect_t *argus_dialect_for(const argus_dbc_t *dbc)
     if (dbc && dbc->backend && dbc->backend->name)
         return argus_dialect_by_name(dbc->backend->name);
     return &argus_ansi_dialect;
+}
+
+/* ── Lexical helpers ──────────────────────────────────────────── */
+
+/* A byte that can be part of an identifier: '$' after one is not a dollar
+ * quote, and an E before a quote is a keyword only when it stands alone. */
+static bool ident_char(char c)
+{
+    unsigned char u = (unsigned char)c;
+    return (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z') ||
+           (u >= '0' && u <= '9') || u == '_' || u >= 0x80;
+}
+
+const char *argus_sql_skip_quoted(const char *text, const char *p,
+                                  const argus_dialect_t *dialect)
+{
+    char quote = *p;
+    char ident = dialect->quote_char && dialect->quote_char[0]
+                 ? dialect->quote_char[0] : '"';
+    bool backslash;
+
+    if (quote == '\'') {
+        /* A string literal everywhere. E'...' is PostgreSQL's escape string;
+         * the E is a keyword, not the tail of an identifier (tablee'x'). */
+        backslash = dialect->backslash_escapes ||
+                    (dialect->pg_strings && p > text &&
+                     (p[-1] == 'E' || p[-1] == 'e') &&
+                     (p - 1 == text || !ident_char(p[-2])));
+    } else if (quote == '"') {
+        /* An identifier where the dialect quotes identifiers with it, a
+         * string literal (Hive, MySQL wire, BigQuery) where it does not. */
+        backslash = ident != '"' && dialect->backslash_escapes;
+    } else {
+        backslash = false;   /* a backtick identifier: doubling only */
+    }
+
+    for (p++; *p; p++) {
+        if (backslash && *p == '\\') {
+            if (!p[1]) return NULL;   /* the escape has nothing to escape */
+            p++;                       /* the escaped byte, whatever it is */
+            continue;
+        }
+        if (*p == quote) {
+            if (p[1] == quote) { p++; continue; }   /* doubled: part of it */
+            return p + 1;
+        }
+    }
+    return NULL;
+}
+
+const char *argus_sql_skip_dollar_quoted(const char *text, const char *p,
+                                         const argus_dialect_t *dialect)
+{
+    if (!dialect->pg_strings || *p != '$') return p;
+    /* Part of an identifier (a$b), not a delimiter. */
+    if (p > text && ident_char(p[-1])) return p;
+
+    /* $$ or $tag$, tag being an identifier that does not start with a
+     * digit: $1 is a parameter reference. */
+    const char *t = p + 1;
+    if (*t != '$') {
+        if (!ident_char(*t) || (*t >= '0' && *t <= '9')) return p;
+        while (ident_char(*t)) t++;
+        if (*t != '$') return p;
+    }
+    size_t delim_len = (size_t)(t + 1 - p);
+
+    for (const char *q = t + 1; *q; q++) {
+        if (*q == '$' && strncmp(q, p, delim_len) == 0)
+            return q + delim_len;
+    }
+    return NULL;
+}
+
+const char *argus_sql_skip_comment(const char *p)
+{
+    if (p[0] == '-' && p[1] == '-') {
+        p += 2;
+        while (*p && *p != '\n') p++;
+        return p;
+    }
+    if (p[0] == '/' && p[1] == '*') {
+        const char *end = strstr(p + 2, "*/");
+        return end ? end + 2 : p + strlen(p);
+    }
+    return NULL;
 }
 
 static int ascii_casecmp(const char *a, const char *b)

@@ -29,8 +29,8 @@ static char *xlat(const char *backend, const char *sql)
 
     assert_int_equal(r, ARGUS_ESCAPE_OK);
     assert_non_null(out);
-    return out;
     argus_diag_dispose(&diag);
+    return out;
 }
 
 /* Translate and compare against the expected native SQL. */
@@ -233,6 +233,39 @@ static void test_escapes_inside_literals_are_untouched(void **state)
     g_free(out3);
 }
 
+/* The literal is read as the dialect lexes it: a backslash-escaped quote
+ * keeps it open on Hive and MySQL wire (and so does E'...' on PostgreSQL),
+ * a dollar-quoted string is one run, and a brace in a comment is not an
+ * escape. On an ANSI engine the same backslash text closes the literal, and
+ * the brace after it is an escape. */
+static void test_literals_follow_the_dialect_lexer(void **state)
+{
+    (void)state;
+
+    assert_translates("hive", "SELECT 'a\\'{fn UCASE(x)}', {fn LCASE(y)}",
+                      "SELECT 'a\\'{fn UCASE(x)}', lower(y)");
+    assert_translates("mysql", "SELECT \"a\\\"{x}\", `{y}`, {fn LCASE(y)}",
+                      "SELECT \"a\\\"{x}\", `{y}`, lower(y)");
+    /* ANSI: the literal closed at \', so the brace is an escape and the
+     * last quote opens a literal that never closes. */
+    assert_rejected("trino", "SELECT 'a\\'{fn UCASE(x)}'", "42000");
+    assert_translates("trino", "SELECT 'a\\'{fn UCASE(x)}",
+                      "SELECT 'a\\'upper(x)");
+
+    assert_translates("postgres", "SELECT E'a\\'{fn UCASE(x)}', {fn LCASE(y)}",
+                      "SELECT E'a\\'{fn UCASE(x)}', lower(y)");
+    assert_translates("postgres",
+                      "SELECT $$ {fn UCASE(x)} $$, $t$'{y}'$t$, {fn LCASE(y)}",
+                      "SELECT $$ {fn UCASE(x)} $$, $t$'{y}'$t$, lower(y)");
+    assert_rejected("postgres", "SELECT $$ {fn UCASE(x)}", "42000");
+
+    assert_translates("trino", "SELECT 1 -- {fn UCASE(x)}\n, /* {d '1'} */ {fn LCASE(y)}",
+                      "SELECT 1 -- {fn UCASE(x)}\n, /* {d '1'} */ lower(y)");
+    /* Inside an escape too. */
+    assert_translates("trino", "SELECT {fn LCASE(y /* {x} */)}",
+                      "SELECT lower(y /* {x} */)");
+}
+
 /*
  * The contract that motivates this whole file: a function the dialect cannot
  * render is one SQLGetInfo never advertised, so it is an application error and
@@ -378,6 +411,7 @@ int main(void)
         cmocka_unit_test(test_datetime_literals),
         cmocka_unit_test(test_like_escape_and_outer_join),
         cmocka_unit_test(test_escapes_inside_literals_are_untouched),
+        cmocka_unit_test(test_literals_follow_the_dialect_lexer),
         cmocka_unit_test(test_unsupported_function_is_rejected_not_passed_through),
         cmocka_unit_test(test_arity_is_checked),
         cmocka_unit_test(test_arity_message_is_readable),
