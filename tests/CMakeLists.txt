@@ -61,6 +61,14 @@ endif()
 if(ARGUS_BUILD_THRIFT_BACKENDS)
     argus_add_unit_test(test_type_convert unit/test_type_convert.c)
     argus_add_unit_test(test_impala_types unit/test_impala_types.c)
+    # Drives the real hive/impala fetch functions through a TCLIServiceClient
+    # fed from a memory buffer, so it needs the backend internals and Thrift.
+    argus_add_unit_test(test_hs2_fetch unit/test_hs2_fetch.c)
+    target_include_directories(test_hs2_fetch PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/backend
+        ${GOBJECT2_INCLUDE_DIRS}
+        ${THRIFT_C_GLIB_INCLUDE_DIRS}
+    )
 endif()
 
 if(ARGUS_BUILD_TRINO)

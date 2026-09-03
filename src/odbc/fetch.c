@@ -93,6 +93,38 @@ void argus_row_cache_clear(argus_row_cache_t *cache)
     /* Keep num_cols and the exhausted flag */
 }
 
+/* ── Internal: diagnostic for a failed backend fetch ─────────── */
+
+/* Same preference order as SQLExecDirect: the backend's own SQLSTATE and
+ * message when it has one, otherwise HY000 with a generic text. Leaves an
+ * existing diagnostic (set by the backend itself) untouched. */
+static void set_fetch_error(argus_stmt_t *stmt)
+{
+    argus_dbc_t *dbc = stmt->dbc;
+    if (stmt->diag.count > 0) return;
+
+    char errbuf[512];
+    char sqlstate[6] = {0};
+    if (dbc->backend->get_last_error_ex &&
+        dbc->backend->get_last_error_ex(dbc->backend_conn, sqlstate,
+                                        errbuf, sizeof(errbuf)) &&
+        errbuf[0]) {
+        char msg[600];
+        snprintf(msg, sizeof(msg), "[Argus] %s", errbuf);
+        argus_set_error(&stmt->diag, sqlstate[0] ? sqlstate : "HY000", msg, 0);
+    } else if (dbc->backend->get_last_error &&
+               dbc->backend->get_last_error(dbc->backend_conn,
+                                            errbuf, sizeof(errbuf)) &&
+               errbuf[0]) {
+        char msg[600];
+        snprintf(msg, sizeof(msg), "[Argus] %s", errbuf);
+        argus_set_error(&stmt->diag, "HY000", msg, 0);
+    } else {
+        argus_set_error(&stmt->diag, "HY000",
+                        "[Argus] Failed to fetch results", 0);
+    }
+}
+
 /* ── Internal: fetch a batch from backend ─────────────────────── */
 
 static SQLRETURN fetch_batch(argus_stmt_t *stmt)
@@ -118,10 +150,7 @@ static SQLRETURN fetch_batch(argus_stmt_t *stmt)
         stmt->columns, &num_cols);
 
     if (rc != 0) {
-        if (stmt->diag.count == 0) {
-            argus_set_error(&stmt->diag, "HY000",
-                            "[Argus] Failed to fetch results", 0);
-        }
+        set_fetch_error(stmt);
         return SQL_ERROR;
     }
 
@@ -879,9 +908,7 @@ static SQLRETURN build_scroll_cache(argus_stmt_t *stmt)
             for (size_t i = 0; i < total; i++)
                 argus_row_free(&all_rows[i], stmt->num_cols);
             free(all_rows);
-            if (stmt->diag.count == 0)
-                argus_set_error(&stmt->diag, "HY000",
-                                "[Argus] Failed to fetch results", 0);
+            set_fetch_error(stmt);
             return SQL_ERROR;
         }
 

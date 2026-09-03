@@ -223,3 +223,82 @@ int argus_hs2_parse_rowset(GPtrArray *tcolumns, int ncols, int num_rows,
     free(cursors);
     return 0;
 }
+
+/* ── Row count, row set to cache, status ───────────────────────── */
+
+static int column_row_count(TColumn *tcol)
+{
+    if (tcol->__isset_stringVal && tcol->stringVal) {
+        GPtrArray *v = tcol->stringVal->values;
+        return v ? (int)v->len : 0;
+    }
+    if (tcol->__isset_binaryVal && tcol->binaryVal) {
+        GPtrArray *v = tcol->binaryVal->values;
+        return v ? (int)v->len : 0;
+    }
+    GArray *v = NULL;
+    if      (tcol->__isset_i32Val    && tcol->i32Val)    v = tcol->i32Val->values;
+    else if (tcol->__isset_i64Val    && tcol->i64Val)    v = tcol->i64Val->values;
+    else if (tcol->__isset_doubleVal && tcol->doubleVal) v = tcol->doubleVal->values;
+    else if (tcol->__isset_boolVal   && tcol->boolVal)   v = tcol->boolVal->values;
+    else if (tcol->__isset_byteVal   && tcol->byteVal)   v = tcol->byteVal->values;
+    else if (tcol->__isset_i16Val    && tcol->i16Val)    v = tcol->i16Val->values;
+    return v ? (int)v->len : 0;
+}
+
+int argus_hs2_rowset_row_count(GPtrArray *tcolumns)
+{
+    int nrows = 0;
+    if (!tcolumns) return 0;
+    for (guint c = 0; c < tcolumns->len; c++) {
+        int rc = column_row_count(T_COLUMN(g_ptr_array_index(tcolumns, c)));
+        if (rc > nrows) nrows = rc;
+    }
+    return nrows;
+}
+
+int argus_hs2_rowset_to_cache(GPtrArray *tcolumns, argus_row_cache_t *cache,
+                              int *num_cols)
+{
+    cache->num_rows = 0;
+    if (!tcolumns || tcolumns->len == 0) return 0;
+
+    int ncols = (int)tcolumns->len;
+    if (num_cols) *num_cols = ncols;
+    cache->num_cols = ncols;
+
+    int nrows = argus_hs2_rowset_row_count(tcolumns);
+    if (nrows == 0) return 0;
+
+    cache->rows = calloc((size_t)nrows, sizeof(argus_row_t));
+    if (!cache->rows) return -1;
+    cache->num_rows = (size_t)nrows;
+    cache->capacity = (size_t)nrows;
+
+    return argus_hs2_parse_rowset(tcolumns, ncols, nrows, cache);
+}
+
+bool argus_hs2_status_ok(TStatus *status, char *errbuf, size_t errlen)
+{
+    if (!status) return true;
+
+    TStatusCode code;
+    g_object_get(status, "statusCode", &code, NULL);
+    if (code == T_STATUS_CODE_SUCCESS_STATUS ||
+        code == T_STATUS_CODE_SUCCESS_WITH_INFO_STATUS)
+        return true;
+
+    if (errbuf && errlen > 0) {
+        char *emsg = NULL;
+        g_object_get(status, "errorMessage", &emsg, NULL);
+        const char *text = (emsg && *emsg) ? emsg
+                         : code == T_STATUS_CODE_INVALID_HANDLE_STATUS
+                           ? "Invalid operation handle"
+                         : code == T_STATUS_CODE_STILL_EXECUTING_STATUS
+                           ? "Operation still executing"
+                           : "Server returned an error";
+        g_strlcpy(errbuf, text, errlen);
+        g_free(emsg);
+    }
+    return false;
+}
