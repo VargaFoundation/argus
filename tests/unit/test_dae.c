@@ -201,6 +201,9 @@ static void test_reexecution_asks_again(void **state)
         snprintf(expected, sizeof(expected), "SELECT '%s'", chunk);
         assert_string_equal(g_executed, expected);
         assert_int_equal(g_execute_calls, round + 1);
+
+        /* Closing the cursor keeps the prepared SQL and the binding. */
+        assert_int_equal(SQLFreeStmt((SQLHSTMT)stmt, SQL_CLOSE), SQL_SUCCESS);
     }
 }
 

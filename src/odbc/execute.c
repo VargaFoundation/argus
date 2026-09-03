@@ -566,18 +566,11 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
                                "[Argus] Connection not open", 0);
     }
 
-    /* Reset previous execution state */
-    if (stmt->op) {
-        dbc->backend->close_operation(dbc->backend_conn, stmt->op);
-        stmt->op = NULL;
-    }
-    stmt->executed          = false;
-    stmt->num_cols          = 0;
-    stmt->metadata_fetched  = false;
-    stmt->fetch_started     = false;
-    stmt->row_count         = -1;
+    /* Drop the previous result set, the scroll cache included: a static
+     * cursor left open across a re-execution would otherwise keep serving
+     * the old rows from SQLFetchScroll. */
+    argus_stmt_drop_result(stmt);
     stmt->rows_fetched_total = 0;
-    argus_row_cache_clear(&stmt->row_cache);
 
     /* Log query (truncate if very long) */
     if (strlen(query) > 100) {

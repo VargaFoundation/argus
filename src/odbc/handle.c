@@ -274,43 +274,19 @@ void argus_stmt_dae_clear(argus_stmt_t *stmt)
     stmt->dae_current_param = -1;
 }
 
-void argus_stmt_reset(argus_stmt_t *stmt)
+void argus_stmt_drop_result(argus_stmt_t *stmt)
 {
-    /* Close backend operation if active */
     if (stmt->op && stmt->dbc && stmt->dbc->backend) {
         stmt->dbc->backend->close_operation(
             stmt->dbc->backend_conn, stmt->op);
         stmt->op = NULL;
     }
 
-    /* Save num_cols before clearing for scroll cache cleanup */
-    int saved_num_cols = stmt->num_cols;
-
-    free(stmt->query);
-    stmt->query           = NULL;
-    stmt->prepared        = false;
-
-    /* Parameter metadata describes the SQL that is being discarded. */
-    free(stmt->param_descs);
-    stmt->param_descs      = NULL;
-    stmt->num_param_descs  = 0;
-    stmt->described_params = 0;
-
-    stmt->executed        = false;
-    stmt->num_cols        = 0;
-    stmt->metadata_fetched = false;
-    stmt->fetch_started   = false;
-    stmt->row_count       = -1;
-    stmt->getdata_col     = 0;
-    stmt->getdata_offset  = 0;
-
-    argus_row_cache_free(&stmt->row_cache);
-    argus_row_cache_init(&stmt->row_cache);
-
-    /* Free scroll cache */
+    /* The scroll cache rows are shaped by the column count of the result
+     * they came from, which is reset below. */
     if (stmt->scroll_rows) {
-        int nc = saved_num_cols > 0 ? saved_num_cols
-                                     : stmt->row_cache.num_cols;
+        int nc = stmt->num_cols > 0 ? stmt->num_cols
+                                    : stmt->row_cache.num_cols;
         for (size_t i = 0; i < stmt->scroll_row_count; i++)
             argus_row_free(&stmt->scroll_rows[i], nc);
         free(stmt->scroll_rows);
@@ -320,9 +296,22 @@ void argus_stmt_reset(argus_stmt_t *stmt)
     stmt->scroll_position  = 0;
     stmt->scroll_cached    = false;
 
-    /* Reset async state. A worker thread may still be running an execute and
-     * owns async_query and the execution fields, so it must be joined before
-     * anything here is torn down. */
+    argus_row_cache_free(&stmt->row_cache);
+    argus_row_cache_init(&stmt->row_cache);
+
+    stmt->executed         = false;
+    stmt->num_cols         = 0;
+    stmt->metadata_fetched = false;
+    stmt->fetch_started    = false;
+    stmt->row_count        = -1;
+    stmt->getdata_col      = 0;
+    stmt->getdata_offset   = 0;
+}
+
+void argus_stmt_close_cursor(argus_stmt_t *stmt)
+{
+    /* A worker thread may still be running an execute and owns the
+     * operation and the execution fields: join it before touching them. */
     if (stmt->async_thread) {
         g_thread_join(stmt->async_thread);
         stmt->async_thread = NULL;
@@ -333,19 +322,22 @@ void argus_stmt_reset(argus_stmt_t *stmt)
     stmt->async_query = NULL;
 
     argus_stmt_dae_clear(stmt);
+    argus_stmt_drop_result(stmt);
+}
 
-    /* Reset parameter bindings */
-    if (stmt->param_bindings)
-        memset(stmt->param_bindings, 0,
-               (size_t)stmt->param_bindings_capacity
-                   * sizeof(*stmt->param_bindings));
-    stmt->num_param_bindings = 0;
-    stmt->paramset_size = 1;
+void argus_stmt_reset(argus_stmt_t *stmt)
+{
+    argus_stmt_close_cursor(stmt);
 
-    /* Reset column bindings (keep allocation) */
-    if (stmt->bindings && stmt->bindings_capacity > 0)
-        memset(stmt->bindings, 0,
-               (size_t)stmt->bindings_capacity * sizeof(argus_col_binding_t));
+    free(stmt->query);
+    stmt->query    = NULL;
+    stmt->prepared = false;
+
+    /* Parameter metadata describes the SQL that is being discarded. */
+    free(stmt->param_descs);
+    stmt->param_descs      = NULL;
+    stmt->num_param_descs  = 0;
+    stmt->described_params = 0;
 }
 
 SQLRETURN argus_free_stmt(argus_stmt_t *stmt)
@@ -581,8 +573,9 @@ SQLRETURN SQL_API SQLFreeStmt(
     SQLRETURN freestmt_ret;
     switch (Option) {
     case SQL_CLOSE:
-        /* Close cursor / reset for re-execution */
-        argus_stmt_reset(stmt);
+        /* SQL_SUCCESS whether or not a cursor is open (unlike
+         * SQLCloseCursor); the prepared SQL and the bindings stay. */
+        argus_stmt_close_cursor(stmt);
         freestmt_ret = SQL_SUCCESS;
         break;
 

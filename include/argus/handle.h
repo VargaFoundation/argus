@@ -351,6 +351,22 @@ int argus_stmt_ensure_bindings(argus_stmt_t *stmt, int ncols);
 SQLRETURN argus_free_env(argus_env_t *env);
 SQLRETURN argus_free_dbc(argus_dbc_t *dbc);
 SQLRETURN argus_free_stmt(argus_stmt_t *stmt);
+
+/* Drop the current result set and every position in it: the backend
+ * operation, the row and scroll caches, SQLGetData progress. No thread
+ * concern: the caller owns the statement (it is what do_execute calls
+ * before each execution, on the async worker too). */
+void argus_stmt_drop_result(argus_stmt_t *stmt);
+
+/* SQLFreeStmt(SQL_CLOSE) / SQLCloseCursor: join a pending asynchronous
+ * execution, abandon a data-at-execution cycle, drop the result set. The
+ * prepared SQL, the parameter and column bindings and the statement
+ * attributes survive, so the application can SQLExecute again. */
+void argus_stmt_close_cursor(argus_stmt_t *stmt);
+
+/* Close the cursor and discard the SQL as well (catalog functions and
+ * SQLFreeStmt(SQL_DROP)). Bindings survive here too: only SQL_UNBIND,
+ * SQL_RESET_PARAMS and freeing the handle remove them. */
 void argus_stmt_reset(argus_stmt_t *stmt);
 
 /* End a data-at-execution cycle: free what SQLPutData collected and return

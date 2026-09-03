@@ -1778,12 +1778,16 @@ SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT StatementHandle)
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
 
+    ARGUS_STMT_LOCK(stmt);
     if (!stmt->executed) {
-        return argus_set_error(&stmt->diag, "24000",
-                               "[Argus] Invalid cursor state", 0);
+        SQLRETURN ret = argus_set_error(&stmt->diag, "24000",
+                                        "[Argus] Invalid cursor state", 0);
+        ARGUS_STMT_UNLOCK(stmt);
+        return ret;
     }
 
-    argus_stmt_reset(stmt);
+    argus_stmt_close_cursor(stmt);
+    ARGUS_STMT_UNLOCK(stmt);
     return SQL_SUCCESS;
 }
 
