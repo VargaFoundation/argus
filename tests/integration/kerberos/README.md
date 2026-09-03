@@ -24,6 +24,11 @@ integration job slower and more fragile. Run it on demand.
   Kerberos settings come from `SERVICE_OPTS` (not a replaced `hive-site.xml`, so
   the image's scratch-dir config stays intact). HS2 is published on **10001** so
   it coexists with the stock NOSASL hiveserver2 on 10000.
+- `hiveserver2-krb-http` (compose profile `http`) — the same image in
+  `transport.mode=http`, which under KERBEROS means **SPNEGO**. Published on
+  **10004**. It is behind a profile because it needs the same
+  `hive.example.com` network alias as the binary service, and only one
+  container may hold that name.
 
 ## Run
 
@@ -51,3 +56,50 @@ Success: `SQLDriverConnect` returns `SQL_SUCCESS`, the log shows
 The `KrbHostFQDN` override (here `hive.example.com`) is what lets the TCP host be
 `127.0.0.1` while the service principal stays `hive/hive.example.com@EXAMPLE.COM`
 — the same knob production needs behind a load balancer.
+
+## SPNEGO over HTTP
+
+The binary path above is the driver's own SASL/GSSAPI handshake. The HTTP path
+is a different mechanism: `HttpPath` selects Thrift-over-HTTP, and under
+`AuthMech=KERBEROS` the transport sets `CURLAUTH_NEGOTIATE`, delegating the
+Negotiate exchange to libcurl against the ambient credential cache.
+
+**There is no `KrbHostFQDN` equivalent here.** libcurl derives the service
+principal from the URL host, so the host you dial *is* the SPN host. Dialing
+`127.0.0.1:10004` asks for `HTTP/127.0.0.1@EXAMPLE.COM`, which the server —
+configured with `spnego.principal=HTTP/_HOST@EXAMPLE.COM`, i.e.
+`HTTP/hive.example.com` — will not accept. The name has to line up on both
+sides.
+
+So run the HTTP test where `hive.example.com` resolves to the server. Either
+join the compose network:
+
+```sh
+# Name the service explicitly: a bare `--profile http up` also starts the
+# binary-SASL hiveserver2, and the two then fight over the hive.example.com alias.
+docker compose -f kerberos-compose.yml --profile http up -d kdc hiveserver2-krb-http
+docker compose -f kerberos-compose.yml logs -f hiveserver2-krb-http   # wait for 10001
+
+# Run the test from a container on the stack's network, where Docker DNS
+# resolves hive.example.com and the SPN matches with no host-level setup.
+docker run --rm --network kerberos_default \
+  -v "$PWD/../../..":/w -v "$PWD/krb5.conf.container":/etc/krb5.conf:ro \
+  -e HIVE_HOST=hive.example.com -e HIVE_PORT=10001 \
+  <image-with-the-built-driver> \
+  sh -c 'echo testpass | kinit testuser@EXAMPLE.COM && ./build/tests/test_hive_kerberos_http'
+```
+
+…or add `127.0.0.1 hive.example.com` to `/etc/hosts` and run it from the host
+against port 10004 with `HIVE_HOST=hive.example.com`.
+
+Verified on 2026-09-03 against this stack: with a TGT the test passes and the
+ticket cache gains `HTTP/hive.example.com@EXAMPLE.COM`, which only the SPNEGO
+exchange can have fetched; with `kdestroy` first, the same test fails on
+`HTTP 401`. Both halves matter -- a green run alone would not prove the server
+was enforcing anything.
+
+The KDC also registers `HTTP/127.0.0.1@EXAMPLE.COM`. It is unused by the
+default config above, and only becomes usable if you override
+`hive.server2.authentication.spnego.principal` to that literal name — the
+escape hatch for a machine where neither Docker DNS nor `/etc/hosts` is
+available.

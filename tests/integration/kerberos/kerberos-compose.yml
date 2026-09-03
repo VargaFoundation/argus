@@ -46,5 +46,49 @@ services:
       retries: 30
       start_period: 60s
 
+  # SPNEGO over HTTP transport. Kept behind a profile because it claims the
+  # same hive.example.com network alias as the binary-SASL service above: the
+  # SPN is host-derived, so both need that name and only one may hold it.
+  #   docker compose -f kerberos-compose.yml --profile http up -d
+  hiveserver2-krb-http:
+    profiles: ["http"]
+    image: apache/hive:4.0.0
+    container_name: argus-hive-krb-http
+    hostname: hive.example.com
+    depends_on:
+      - kdc
+    networks:
+      default:
+        aliases:
+          - hive.example.com
+    ports:
+      - "10004:10001"
+    environment:
+      SERVICE_NAME: hiveserver2
+      # transport.mode=http switches HS2 from binary Thrift to Thrift-over-HTTP;
+      # under KERBEROS that means SPNEGO, which authenticates with the HTTP/
+      # principal rather than the hive/ one. Both keytabs are mounted: hive.keytab
+      # still backs the server's own identity, spnego.keytab backs the SPNEGO
+      # acceptor.
+      SERVICE_OPTS: >-
+        -Dhive.server2.transport.mode=http
+        -Dhive.server2.thrift.http.port=10001
+        -Dhive.server2.thrift.http.path=cliservice
+        -Dhive.server2.authentication=KERBEROS
+        -Dhive.server2.authentication.kerberos.principal=hive/_HOST@EXAMPLE.COM
+        -Dhive.server2.authentication.kerberos.keytab=/etc/security/keytabs/hive.keytab
+        -Dhive.server2.authentication.spnego.principal=HTTP/_HOST@EXAMPLE.COM
+        -Dhive.server2.authentication.spnego.keytab=/etc/security/keytabs/spnego.keytab
+    volumes:
+      - krb-keytabs:/etc/security/keytabs:ro
+      - ./krb5.conf.container:/etc/krb5.conf:ro
+      - ./core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/10001'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
 volumes:
   krb-keytabs:
