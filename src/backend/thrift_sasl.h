@@ -14,6 +14,17 @@
 #define TSASL_COMPLETE 0x05
 
 /*
+ * Largest SASL negotiation frame accepted from the server. The frame length
+ * is read from the wire before authentication completes, so it is capped
+ * here rather than trusted: real exchanges are a few hundred bytes, and a
+ * Kerberos token with a large PAC stays well under 100 KiB.
+ */
+#define ARGUS_THRIFT_SASL_MAX_FRAME (1u << 20)
+
+/* Longest excerpt of a server-supplied error message copied into errmsg. */
+#define ARGUS_THRIFT_SASL_ERR_EXCERPT 400
+
+/*
  * Perform a SASL handshake over the given transport using the PLAIN mechanism.
  *
  * The PLAIN initial response is: \0<username>\0<password>

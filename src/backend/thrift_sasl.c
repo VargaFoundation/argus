@@ -69,15 +69,35 @@ static int sasl_read_msg(ThriftTransport *t, guint8 *status,
     GError *err = NULL;
     guint32 net_len;
 
-    if (!thrift_transport_read(t, status, 1, &err)) goto fail;
-    if (!thrift_transport_read(t, (guint8 *)&net_len, 4, &err)) goto fail;
+    /* read_all, not read: a short read of the header would leave a garbage
+     * length, and a short payload read would be mistaken for a full token. */
+    if (thrift_transport_read_all(t, status, 1, &err) < 0) goto fail;
+    if (thrift_transport_read_all(t, (guint8 *)&net_len, 4, &err) < 0)
+        goto fail;
 
     guint32 payload_len = ntohl(net_len);
 
+    /* The length is the peer's word, read before any authentication has
+     * happened. A SASL exchange is a few hundred bytes (a Kerberos token
+     * with a large PAC stays well under 100 KiB), so anything above the cap
+     * is a broken or hostile server: refuse it without allocating. */
+    if (payload_len > ARGUS_THRIFT_SASL_MAX_FRAME) {
+        snprintf(errmsg, errmsg_size,
+                 "SASL read failed: server announced a %u-byte SASL frame "
+                 "(limit %u)", payload_len, ARGUS_THRIFT_SASL_MAX_FRAME);
+        return -1;
+    }
+
     guint8 *buf = NULL;
     if (payload_len > 0) {
-        buf = g_malloc(payload_len);
-        if (!thrift_transport_read(t, buf, payload_len, &err)) {
+        buf = g_try_malloc(payload_len);
+        if (!buf) {
+            snprintf(errmsg, errmsg_size,
+                     "SASL read failed: cannot allocate %u bytes",
+                     payload_len);
+            return -1;
+        }
+        if (thrift_transport_read_all(t, buf, payload_len, &err) < 0) {
             g_free(buf);
             goto fail;
         }
@@ -90,6 +110,14 @@ fail:
              err ? err->message : "unknown");
     if (err) g_error_free(err);
     return -1;
+}
+
+/* Server error text is untrusted and may be as long as the frame cap; keep
+ * the excerpt short enough to always fit the callers' 512-byte buffers. */
+static int sasl_excerpt_len(guint32 len)
+{
+    return len < ARGUS_THRIFT_SASL_ERR_EXCERPT ? (int)len
+                                                : ARGUS_THRIFT_SASL_ERR_EXCERPT;
 }
 
 /* ── PLAIN mechanism ─────────────────────────────────────────── */
@@ -137,13 +165,9 @@ int argus_thrift_sasl_handshake_plain(ThriftTransport *transport,
 
     /* Error case */
     if (srv_buf && srv_len > 0) {
-        size_t copy = srv_len < errmsg_size - 60 ? srv_len : errmsg_size - 60;
-        char tmp[512];
-        memcpy(tmp, srv_buf, copy);
-        tmp[copy] = '\0';
         snprintf(errmsg, errmsg_size,
-                 "SASL handshake rejected (status=%d): %s",
-                 (int)status, tmp);
+                 "SASL handshake rejected (status=%d): %.*s",
+                 (int)status, sasl_excerpt_len(srv_len), (const char *)srv_buf);
     } else {
         snprintf(errmsg, errmsg_size,
                  "SASL handshake rejected (status=%d)", (int)status);
@@ -380,7 +404,7 @@ int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
                 if (srv_buf && srv_len > 0) {
                     snprintf(errmsg, errmsg_size,
                              "SASL GSSAPI server error: %.*s",
-                             (int)srv_len, (char *)srv_buf);
+                             sasl_excerpt_len(srv_len), (char *)srv_buf);
                 } else {
                     snprintf(errmsg, errmsg_size,
                              "SASL GSSAPI server error (status=%d)",
@@ -632,7 +656,7 @@ int argus_thrift_sasl_handshake_gssapi(ThriftTransport *transport,
             if (srv_buf && srv_len > 0)
                 snprintf(errmsg, errmsg_size,
                          "SASL GSSAPI server error: %.*s",
-                         (int)srv_len, (char *)srv_buf);
+                         sasl_excerpt_len(srv_len), (char *)srv_buf);
             else
                 snprintf(errmsg, errmsg_size,
                          "SASL GSSAPI server error (status=%d)", (int)status);

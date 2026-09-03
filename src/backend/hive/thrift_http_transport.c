@@ -1,4 +1,5 @@
 #include "thrift_http_transport.h"
+#include "../thrift_limits.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -33,10 +34,18 @@ enum {
 
 /* ── curl write callback ─────────────────────────────────────── */
 
+/* Returning less than `total` makes curl abort the transfer with
+ * CURLE_WRITE_ERROR, which flush() reports as an oversized response. The
+ * cap is the same message limit libthrift applies to the socket transports;
+ * without it a hostile or broken server could grow the buffer until
+ * g_byte_array_append aborts the process. */
 static size_t curl_write_cb(void *data, size_t size, size_t nmemb, void *userp)
 {
     GByteArray *buf = (GByteArray *)userp;
     gsize total = size * nmemb;
+    if (total > ARGUS_THRIFT_MAX_MESSAGE_SIZE ||
+        buf->len > ARGUS_THRIFT_MAX_MESSAGE_SIZE - total)
+        return 0;
     g_byte_array_append(buf, data, (guint)total);
     return total;
 }
@@ -247,6 +256,13 @@ thrift_http_transport_flush_impl(ThriftTransport *transport, GError **error)
     /* Clear write buffer regardless of result */
     g_byte_array_set_size(self->write_buf, 0);
 
+    if (rc == CURLE_WRITE_ERROR) {
+        g_set_error(error, THRIFT_TRANSPORT_ERROR,
+                    THRIFT_TRANSPORT_ERROR_MAX_MESSAGE_SIZE_REACHED,
+                    "HTTP response from %s exceeds %d bytes", self->url,
+                    ARGUS_THRIFT_MAX_MESSAGE_SIZE);
+        return FALSE;
+    }
     if (rc != CURLE_OK) {
         g_set_error(error, THRIFT_TRANSPORT_ERROR,
                     THRIFT_TRANSPORT_ERROR_SEND,

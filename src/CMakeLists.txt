@@ -70,6 +70,7 @@ endif()
 if(ARGUS_BUILD_THRIFT_BACKENDS)
     list(APPEND ARGUS_SOURCES
         backend/thrift_sasl.c
+        backend/thrift_limits.c
         backend/thrift_gio_transport.c
         backend/hs2_types.c
         backend/hs2_fetch.c

@@ -4,6 +4,7 @@
 #include "argus/log.h"
 #include "argus/compat.h"
 #include "../thrift_sasl.h"
+#include "../thrift_limits.h"
 #ifdef ARGUS_HAS_CURL
 #include "thrift_http_transport.h"
 #endif
@@ -174,17 +175,11 @@ int hive_connect(argus_dbc_t *dbc,
         }
         ARGUS_LOG_DEBUG("Hive: SASL handshake completed successfully");
 
-        /* After SASL, use framed transport */
-        conn->transport = (ThriftTransport *)g_object_new(
-            THRIFT_TYPE_FRAMED_TRANSPORT,
-            "transport", conn->socket,
-            NULL);
+        /* After SASL, use framed transport (frame/message caps attached) */
+        conn->transport = argus_thrift_framed_transport_new(conn->socket);
     } else {
         /* NOSASL: buffered transport, opened normally */
-        conn->transport = (ThriftTransport *)g_object_new(
-            THRIFT_TYPE_BUFFERED_TRANSPORT,
-            "transport", conn->socket,
-            NULL);
+        conn->transport = argus_thrift_buffered_transport_new(conn->socket);
 
         if (!thrift_transport_open(conn->transport, &error)) {
             char msg[512];

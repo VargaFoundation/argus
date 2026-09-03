@@ -69,6 +69,13 @@ if(ARGUS_BUILD_THRIFT_BACKENDS)
         ${GOBJECT2_INCLUDE_DIRS}
         ${THRIFT_C_GLIB_INCLUDE_DIRS}
     )
+    # SASL negotiation framing and libthrift size caps over a memory buffer.
+    argus_add_unit_test(test_thrift_sasl unit/test_thrift_sasl.c)
+    target_include_directories(test_thrift_sasl PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/backend
+        ${GOBJECT2_INCLUDE_DIRS}
+        ${THRIFT_C_GLIB_INCLUDE_DIRS}
+    )
 endif()
 
 if(ARGUS_BUILD_TRINO)
