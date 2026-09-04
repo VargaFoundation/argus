@@ -397,19 +397,35 @@ int trino_sj_scan_data(const char *ds, const char *de,
                                              (size_t)(rend - p)
                                                  + (size_t)num_cols);
         if (!cursor) goto fail;
+
+        /*
+         * Every cell is parsed against `rend`, this row's own end, not the
+         * end of the whole data array. That is what makes the single
+         * allocation above safe, and it has to be structural rather than a
+         * property of each branch agreeing with the sizing pass: the cells
+         * were parsed against `de`, so one mis-read value -- a number token
+         * running into a quote, a ']' inside a string ending the row early
+         * -- left the cursor pointing into the *next* row, and a string
+         * started there was copied into a block that had never been sized
+         * for it. Bounded by `rend`, no cell can read or write past what
+         * this row reserved, whatever the scan makes of its contents:
+         * the tokens are disjoint substrings of the row slice, one NUL
+         * each, which is exactly the budget.
+         */
         p++;
         for (int col = 0; col < num_cols; col++) {
-            p = sj_ws(p, de);
-            if (p < de && *p == ']') break;   /* short row */
-            const char *ve = sj_value_to_cell(p, de, &rows[n].cells[col],
+            p = sj_ws(p, rend);
+            if (p >= rend || *p == ']') break;   /* short row */
+            const char *ve = sj_value_to_cell(p, rend, &rows[n].cells[col],
                                               &cursor);
             if (!ve) { n++; goto fail; }
-            p = sj_ws(ve, de);
-            if (p < de && *p == ',') p++;
+            if (ve <= p) break;                  /* no progress: stop */
+            p = sj_ws(ve, rend);
+            if (p < rend && *p == ',') p++;
         }
-        p = sj_ws(p, de);
-        while (p < de && *p != ']') p++;   /* tolerate extra cells */
-        if (p < de) p++;                    /* past row ']' */
+        /* Resynchronise on the row's own end, so a row the scan made little
+         * of cannot carry the confusion into the next one. */
+        p = rend;
         n++;
         p = sj_ws(p, de);
         if (p < de && *p == ',') { p++; continue; }

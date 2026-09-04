@@ -242,6 +242,16 @@ All notable changes to the Argus ODBC Driver project.
   end on half a surrogate pair.
 
 ### Fixed: heap overflow in the Trino result-page scanner
+- **Each row is now parsed against its own end, not the end of the whole
+  page.** The two overflows below were both the same shape: the row's single
+  allocation is sized from that row's raw slice, and the cells were then
+  parsed with the end of the entire `data` array as their bound. One
+  mis-read value — a number token running into a quote, a `]` inside a
+  string ending the row early — left the scan pointing into the *next* row,
+  and a string started there was copied into a block never sized for it.
+  Bounding every cell by its row makes the sizing rule structural instead of
+  a property each branch has to keep, and a row the scan makes little of no
+  longer carries the confusion into the next one.
 - **A nested object inside a result row wrote past the end of a heap
   block.** The scanner matched a container by counting only the bracket it
   had opened with, so a `]` inside a nested object ended the row for the
