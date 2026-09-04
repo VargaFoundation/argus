@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef ARGUS_ODBC_API_H
 #define ARGUS_ODBC_API_H
 

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Integration test: HOST=h1,h2 failover against a live Trino.
  *

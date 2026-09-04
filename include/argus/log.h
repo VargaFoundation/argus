@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef ARGUS_LOG_H
 #define ARGUS_LOG_H
 

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * http_client.c - Minimal shared HTTPS JSON POST helper.
  *

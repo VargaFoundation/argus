@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * fuzz_connstr.c — libFuzzer harness for the connection-string parser
  * (argus_conn_params_parse), which consumes fully attacker-controlled input:

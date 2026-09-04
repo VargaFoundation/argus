@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * SQLFetch must never report a backend failure as SQL_NO_DATA.
  *

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * The browser launcher behind Trino's authorization-code SSO. The URL it
  * receives is assembled from connection-string material, so two things are

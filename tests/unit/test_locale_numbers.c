@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Numbers must cross the driver with a '.' whatever LC_NUMERIC says.
  *

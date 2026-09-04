@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * fuzz_escape.c — libFuzzer harness for the ODBC escape-sequence translator
  * (src/odbc/escape.c), the hand-written parser every {fn}-generating BI tool

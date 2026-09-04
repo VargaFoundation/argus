@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Switch the process to a locale whose decimal separator is a comma, the
  * way Excel, Tableau and Power BI leave it after setlocale(LC_ALL, "") on a

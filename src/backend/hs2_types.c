@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * hs2_types.c — shared HiveServer2-family type mapping (see hs2_types.h).
  * The union of what Hive and Impala each mapped before the merge; entries a

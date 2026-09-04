@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * obs_hooks.c — weak, no-op capability tap points (open driver).
  *

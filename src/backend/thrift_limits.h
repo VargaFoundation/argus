@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef ARGUS_THRIFT_LIMITS_H
 #define ARGUS_THRIFT_LIMITS_H
 

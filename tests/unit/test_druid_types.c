@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Unit tests for Druid type mapping (src/backend/druid/druid_types.c).
  * Druid had zero test coverage; this exercises the pure type-name → ODBC

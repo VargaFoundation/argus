@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Closing a cursor keeps the statement: SQLFreeStmt(SQL_CLOSE) and
  * SQLCloseCursor drop the result set and nothing else, so the prepared

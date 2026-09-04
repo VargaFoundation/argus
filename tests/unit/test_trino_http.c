@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Which headers Trino requests carry, checked against a local listener:
  * the session's identity (bearer token, Basic credentials, X-Trino-*) goes

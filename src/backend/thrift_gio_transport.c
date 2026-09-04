@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "thrift_gio_transport.h"
 #include "argus/log.h"
 

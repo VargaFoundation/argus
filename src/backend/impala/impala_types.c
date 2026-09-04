@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * impala_types.c — Impala type mapping, delegating to the shared HiveServer2
  * family mapper (../hs2_types.c). Kept as a thin wrapper so the backend's

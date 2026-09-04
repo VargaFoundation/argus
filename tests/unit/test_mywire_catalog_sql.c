@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * The information_schema queries behind SQLTables/SQLColumns/SQLPrimaryKeys
  * on the MySQL wire backend: every application-supplied pattern goes

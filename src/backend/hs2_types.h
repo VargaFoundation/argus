@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * hs2_types.h — shared type mapping for the HiveServer2 protocol family
  * (Hive, Impala; also Spark Thrift Server and Flink SQL Gateway through the

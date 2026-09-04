@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "argus/backend.h"
 #include "argus/compat.h"
 #include "argus/log.h"

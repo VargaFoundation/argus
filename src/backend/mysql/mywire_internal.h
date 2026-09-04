@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef ARGUS_MYWIRE_INTERNAL_H
 #define ARGUS_MYWIRE_INTERNAL_H
 

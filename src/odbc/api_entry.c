@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * api_entry.c - ODBC API entry points for Argus driver.
  *

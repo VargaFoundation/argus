@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * test_thrift_sasl.c — SASL negotiation framing and the libthrift size
  * limits, driven through a ThriftMemoryBuffer instead of a server.

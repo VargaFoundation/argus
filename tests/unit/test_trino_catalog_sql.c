@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * The information_schema queries behind SQLTables/SQLColumns/... on Trino,
  * built from application-supplied search patterns: every pattern is a

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef ARGUS_KUDU_SQL_PARSER_H
 #define ARGUS_KUDU_SQL_PARSER_H
 

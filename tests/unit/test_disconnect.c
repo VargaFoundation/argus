@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * SQLDisconnect and the handles under a connection. ODBC has the driver free
  * the statements and the explicitly allocated descriptors of a connection

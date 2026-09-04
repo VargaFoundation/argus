@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Unit tests for UTF-8 / UTF-16 conversion and Unicode W functions
  */

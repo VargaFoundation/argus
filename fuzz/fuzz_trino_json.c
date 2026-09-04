@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * fuzz_trino_json.c — libFuzzer harness for the hand-written JSON scanner the
  * Trino backend uses on the fetch fast path.

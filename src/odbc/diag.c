@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "argus/error.h"
 #include "argus/handle.h"
 #include "argus/odbc_api.h"

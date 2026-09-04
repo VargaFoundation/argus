@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Unit tests for the Unicode (W) entry points in src/odbc/unicode.c that work
  * without a live backend: attribute get/set, diagnostics, driver-level

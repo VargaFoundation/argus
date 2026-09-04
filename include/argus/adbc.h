@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Minimal ADBC + Arrow C Data Interface subset for the Argus ADBC driver.
  *

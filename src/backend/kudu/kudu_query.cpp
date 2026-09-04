@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Kudu query execution: parse SQL → KuduScanner with predicates.
  * Uses the Kudu C++ client library with extern "C" wrappers.

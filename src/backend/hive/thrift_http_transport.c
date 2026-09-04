@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "thrift_http_transport.h"
 #include "../thrift_limits.h"
 #include "../curl_common.h"

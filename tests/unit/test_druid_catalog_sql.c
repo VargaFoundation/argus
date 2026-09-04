@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * The INFORMATION_SCHEMA queries behind SQLTables/SQLColumns/SQLSchemas on
  * Druid: every application-supplied pattern is a quoted literal.

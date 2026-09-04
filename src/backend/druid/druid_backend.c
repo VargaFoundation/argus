@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "druid_internal.h"
 #include "argus/caps.h"
 #include "argus/handle.h"

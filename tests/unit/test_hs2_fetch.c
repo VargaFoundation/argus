@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * test_hs2_fetch.c — HiveServer2 FetchResults handling shared by the Hive
  * and Impala backends, driven through a TCLIServiceClient whose input

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Unit tests for Pinot type mapping (src/backend/pinot/pinot_types.c).
  * Pinot's columnDataType strings → ODBC SQL types; no live broker needed.

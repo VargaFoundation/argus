@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef ARGUS_FLIGHTSQL_INTERNAL_H
 #define ARGUS_FLIGHTSQL_INTERNAL_H
 

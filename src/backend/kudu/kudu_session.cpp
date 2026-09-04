@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Kudu session management (connect/disconnect).
  * Uses the Kudu C++ client library with extern "C" wrappers.

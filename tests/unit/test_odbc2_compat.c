@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Unit tests for ODBC 2.x compatibility functions.
  */

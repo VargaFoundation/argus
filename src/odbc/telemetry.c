@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * telemetry.c - Anonymous, opt-in usage telemetry (see telemetry.h).
  *

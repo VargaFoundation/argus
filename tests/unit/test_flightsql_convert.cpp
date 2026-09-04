@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Unit test for the Flight SQL Arrow -> ODBC conversion layer.
  *

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * test_thread_safety.c — hammer the newly-locked ODBC surface from several
  * threads against SHARED handles. No backend needed: attribute get/set,

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * hs2_fetch.c — shared columnar TRowSet parsing (see hs2_fetch.h).
  *

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * log.c - Thread-safe logging system for Argus ODBC driver
  */

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * The libcurl baseline every HTTP client in the driver applies: only http
  * and https may be spoken, and credentials belong to one origin.

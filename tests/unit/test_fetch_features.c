@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Unit tests for fetch-related features: max_rows, row_status_ptr,
  * stubs (SQLSetPos, SQLBulkOperations, SQLSetScrollOptions, SQLDescribeParam).

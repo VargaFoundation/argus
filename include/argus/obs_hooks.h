@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * argus/obs_hooks.h — generic capability tap points (open driver).
  *

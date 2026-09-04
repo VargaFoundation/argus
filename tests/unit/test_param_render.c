@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Parameter rendering: what SQLBindParameter values become in the SQL the
  * backend receives, driven through SQLExecDirect against a backend that

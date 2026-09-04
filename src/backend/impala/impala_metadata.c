@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "impala_internal.h"
 #include "argus/compat.h"
 #include "../hs2_types.h"

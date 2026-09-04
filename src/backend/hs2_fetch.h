@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * hs2_fetch.h — shared columnar TRowSet parsing for the HiveServer2 family
  * (Hive, Impala; Spark Thrift Server and Flink SQL Gateway through the hive

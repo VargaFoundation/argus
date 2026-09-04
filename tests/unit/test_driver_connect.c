@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * SQLDriverConnect end to end against a registered fake backend: what the
  * driver hands back in OutConnectionString and to the observability taps

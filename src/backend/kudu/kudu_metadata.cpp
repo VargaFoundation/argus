@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Kudu catalog operations (metadata queries).
  * Implements get_tables, get_columns, get_schemas, get_catalogs, get_type_info

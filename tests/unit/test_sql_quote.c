@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * argus_sql_quote_literal / argus_sql_quote_ident: the one way a value
  * reaches query text (parameters and catalog search patterns alike).

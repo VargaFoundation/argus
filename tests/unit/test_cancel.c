@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * SQLCancel from another thread. The call being cancelled (a synchronous
  * SQLExecDirect or SQLFetch, or the asynchronous worker) holds the statement

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "mywire_internal.h"
 
 /* ── Map a MySQL field type to an ODBC SQL type ──────────────── */

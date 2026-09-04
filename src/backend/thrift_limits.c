@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "thrift_limits.h"
 #include <thrift/c_glib/transport/thrift_framed_transport.h>
 #include <thrift/c_glib/transport/thrift_buffered_transport.h>

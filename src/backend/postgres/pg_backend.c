@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #include "pg_common.h"
 #include "argus/caps.h"
 #include <string.h>

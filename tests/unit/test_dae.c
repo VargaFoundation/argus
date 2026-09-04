@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Data-at-execution: SQLExecute/SQLExecDirect answer SQL_NEED_DATA, the
  * application feeds each parameter through SQLParamData/SQLPutData, and the

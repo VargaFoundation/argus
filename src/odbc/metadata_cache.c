@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Metadata cache for SQLTables/SQLColumns results.
  *
