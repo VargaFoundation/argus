@@ -156,6 +156,22 @@ int trino_parse_columns(JsonNode *columns_node,
                         int *num_cols);
 
 /* Parse data rows from Trino JSON response into row cache */
+/*
+ * The hand-written scanner over the `data` array of a Trino response, and
+ * the member locator that finds it. These consume network bytes directly --
+ * no json-glib DOM in the way -- so they are the one part of this backend a
+ * fuzzer has to reach; fuzz/fuzz_trino_json.c drives them. Not exported from
+ * the driver (visibility is hidden), just visible across the object files.
+ *
+ * trino_sj_scan_data returns 0 when it filled the cache, -1 when the caller
+ * should fall back to the DOM path. trino_sj_find_member returns 0 (found,
+ * with vs and ve set), 1 (absent) or -1 (malformed).
+ */
+int trino_sj_scan_data(const char *ds, const char *de,
+                       argus_row_cache_t *cache, int num_cols);
+int trino_sj_find_member(const char *text, size_t len, const char *key,
+                         const char **vs, const char **ve);
+
 int trino_parse_data(JsonNode *data_node,
                      argus_row_cache_t *cache,
                      int num_cols);

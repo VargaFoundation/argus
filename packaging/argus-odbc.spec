@@ -39,13 +39,21 @@ fi
 ldconfig
 
 %preun
-if command -v odbcinst >/dev/null 2>&1; then
-    odbcinst -u -d -n "Argus" 2>/dev/null || true
+# $1 is the number of this package that will remain: 0 on an erase, 1 on an
+# upgrade. RPM runs the OLD %preun after the NEW %post, so without this test
+# an upgrade unregistered the driver the new package had just registered,
+# and the ODBC driver manager stopped finding it.
+if [ "$1" = 0 ]; then
+    if command -v odbcinst >/dev/null 2>&1; then
+        odbcinst -u -d -n "Argus" 2>/dev/null || true
+    fi
 fi
 
 %postun
 ldconfig
 
 %files
+%license LICENSE
+%doc NOTICE
 %{_libdir}/libargus_odbc.so
 %{_includedir}/argus/

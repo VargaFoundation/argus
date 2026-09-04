@@ -28,6 +28,21 @@ mkdir -p "$PKG_DIR/usr/include/argus"
 cp "$BUILD_DIR/src/libargus_odbc.so" "$PKG_DIR/usr/lib/x86_64-linux-gnu/"
 cp "$PROJECT_DIR/include/argus/"*.h "$PKG_DIR/usr/include/argus/"
 
+# Debian policy: every package carries its copyright file, and the LGPL
+# libraries the driver links have to be named there, not only in the source
+# tree. NOTICE is what says which they are.
+mkdir -p "$PKG_DIR/usr/share/doc/argus-odbc"
+{
+    printf 'Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n'
+    printf 'Upstream-Name: argus-odbc\n'
+    printf 'Source: https://github.com/VargaFoundation/argus\n\n'
+    printf 'Files: *\nCopyright: 2025-2026 Varga Foundation\nLicense: Apache-2.0\n\n'
+    sed 's/^$/./; s/^/ /' "$PROJECT_DIR/LICENSE"
+    printf '\n'
+} > "$PKG_DIR/usr/share/doc/argus-odbc/copyright"
+cp "$PROJECT_DIR/NOTICE" "$PKG_DIR/usr/share/doc/argus-odbc/NOTICE"
+gzip -9n "$PKG_DIR/usr/share/doc/argus-odbc/NOTICE"
+
 # Compute the runtime library dependencies from the built .so so the package
 # declares exactly what it needs (thrift_c_glib, mariadb, krb5, … for the
 # backends that were compiled in). dpkg-shlibdeps also handles the t64 library
@@ -91,10 +106,18 @@ cat > "$PKG_DIR/DEBIAN/prerm" <<'PRERM'
 #!/bin/bash
 set -e
 
-if command -v odbcinst >/dev/null 2>&1; then
-    odbcinst -u -d -n "Argus" 2>/dev/null || true
-    echo "Argus ODBC driver unregistered."
-fi
+# dpkg calls prerm with "upgrade" as well as "remove". Unregistering on an
+# upgrade takes the driver out of odbcinst.ini between the old package
+# leaving and the new one's postinst putting it back; only a real removal
+# should unregister it.
+case "$1" in
+remove|deconfigure)
+    if command -v odbcinst >/dev/null 2>&1; then
+        odbcinst -u -d -n "Argus" 2>/dev/null || true
+        echo "Argus ODBC driver unregistered."
+    fi
+    ;;
+esac
 PRERM
 chmod 755 "$PKG_DIR/DEBIAN/prerm"
 

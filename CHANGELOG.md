@@ -241,6 +241,38 @@ All notable changes to the Argus ODBC Driver project.
   in a 32-character buffer came back as 15 characters. Chunks also no longer
   end on half a surrogate pair.
 
+### Packaging, licensing and CI
+- **An RPM upgrade unregistered the driver.** `%preun` was not guarded by
+  `$1`, and RPM runs the old `%preun` *after* the new `%post`, so upgrading
+  removed the ODBC registration the new package had just written and the
+  driver manager stopped finding the driver. The Debian `prerm` had the same
+  shape and is now limited to a real removal.
+- **Neither the packages nor the Windows installer carried a licence.** The
+  driver links GLib, json-glib, MariaDB Connector/C and unixODBC, all
+  LGPL, and section 4 of that licence requires the recipient to be told.
+  There is a `NOTICE` naming every third-party component and its terms; the
+  RPM installs it with `%license`/`%doc`, the `.deb` carries a
+  policy-shaped `copyright` plus the notice, the NSIS installer shows the
+  Apache-2.0 text before installing and puts both files next to the DLLs,
+  and the source tarballs include them.
+- **The Homebrew formula built no Hive or Impala**, which is what most
+  people install this driver for: Homebrew's `thrift` is the compiler and
+  the C++ runtime only. The formula builds the portable c_glib subset the
+  way the macOS CI job does — a static archive, so nothing of it survives
+  into a runtime path — and its `test do` block checks both backends are in
+  the built driver.
+- **Nothing watched the workflow dependencies**, so an action pinned to a
+  floating tag could change under the pipeline that signs and publishes the
+  packages. There is a `dependabot.yml`.
+- **A new fuzz harness over the Trino result-page scanner.** That scanner
+  walks bytes straight off the socket with pointer arithmetic and no JSON
+  library in the way, which makes it the one parser in the backend a fuzzer
+  has to reach; it runs in CI beside the escape and connection-string ones.
+- **`DllMain` did not pin the module.** The driver runs threads of its own
+  and the detach path cannot wait for them (it holds the loader lock), so a
+  host calling `FreeLibrary` while one was running unmapped the code under
+  it. The module is pinned at attach.
+
 ## [0.6.1] — 2026-09-03
 
 A corrective release. An audit of the driver as v0.6.0 shipped it found that

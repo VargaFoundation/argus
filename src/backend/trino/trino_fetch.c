@@ -322,7 +322,7 @@ static const char *sj_value_to_cell(const char *p, const char *e,
 
 /* Scan a `data` array [ds,de) (array-of-arrays) straight into the row cache.
  * Returns 0 on success, -1 to signal the caller should fall back to json-glib. */
-static int sj_scan_data(const char *ds, const char *de,
+int trino_sj_scan_data(const char *ds, const char *de,
                         argus_row_cache_t *cache, int num_cols)
 {
     const char *p = sj_ws(ds, de);
@@ -387,7 +387,7 @@ fail:
 
 /* Locate the value bounds of a named member in the top-level object. Returns 0
  * (found, with vs and ve set), 1 (absent), or -1 (malformed). */
-static int sj_find_member(const char *text, size_t len, const char *key,
+int trino_sj_find_member(const char *text, size_t len, const char *key,
                           const char **vs, const char **ve)
 {
     const char *p = text, *e = text + len;
@@ -493,8 +493,8 @@ int trino_fetch_results(argus_backend_conn_t raw_conn,
         if (!getenv("ARGUS_TRINO_NOFASTJSON")) {
             size_t rlen = strlen(resp.data);
             const char *ds, *de, *es, *ee;
-            int has_err = (sj_find_member(resp.data, rlen, "error", &es, &ee) == 0);
-            if (!has_err && sj_find_member(resp.data, rlen, "data", &ds, &de) == 0 &&
+            int has_err = (trino_sj_find_member(resp.data, rlen, "error", &es, &ee) == 0);
+            if (!has_err && trino_sj_find_member(resp.data, rlen, "data", &ds, &de) == 0 &&
                 sj_ws(ds, resp.data + rlen) < resp.data + rlen &&
                 *sj_ws(ds, resp.data + rlen) == '[') {
                 size_t head = (size_t)(ds - resp.data);
@@ -531,7 +531,7 @@ int trino_fetch_results(argus_backend_conn_t raw_conn,
                             op->finished = true;
 
                         int ncols = op->num_cols > 0 ? op->num_cols : 1;
-                        int sr = sj_scan_data(ds, de, cache, ncols);
+                        int sr = trino_sj_scan_data(ds, de, cache, ncols);
                         if (sr == 0) {
                             if (!op->next_uri) cache->exhausted = true;
                             trino_decode_binary(op, cache);

@@ -71,11 +71,32 @@ static void argus_library_unload(bool may_wait)
 #ifdef _WIN32
 #include <windows.h>
 
+BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved);
+
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
     (void)hinstDLL;
 
     if (fdwReason == DLL_PROCESS_ATTACH) {
+        /*
+         * Pin the module for the life of the process. The driver runs threads
+         * of its own -- the telemetry sender, whatever an observability tap
+         * started -- and the DLL_PROCESS_DETACH path cannot wait for them,
+         * because it holds the loader lock and a thread cannot exit while it
+         * is held. Without a pin, a host that calls FreeLibrary while one of
+         * those threads is between instructions unmaps the code under it.
+         * GET_MODULE_HANDLE_EX_FLAG_PIN adds a reference that is never
+         * released, so FreeLibrary stops at the driver and the threads keep
+         * running on mapped code; the process exit path frees it.
+         *
+         * The cost is that the DLL stays mapped after the last FreeLibrary,
+         * which is what the driver already assumes -- argus_library_unload
+         * declines to tear anything down while a thread is still running.
+         */
+        HMODULE pinned = NULL;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN |
+                           GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                           (LPCWSTR)(void *)&DllMain, &pinned);
         argus_library_load();
     } else if (fdwReason == DLL_PROCESS_DETACH) {
         /* A non-NULL lpvReserved means the process is exiting: every other

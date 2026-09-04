@@ -1,0 +1,64 @@
+Argus ODBC Driver
+Copyright 2025-2026 Varga Foundation
+
+This product includes software developed at the Varga Foundation
+(https://github.com/VargaFoundation/argus), licensed under the Apache
+License, Version 2.0. See the LICENSE file for the terms.
+
+--------------------------------------------------------------------------
+Third-party components
+--------------------------------------------------------------------------
+
+The driver is linked against the libraries below. Which of them a given
+build actually contains depends on the backends it was configured with;
+`strings <driver> | grep argus-build` names them for a released binary.
+
+Several are covered by the GNU Lesser General Public License. The driver
+links them dynamically, so a recipient may replace them with a modified
+version, as section 4 of the LGPL requires. Their sources are available
+from the projects named below and from the distribution that packaged
+them.
+
+  GLib, GObject, GIO                      LGPL-2.1-or-later
+  https://gitlab.gnome.org/GNOME/glib     Object model, main loop, sockets
+
+  json-glib                               LGPL-2.1-or-later
+  https://gitlab.gnome.org/GNOME/json-glib
+
+  Apache Thrift (C GLib runtime)          Apache-2.0
+  https://thrift.apache.org               HiveServer2 / Impala protocol
+
+  libcurl                                 curl licence (MIT/X derivative)
+  https://curl.se                         Trino, Phoenix, Pinot, Druid,
+                                          BigQuery, Thrift-over-HTTP
+
+  unixODBC                                LGPL-2.1-or-later / GPL-2.0
+  https://www.unixodbc.org                Driver manager headers (sql.h,
+                                          sqlext.h, sqltypes.h)
+
+  MariaDB Connector/C                     LGPL-2.1-or-later
+  https://mariadb.com/kb/en/mariadb-connector-c/
+                                          MySQL-wire backend (StarRocks,
+                                          Doris, ClickHouse)
+
+  libpq (PostgreSQL client library)       PostgreSQL Licence
+  https://www.postgresql.org              PostgreSQL, Greenplum, Cloudberry
+
+  MIT Kerberos (krb5, GSSAPI)             MIT
+  https://web.mit.edu/kerberos/           Kerberos and SPNEGO authentication
+
+  OpenSSL                                 Apache-2.0
+  https://www.openssl.org                 Service-account signing (BigQuery),
+                                          PKCE
+
+  Apache Arrow, Arrow Flight SQL          Apache-2.0
+  https://arrow.apache.org                Arrow Flight SQL backend
+
+  Apache Kudu C++ client                  Apache-2.0
+  https://kudu.apache.org                 Kudu backend
+
+  cmocka (tests only, not distributed)    Apache-2.0
+  https://cmocka.org
+
+The Thrift IDL files under thrift/ are from the Apache Hive and Apache
+Impala projects, Apache-2.0.

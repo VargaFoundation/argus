@@ -21,6 +21,10 @@ RequestExecutionLevel admin
 ; ── Interface ────────────────────────────────────────────────────
 !define MUI_ABORTWARNING
 !insertmacro MUI_PAGE_WELCOME
+; The installer shipped neither the Apache-2.0 text nor the NOTICE naming the
+; LGPL libraries the driver links, which section 4 of the LGPL requires a
+; recipient to be given. Both are shown here and installed alongside the DLLs.
+!insertmacro MUI_PAGE_LICENSE "LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_TEXT "Argus ODBC Driver has been installed.$\r$\n$\r$\nCreate a DSN from PowerShell (the driver setup has no dialog):$\r$\nAdd-OdbcDsn -Name MyTrino -DriverName $\"Argus ODBC Driver$\" -Platform 64-bit -SetPropertyValue @($\"BACKEND=trino$\", $\"HOST=myhost$\", $\"PORT=8443$\")$\r$\n$\r$\nDSN-less connection strings (DRIVER={Argus ODBC Driver};...) also work."
@@ -46,6 +50,10 @@ Section "Argus ODBC Driver" SecDriver
     ; Copy driver DLL and all bundled dependencies
     File "argus_odbc.dll"
     File /nonfatal "*.dll"
+
+    ; Licence and third-party notices, next to the DLLs they cover
+    File "LICENSE"
+    File "NOTICE"
 
     ; GIO TLS modules (glib-networking), loaded by the driver from
     ; gio-modules\ for TLS over binary Thrift (Hive/Impala)
@@ -119,6 +127,8 @@ Section "Uninstall"
     Delete "$INSTDIR\gio-modules\*.dll"
     RMDir "$INSTDIR\gio-modules"
     Delete "$INSTDIR\*.dll"
+    Delete "$INSTDIR\LICENSE"
+    Delete "$INSTDIR\NOTICE"
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"
 

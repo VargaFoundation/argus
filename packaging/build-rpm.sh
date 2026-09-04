@@ -27,6 +27,8 @@ mkdir -p "${RPMSRC_DIR}/${TARBALL_DIR}/lib"
 mkdir -p "${RPMSRC_DIR}/${TARBALL_DIR}/include/argus"
 cp "$BUILD_DIR/src/libargus_odbc.so" "${RPMSRC_DIR}/${TARBALL_DIR}/lib/"
 cp "$PROJECT_DIR/include/argus/"*.h "${RPMSRC_DIR}/${TARBALL_DIR}/include/argus/"
+# %license / %doc need these inside the source tree rpmbuild unpacks.
+cp "$PROJECT_DIR/LICENSE" "$PROJECT_DIR/NOTICE" "${RPMSRC_DIR}/${TARBALL_DIR}/"
 tar -czf "$RPMBUILD_DIR/SOURCES/argus-odbc-${VERSION}.tar.gz" -C "$RPMSRC_DIR" "$TARBALL_DIR"
 rm -rf "$RPMSRC_DIR"
 

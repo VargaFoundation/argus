@@ -75,7 +75,7 @@ jobs:
           cp include/argus/*.h staging/argus-odbc/include/argus/
           cp scripts/install_dsn.sh staging/argus-odbc/
           chmod +x staging/argus-odbc/install_dsn.sh
-          cp LICENSE staging/argus-odbc/
+          cp LICENSE NOTICE staging/argus-odbc/
           cp README.md staging/argus-odbc/
           tar -czf argus-odbc-${VERSION}-linux-x64.tar.gz -C staging argus-odbc
 
@@ -244,7 +244,7 @@ jobs:
           cp include/argus/*.h staging/argus-odbc/include/argus/
           cp scripts/install_dsn_macos.sh staging/argus-odbc/
           chmod +x staging/argus-odbc/install_dsn_macos.sh
-          cp LICENSE staging/argus-odbc/
+          cp LICENSE NOTICE staging/argus-odbc/
           cp README.md staging/argus-odbc/
           tar -czf argus-odbc-${VERSION}-macos-${ARCH}.tar.gz -C staging argus-odbc
 
@@ -396,6 +396,9 @@ jobs:
           bash scripts/bundle_windows_dlls.sh "$MINGW_PREFIX/bin" \
               installer/staging installer/staging/argus_odbc.dll \
               installer/staging/gio-modules/libgioopenssl.dll
+          # The installer shows and installs these; makensis reads them from
+          # the staging directory it is run in.
+          cp LICENSE NOTICE installer/staging/
 
       - name: Sign driver DLL
         if: env.SIGN_ENABLED != ''

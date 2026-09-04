@@ -271,6 +271,9 @@ jobs:
           bash scripts/bundle_windows_dlls.sh "$MINGW_PREFIX/bin" \
               installer/staging installer/staging/argus_odbc.dll \
               installer/staging/gio-modules/libgioopenssl.dll
+          # The installer shows and installs these; makensis reads them from
+          # the staging directory it is run in.
+          cp LICENSE NOTICE installer/staging/
           ls -la installer/staging/
 
       - name: Sign driver DLL
@@ -562,6 +565,12 @@ jobs:
 
       - name: Fuzz connection-string parser
         run: ./build-fuzz/fuzz/fuzz_connstr fuzz/corpus/connstr -max_total_time=60 -print_final_stats=1
+
+      # The Trino fast path scans a result page straight off the socket with
+      # pointer arithmetic and no JSON library in the way, so everything it
+      # reads comes from whatever answered on the coordinator's port.
+      - name: Fuzz Trino result-page scanner
+        run: ./build-fuzz/fuzz/fuzz_trino_json fuzz/corpus/trino_json -max_total_time=90 -print_final_stats=1
 
       - name: Upload crash artifacts
         if: failure()

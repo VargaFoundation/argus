@@ -1,0 +1,40 @@
+#
+# Nothing was watching the workflow dependencies, so a GitHub Action pinned to
+# a floating major tag (uses: foo/bar@v4) could change under the release
+# pipeline without anyone deciding to take it — the pipeline that signs the
+# packages and publishes them. Dependabot opens a pull request instead, which
+# is the point at which the change becomes a decision.
+#
+# It also watches the two BI connectors' package manifests, which pull from
+# npm and NuGet during their builds.
+#
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "ci"
+    groups:
+      # One pull request for the routine bumps; anything major still comes
+      # on its own, because those are the ones worth reading.
+      actions-minor:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: docker
+    directory: /tests/integration
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "tests"

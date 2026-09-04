@@ -15,6 +15,9 @@ class ArgusOdbc < Formula
 
   depends_on "cmake" => :build
   depends_on "pkg-config" => :build
+  # The compiler only; Homebrew's thrift ships no c_glib runtime, so the
+  # portable subset the driver needs is built from source below.
+  depends_on "thrift" => :build
   depends_on "curl"
   depends_on "glib"
   depends_on "json-glib"
@@ -28,13 +31,24 @@ class ArgusOdbc < Formula
     ENV.prepend_path "PKG_CONFIG_PATH", Formula["libpq"].opt_lib/"pkgconfig"
     ENV.prepend_path "PKG_CONFIG_PATH", Formula["mariadb-connector-c"].opt_lib/"pkgconfig"
 
+    # Homebrew's thrift is the compiler and the C++ runtime only -- it does
+    # not build c_glib -- so Hive and Impala used to be left out of every
+    # bottle, which is the one thing most people install this driver for.
+    # The portable subset is built here the way the CI macOS job does it. It
+    # is a static archive, so nothing of it survives into a runtime path:
+    # the driver links it in and the build prefix goes away with buildpath.
+    thrift_prefix = buildpath/"thrift-c-glib-prefix"
+    system "bash", "scripts/build-thrift-c-glib.sh", thrift_prefix, "0.23.0"
+    ENV.prepend_path "PKG_CONFIG_PATH", thrift_prefix/"lib/pkgconfig"
+
     # Every backend this formula declares a dependency for is required, so a
     # probe that stops finding its library fails the build instead of
-    # producing a bottle that quietly lacks the backend. (No thrift here, so
-    # Hive/Impala are not part of the Homebrew build.)
+    # producing a bottle that quietly lacks the backend.
     system "cmake", "-B", "build",
            "-DCMAKE_BUILD_TYPE=Release",
            "-DBUILD_TESTING=OFF",
+           "-DARGUS_WITH_HIVE=ON",
+           "-DARGUS_WITH_IMPALA=ON",
            "-DARGUS_WITH_TRINO=ON",
            "-DARGUS_WITH_PHOENIX=ON",
            "-DARGUS_WITH_PINOT=ON",
@@ -71,7 +85,8 @@ class ArgusOdbc < Formula
     assert_match "_SQLDriverConnect", symbols
     manifest = shell_output("strings -a #{lib}/libargus_odbc.dylib")[/^argus-build .*$/]
     refute_nil manifest, "no argus-build line in the driver"
-    %w[trino phoenix pinot druid bigquery mysql postgres greenplum cloudberry].each do |backend|
+    %w[hive impala trino phoenix pinot druid bigquery mysql postgres
+       greenplum cloudberry].each do |backend|
       assert_match(/ #{backend}( |$)/, manifest)
     end
   end
