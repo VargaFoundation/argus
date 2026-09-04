@@ -238,6 +238,26 @@ static void test_endpoint_must_be_https_or_loopback(void **state)
     assert_false(argus_telemetry_active(&dbc));
     argus_telemetry_shutdown();
 
+    /* Nor is a host that merely starts with 127. -- scanning to the first
+     * ':' would have taken "127.evil.example" for an address. */
+    g_setenv("ARGUS_TELEMETRY_ENDPOINT", "http://127.evil.example/v1", TRUE);
+    reinit("1");
+    assert_false(argus_telemetry_active(&dbc));
+    argus_telemetry_shutdown();
+
+    /* The bracketed IPv6 loopback: scanning to the first ':' stops inside
+     * the brackets, so this used to be refused. */
+    g_setenv("ARGUS_TELEMETRY_ENDPOINT", "http://[::1]:9999/v1", TRUE);
+    reinit("1");
+    assert_true(argus_telemetry_active(&dbc));
+    argus_telemetry_shutdown();
+
+    /* Any address in 127/8. */
+    g_setenv("ARGUS_TELEMETRY_ENDPOINT", "http://127.10.0.5:9999/v1", TRUE);
+    reinit("1");
+    assert_true(argus_telemetry_active(&dbc));
+    argus_telemetry_shutdown();
+
     g_unsetenv("ARGUS_TELEMETRY_ENDPOINT");
 }
 

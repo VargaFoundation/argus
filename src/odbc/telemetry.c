@@ -392,17 +392,39 @@ static void enqueue(char *event_json)
  * https, or a loopback host. Nothing else: an http:// endpoint on a real
  * network would put the event payload in clear on the wire.
  */
+/*
+ * Is the host of an http:// URL a loopback address? `host` points just past
+ * "http://".
+ *
+ * The bracketed IPv6 form needs its own branch: scanning to the first ':'
+ * stops inside "[::1]" and never sees the address. And "127." has to be
+ * followed by digits and dots only, or "127.evil.example" reads as loopback.
+ */
+static bool host_is_loopback(const char *host)
+{
+    if (*host == '[') {
+        const char *close = strchr(host, ']');
+        if (!close) return false;
+        size_t n = (size_t)(close - host) + 1;
+        return n == 5 && strncmp(host, "[::1]", 5) == 0;
+    }
+
+    size_t n = strcspn(host, ":/?#");
+    if (n == 9 && g_ascii_strncasecmp(host, "localhost", 9) == 0) return true;
+    if (n > 4 && strncmp(host, "127.", 4) == 0) {
+        for (size_t i = 4; i < n; i++)
+            if (!g_ascii_isdigit(host[i]) && host[i] != '.') return false;
+        return true;
+    }
+    return false;
+}
+
 static bool endpoint_is_secure(const char *url)
 {
+    if (!url) return false;
     if (g_ascii_strncasecmp(url, "https://", 8) == 0) return true;
     if (g_ascii_strncasecmp(url, "http://", 7) != 0)  return false;
-
-    const char *host = url + 7;
-    size_t n = strcspn(host, ":/?#");
-    return (n == 9 && g_ascii_strncasecmp(host, "localhost", 9) == 0) ||
-           (n == 3 && strncmp(host, "::1", 3) == 0) ||
-           (n == 5 && strncmp(host, "[::1]", 5) == 0) ||
-           (n >= 8 && strncmp(host, "127.", 4) == 0);
+    return host_is_loopback(url + 7);
 }
 
 void argus_telemetry_init(void)
