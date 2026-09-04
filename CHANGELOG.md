@@ -241,6 +241,19 @@ All notable changes to the Argus ODBC Driver project.
   in a 32-character buffer came back as 15 characters. Chunks also no longer
   end on half a surrogate pair.
 
+### Fixed: a NULL with no indicator was reported as success
+- **`SQLGetData` and a bound column returned `SQL_SUCCESS` for a NULL when
+  the application had supplied no indicator**, leaving whatever the buffer
+  already held to be read as the value — a zero, a blank string,
+  1970-01-01. There was no way for the caller to find out. ODBC calls this
+  `22002`, and so does the driver now. Applications that bind or fetch
+  without an indicator and then meet a NULL will see an error where they
+  used to see stale buffer contents; that is the point.
+- A conversion matrix now drives a NULL, a `DECIMAL` too wide for a double,
+  a timestamp carrying a zone, bytes with an embedded NUL and multi-byte and
+  astral characters into every C type the driver accepts. The `22002` above
+  is what it found.
+
 ### Fixed: Kudu put the whole row in a cell
 - **`KuduScanBatch::RowPtr::ToString()` renders the entire row** —
   `(int32 key=1, string value=abc)` — and it was what every cell of a

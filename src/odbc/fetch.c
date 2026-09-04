@@ -868,8 +868,17 @@ static SQLRETURN convert_cell_to_target(
     argus_diag_t *diag)
 {
     if (cell->is_null) {
-        if (str_len_or_ind)
-            *str_len_or_ind = SQL_NULL_DATA;
+        /*
+         * With no indicator there is nowhere to say "this is NULL", and the
+         * application would read whatever its buffer already held as though
+         * it were the value -- a zero, a blank, 1970-01-01. ODBC calls that
+         * 22002 rather than success, so the caller finds out.
+         */
+        if (!str_len_or_ind)
+            return argus_set_error(diag, "22002",
+                                   "[Argus] Indicator variable required but "
+                                   "not supplied for a NULL value", 0);
+        *str_len_or_ind = SQL_NULL_DATA;
         return SQL_SUCCESS;
     }
 

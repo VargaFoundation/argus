@@ -877,9 +877,216 @@ static void test_cache_mark_binary_raw(void **state)
     argus_row_cache_free(&cache);
 }
 
+
+/* ── The conversion matrix ───────────────────────────────────── */
+
+/* One fetched row whose single cell is NULL. */
+static argus_stmt_t *stmt_with_null(argus_dbc_t *dbc)
+{
+    argus_stmt_t *stmt = stmt_with_text(dbc, "");
+    argus_cell_t *cell = &stmt->row_cache.rows[0].cells[0];
+    free(cell->data);
+    cell->data = NULL;
+    cell->data_len = 0;
+    cell->is_null = true;
+    return stmt;
+}
+
+/* Every C type a cell can be asked for. */
+static const SQLSMALLINT k_c_types[] = {
+    SQL_C_CHAR, SQL_C_WCHAR, SQL_C_BINARY,
+    SQL_C_STINYINT, SQL_C_UTINYINT, SQL_C_SSHORT, SQL_C_USHORT,
+    SQL_C_SLONG, SQL_C_ULONG, SQL_C_SBIGINT, SQL_C_UBIGINT,
+    SQL_C_BIT, SQL_C_FLOAT, SQL_C_DOUBLE, SQL_C_NUMERIC,
+    SQL_C_TYPE_DATE, SQL_C_TYPE_TIME, SQL_C_TYPE_TIMESTAMP,
+};
+
+/*
+ * A NULL is a NULL whatever it is asked for. Nothing tested this, and the
+ * failure mode is the worst kind: a target that quietly receives a zero, a
+ * blank string or 1970-01-01 instead of "no value" produces a report whose
+ * totals are wrong and whose author has no way to tell.
+ */
+static void test_null_reaches_every_target(void **state)
+{
+    (void)state;
+    argus_dbc_t *dbc = create_test_dbc();
+
+    for (size_t i = 0; i < sizeof(k_c_types) / sizeof(k_c_types[0]); i++) {
+        argus_stmt_t *stmt = stmt_with_null(dbc);
+
+        /* With an indicator: SQL_NULL_DATA, and the buffer is not written. */
+        unsigned char buf[64];
+        memset(buf, 0xAB, sizeof(buf));
+        SQLLEN ind = 12345;
+        SQLRETURN r = SQLGetData((SQLHSTMT)stmt, 1, k_c_types[i],
+                                 buf, sizeof(buf), &ind);
+        if (r != SQL_SUCCESS)
+            fail_msg("C type %d: SQLGetData returned %d", k_c_types[i], r);
+        if (ind != SQL_NULL_DATA)
+            fail_msg("C type %d: indicator is %ld, expected SQL_NULL_DATA",
+                     k_c_types[i], (long)ind);
+        assert_int_equal(buf[0], 0xAB);
+        argus_free_stmt(stmt);
+
+        /* Without one: 22002, because there is nowhere to say "it is NULL". */
+        stmt = stmt_with_null(dbc);
+        r = SQLGetData((SQLHSTMT)stmt, 1, k_c_types[i], buf, sizeof(buf),
+                       NULL);
+        assert_int_equal(r, SQL_ERROR);
+        check_state(stmt, "22002");
+        argus_free_stmt(stmt);
+    }
+
+    free_test_dbc(dbc);
+}
+
+/* A DECIMAL keeps its digits and its scale on the way out, including the
+ * ones a double could not hold. */
+static void test_decimal_keeps_its_digits(void **state)
+{
+    (void)state;
+    argus_dbc_t *dbc = create_test_dbc();
+
+    /* More precision than a double has: the text and SQL_C_NUMERIC must
+     * carry it, even though SQL_C_DOUBLE cannot. */
+    const char *big = "123456789012345678901234567890.12345678";
+    argus_stmt_t *stmt = stmt_with_text(dbc, big);
+    char text[64];
+    SQLLEN ind = 0;
+    assert_int_equal(SQLGetData((SQLHSTMT)stmt, 1, SQL_C_CHAR, text,
+                                sizeof(text), &ind), SQL_SUCCESS);
+    assert_string_equal(text, big);
+    argus_free_stmt(stmt);
+
+    /* Scale is the value's own, not the column's default. */
+    stmt = stmt_with_text(dbc, "-12.3400");
+    SQL_NUMERIC_STRUCT num;
+    memset(&num, 0, sizeof(num));
+    assert_int_equal(SQLGetData((SQLHSTMT)stmt, 1, SQL_C_NUMERIC, &num,
+                                sizeof(num), &ind), SQL_SUCCESS);
+    assert_int_equal(num.sign, 0);          /* 0 is negative in ODBC */
+    assert_int_equal(num.scale, 4);
+    argus_free_stmt(stmt);
+
+    free_test_dbc(dbc);
+}
+
+/*
+ * A timestamp that carries a zone. The wall-clock value is what the engine
+ * printed; the suffix must not be parsed as part of the seconds, and must
+ * not make the whole value unreadable either.
+ */
+static void test_zoned_timestamp_targets(void **state)
+{
+    (void)state;
+    argus_dbc_t *dbc = create_test_dbc();
+
+    const char *zoned[] = {
+        "2026-03-01 12:34:56Z",
+        "2026-03-01 12:34:56+05:00",
+        "2026-03-01 12:34:56.789 Europe/Paris",
+    };
+    for (size_t i = 0; i < sizeof(zoned) / sizeof(zoned[0]); i++) {
+        argus_stmt_t *stmt = stmt_with_text(dbc, zoned[i]);
+        SQL_TIMESTAMP_STRUCT ts;
+        memset(&ts, 0, sizeof(ts));
+        SQLLEN ind = 0;
+        assert_true(SQL_SUCCEEDED(SQLGetData((SQLHSTMT)stmt, 1,
+                                             SQL_C_TYPE_TIMESTAMP, &ts,
+                                             sizeof(ts), &ind)));
+        assert_int_equal(ts.year, 2026);
+        assert_int_equal(ts.month, 3);
+        assert_int_equal(ts.day, 1);
+        assert_int_equal(ts.hour, 12);
+        assert_int_equal(ts.minute, 34);
+        assert_int_equal(ts.second, 56);
+        argus_free_stmt(stmt);
+
+        /* The date half of the same value. */
+        stmt = stmt_with_text(dbc, zoned[i]);
+        SQL_DATE_STRUCT d;
+        memset(&d, 0, sizeof(d));
+        assert_true(SQL_SUCCEEDED(SQLGetData((SQLHSTMT)stmt, 1,
+                                             SQL_C_TYPE_DATE, &d, sizeof(d),
+                                             &ind)));
+        assert_int_equal(d.year, 2026);
+        assert_int_equal(d.month, 3);
+        assert_int_equal(d.day, 1);
+        argus_free_stmt(stmt);
+    }
+
+    free_test_dbc(dbc);
+}
+
+/* Bytes with a NUL in the middle survive to SQL_C_BINARY at full length,
+ * and reach a character target as their hex. */
+static void test_binary_with_embedded_nul(void **state)
+{
+    (void)state;
+    argus_dbc_t *dbc = create_test_dbc();
+
+    const char bytes[] = { 'a', '\0', 'b', '\xff' };
+    argus_stmt_t *stmt = stmt_with_cell(dbc, bytes, sizeof(bytes), true);
+    unsigned char raw[16];
+    SQLLEN ind = 0;
+    assert_int_equal(SQLGetData((SQLHSTMT)stmt, 1, SQL_C_BINARY, raw,
+                                sizeof(raw), &ind), SQL_SUCCESS);
+    assert_int_equal(ind, 4);
+    assert_memory_equal(raw, bytes, 4);
+    argus_free_stmt(stmt);
+
+    stmt = stmt_with_cell(dbc, bytes, sizeof(bytes), true);
+    char text[32];
+    assert_int_equal(SQLGetData((SQLHSTMT)stmt, 1, SQL_C_CHAR, text,
+                                sizeof(text), &ind), SQL_SUCCESS);
+    assert_string_equal(text, "610062FF");
+    argus_free_stmt(stmt);
+
+    free_test_dbc(dbc);
+}
+
+/* Multi-byte and astral characters, to both character targets. */
+static void test_unicode_targets(void **state)
+{
+    (void)state;
+    argus_dbc_t *dbc = create_test_dbc();
+
+    /* "é€𝄞": two-, three- and four-byte UTF-8. */
+    const char *u = "\xc3\xa9\xe2\x82\xac\xf0\x9d\x84\x9e";
+    argus_stmt_t *stmt = stmt_with_text(dbc, u);
+    char text[32];
+    SQLLEN ind = 0;
+    assert_int_equal(SQLGetData((SQLHSTMT)stmt, 1, SQL_C_CHAR, text,
+                                sizeof(text), &ind), SQL_SUCCESS);
+    assert_string_equal(text, u);
+    assert_int_equal(ind, 9);
+    argus_free_stmt(stmt);
+
+    stmt = stmt_with_text(dbc, u);
+    SQLWCHAR w[32];
+    memset(w, 0, sizeof(w));
+    assert_int_equal(SQLGetData((SQLHSTMT)stmt, 1, SQL_C_WCHAR, w,
+                                sizeof(w), &ind), SQL_SUCCESS);
+    /* é, €, then the surrogate pair for U+1D11E. */
+    assert_int_equal(w[0], 0x00E9);
+    assert_int_equal(w[1], 0x20AC);
+    assert_int_equal(w[2], 0xD834);
+    assert_int_equal(w[3], 0xDD1E);
+    assert_int_equal(w[4], 0);
+    argus_free_stmt(stmt);
+
+    free_test_dbc(dbc);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
+        cmocka_unit_test(test_null_reaches_every_target),
+        cmocka_unit_test(test_decimal_keeps_its_digits),
+        cmocka_unit_test(test_zoned_timestamp_targets),
+        cmocka_unit_test(test_binary_with_embedded_nul),
+        cmocka_unit_test(test_unicode_targets),
         cmocka_unit_test(test_decode_hex),
         cmocka_unit_test(test_decode_base64),
         cmocka_unit_test(test_cache_decode_binary),
