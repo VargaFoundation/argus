@@ -88,6 +88,9 @@ typedef struct trino_operation {
 SQLSMALLINT trino_type_to_sql_type(const char *trino_type);
 SQLULEN     trino_type_column_size(SQLSMALLINT sql_type);
 SQLSMALLINT trino_type_decimal_digits(SQLSMALLINT sql_type);
+void        trino_type_apply_params(const char *trino_type,
+                                    SQLULEN *column_size,
+                                    SQLSMALLINT *decimal_digits);
 
 /* Helper to create/free operations */
 trino_operation_t *trino_operation_new(void);

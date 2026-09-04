@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <cstdlib>
 
 extern "C" {
 #include "kudu_internal.h"
@@ -375,10 +376,18 @@ int kudu_cpp_fetch_batch(kudu_operation_t *op,
                 break;
             }
             case KuduColumnSchema::BINARY: {
+                /* strndup stopped at the first NUL, so any value with an
+                 * embedded zero byte reached the application short. The
+                 * Slice already is the bytes; copy all of them and say so. */
                 Slice v;
                 row.GetBinary(c, &v);
-                cell->data = strndup(
-                    reinterpret_cast<const char *>(v.data()), v.size());
+                cell->data = static_cast<char *>(malloc(v.size() + 1));
+                if (cell->data) {
+                    if (v.size()) memcpy(cell->data, v.data(), v.size());
+                    cell->data[v.size()] = '\0';
+                    cell->data_len = v.size();
+                    cell->native_kind = ARGUS_NATIVE_BINARY;
+                }
                 break;
             }
             case KuduColumnSchema::UNIXTIME_MICROS: {
@@ -402,7 +411,9 @@ int kudu_cpp_fetch_batch(kudu_operation_t *op,
             }
             }
 
-            if (cell->data)
+            /* A binary cell set its own length above: the bytes may
+             * contain a NUL, so strlen would cut the value short again. */
+            if (cell->data && cell->native_kind != ARGUS_NATIVE_BINARY)
                 cell->data_len = strlen(cell->data);
         }
     }

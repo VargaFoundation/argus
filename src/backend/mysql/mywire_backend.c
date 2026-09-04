@@ -315,6 +315,13 @@ static int mywire_fetch_results(argus_backend_conn_t raw_conn,
     if (r < (size_t)batch)
         cache->exhausted = true;   /* mysql_fetch_row returned NULL → end */
 
+    /* The wire already gave every column its byte length, so a BINARY /
+     * BLOB / GEOMETRY cell holds the bytes; it only has to say so, or a
+     * character target would hand the application the raw bytes instead of
+     * their hex. */
+    if (op->columns)
+        argus_cache_decode_binary(cache, op->columns, ncols, ARGUS_BINARY_RAW);
+
     return 0;
 }
 

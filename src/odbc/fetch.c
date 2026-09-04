@@ -133,6 +133,35 @@ int argus_cell_decode_base64(argus_cell_t *cell)
     return 0;
 }
 
+void argus_cache_decode_binary(argus_row_cache_t *cache,
+                               const argus_column_desc_t *columns,
+                               int num_cols, argus_binary_encoding_t enc)
+{
+    if (!cache || !cache->rows || !columns) return;
+
+    int ncols = num_cols < cache->num_cols ? num_cols : cache->num_cols;
+    for (int c = 0; c < ncols; c++) {
+        SQLSMALLINT t = columns[c].sql_type;
+        if (t != SQL_BINARY && t != SQL_VARBINARY && t != SQL_LONGVARBINARY)
+            continue;
+        for (size_t r = 0; r < cache->num_rows; r++) {
+            if (!cache->rows[r].cells) continue;
+            argus_cell_t *cell = &cache->rows[r].cells[c];
+            if (cell->is_null) continue;
+            switch (enc) {
+            case ARGUS_BINARY_HEX:    argus_cell_decode_hex(cell);    break;
+            case ARGUS_BINARY_BASE64: argus_cell_decode_base64(cell); break;
+            case ARGUS_BINARY_RAW:
+                /* Already the bytes; the cell just never said so, and a
+                 * character target needs to know to render them as hex. */
+                if (cell->native_kind == ARGUS_NATIVE_NONE)
+                    cell->native_kind = ARGUS_NATIVE_BINARY;
+                break;
+            }
+        }
+    }
+}
+
 void argus_row_cache_free(argus_row_cache_t *cache)
 {
     if (cache->rows) {

@@ -216,7 +216,32 @@ int flightsql_append_batch(const std::shared_ptr<arrow::RecordBatch>& batch,
             }
 
             std::string text;
+            bool is_binary = false;
             switch (array->type_id()) {
+            /* Binary arrays already hold the bytes. Falling through to
+             * GetScalar()->ToString() below rendered Arrow's debug form of
+             * them, which is not the value the application asked for. */
+            case arrow::Type::BINARY: {
+                auto a = std::static_pointer_cast<arrow::BinaryArray>(array);
+                auto v = a->GetView(r);
+                text.assign(v.data(), v.size());
+                is_binary = true;
+                break;
+            }
+            case arrow::Type::LARGE_BINARY: {
+                auto a = std::static_pointer_cast<arrow::LargeBinaryArray>(array);
+                auto v = a->GetView(r);
+                text.assign(v.data(), v.size());
+                is_binary = true;
+                break;
+            }
+            case arrow::Type::FIXED_SIZE_BINARY: {
+                auto a = std::static_pointer_cast<arrow::FixedSizeBinaryArray>(array);
+                text.assign(reinterpret_cast<const char*>(a->GetValue(r)),
+                            static_cast<size_t>(a->byte_width()));
+                is_binary = true;
+                break;
+            }
             case arrow::Type::STRING: {
                 auto a = std::static_pointer_cast<arrow::StringArray>(array);
                 text.assign(a->GetView(r));
@@ -258,6 +283,7 @@ int flightsql_append_batch(const std::shared_ptr<arrow::RecordBatch>& batch,
             cell->is_null = false;
             cell->data = dup_str(text, &cell->data_len);
             if (!cell->data) return -1;
+            if (is_binary) cell->native_kind = ARGUS_NATIVE_BINARY;
         }
 
         cache->num_rows++;

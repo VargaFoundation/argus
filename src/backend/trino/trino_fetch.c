@@ -51,6 +51,8 @@ int trino_parse_columns(JsonNode *columns_node,
         col->sql_type       = trino_type_to_sql_type(type_name);
         col->column_size    = trino_type_column_size(col->sql_type);
         col->decimal_digits = trino_type_decimal_digits(col->sql_type);
+        trino_type_apply_params(type_name, &col->column_size,
+                                &col->decimal_digits);
         col->nullable       = SQL_NULLABLE_UNKNOWN;
     }
 
@@ -420,6 +422,15 @@ static int sj_find_member(const char *text, size_t len, const char *key,
 
 /* ── FetchResults via Trino REST API ─────────────────────────── */
 
+/* Trino sends VARBINARY as base64 text in the JSON rows, so the bytes are
+ * recovered per column once the batch is in the cache — every delivery path
+ * below goes through here, and decoding an already-decoded cell is a no-op. */
+static void trino_decode_binary(trino_operation_t *op, argus_row_cache_t *cache)
+{
+    argus_cache_decode_binary(cache, op->columns, op->num_cols,
+                              ARGUS_BINARY_BASE64);
+}
+
 int trino_fetch_results(argus_backend_conn_t raw_conn,
                         argus_backend_op_t raw_op,
                         int max_rows,
@@ -454,6 +465,7 @@ int trino_fetch_results(argus_backend_conn_t raw_conn,
         op->prefetch = NULL;
         if (!op->next_uri)
             cache->exhausted = true;
+        trino_decode_binary(op, cache);
         return 0;
     }
 
@@ -522,6 +534,7 @@ int trino_fetch_results(argus_backend_conn_t raw_conn,
                         int sr = sj_scan_data(ds, de, cache, ncols);
                         if (sr == 0) {
                             if (!op->next_uri) cache->exhausted = true;
+                            trino_decode_binary(op, cache);
                             g_object_unref(ep);
                             free(env);
                             free(resp.data);
@@ -600,6 +613,7 @@ int trino_fetch_results(argus_backend_conn_t raw_conn,
             if (!op->next_uri)
                 cache->exhausted = true;
 
+            trino_decode_binary(op, cache);
             g_object_unref(parser);
             free(resp.data);
             return 0;

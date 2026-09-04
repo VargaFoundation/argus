@@ -782,11 +782,107 @@ static void test_unknown_target_type(void **state)
     free_test_dbc(dbc);
 }
 
+
+/* The whole batch at once: which columns are binary comes from the column
+ * descriptors, the spelling from the backend — never from the value. */
+static void test_cache_decode_binary(void **state)
+{
+    (void)state;
+    argus_column_desc_t cols[3];
+    memset(cols, 0, sizeof(cols));
+    cols[0].sql_type = SQL_VARCHAR;
+    cols[1].sql_type = SQL_VARBINARY;
+    cols[2].sql_type = SQL_LONGVARBINARY;
+
+    argus_row_cache_t cache;
+    memset(&cache, 0, sizeof(cache));
+    cache.num_cols = 3;
+    cache.num_rows = 2;
+    cache.capacity = 2;
+    cache.rows = calloc(2, sizeof(argus_row_t));
+    assert_non_null(cache.rows);
+    for (int r = 0; r < 2; r++) {
+        cache.rows[r].cells = calloc(3, sizeof(argus_cell_t));
+        assert_non_null(cache.rows[r].cells);
+    }
+    /* A VARCHAR that happens to read as hex, and the binary columns. */
+    cache.rows[0].cells[0].data = strdup("48656c6c6f");
+    cache.rows[0].cells[0].data_len = 10;
+    cache.rows[0].cells[1].data = strdup("48656c6c6f");
+    cache.rows[0].cells[1].data_len = 10;
+    cache.rows[0].cells[2].data = strdup("00ff10");
+    cache.rows[0].cells[2].data_len = 6;
+    cache.rows[1].cells[1].is_null = true;
+    cache.rows[1].cells[2].data = strdup("nothex");
+    cache.rows[1].cells[2].data_len = 6;
+
+    argus_cache_decode_binary(&cache, cols, 3, ARGUS_BINARY_HEX);
+
+    /* The VARCHAR is left alone even though it would have decoded. */
+    assert_int_equal(cache.rows[0].cells[0].native_kind, ARGUS_NATIVE_NONE);
+    assert_string_equal(cache.rows[0].cells[0].data, "48656c6c6f");
+    /* The binary columns are bytes. */
+    assert_int_equal(cache.rows[0].cells[1].native_kind, ARGUS_NATIVE_BINARY);
+    assert_int_equal(cache.rows[0].cells[1].data_len, 5);
+    assert_memory_equal(cache.rows[0].cells[1].data, "Hello", 5);
+    assert_int_equal(cache.rows[0].cells[2].data_len, 3);
+    assert_memory_equal(cache.rows[0].cells[2].data, "\x00\xff\x10", 3);
+    /* A NULL stays NULL, and text the decoder rejects keeps its text. */
+    assert_true(cache.rows[1].cells[1].is_null);
+    assert_int_equal(cache.rows[1].cells[2].native_kind, ARGUS_NATIVE_NONE);
+    assert_string_equal(cache.rows[1].cells[2].data, "nothex");
+
+    /* Running it again changes nothing: decoding is idempotent. */
+    argus_cache_decode_binary(&cache, cols, 3, ARGUS_BINARY_HEX);
+    assert_int_equal(cache.rows[0].cells[1].data_len, 5);
+    assert_memory_equal(cache.rows[0].cells[1].data, "Hello", 5);
+
+    argus_row_cache_free(&cache);
+}
+
+/* ARGUS_BINARY_RAW is for the backends that already hand over bytes: it
+ * marks the cell so a character target renders hex, and touches nothing
+ * else. */
+static void test_cache_mark_binary_raw(void **state)
+{
+    (void)state;
+    argus_column_desc_t cols[2];
+    memset(cols, 0, sizeof(cols));
+    cols[0].sql_type = SQL_VARBINARY;
+    cols[1].sql_type = SQL_VARCHAR;
+
+    argus_row_cache_t cache;
+    memset(&cache, 0, sizeof(cache));
+    cache.num_cols = 2;
+    cache.num_rows = 1;
+    cache.capacity = 1;
+    cache.rows = calloc(1, sizeof(argus_row_t));
+    assert_non_null(cache.rows);
+    cache.rows[0].cells = calloc(2, sizeof(argus_cell_t));
+    assert_non_null(cache.rows[0].cells);
+    cache.rows[0].cells[0].data = malloc(4);
+    memcpy(cache.rows[0].cells[0].data, "\x00\xff\x10", 4);
+    cache.rows[0].cells[0].data_len = 3;
+    cache.rows[0].cells[1].data = strdup("plain");
+    cache.rows[0].cells[1].data_len = 5;
+
+    argus_cache_decode_binary(&cache, cols, 2, ARGUS_BINARY_RAW);
+
+    assert_int_equal(cache.rows[0].cells[0].native_kind, ARGUS_NATIVE_BINARY);
+    assert_int_equal(cache.rows[0].cells[0].data_len, 3);
+    assert_memory_equal(cache.rows[0].cells[0].data, "\x00\xff\x10", 3);
+    assert_int_equal(cache.rows[0].cells[1].native_kind, ARGUS_NATIVE_NONE);
+
+    argus_row_cache_free(&cache);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_decode_hex),
         cmocka_unit_test(test_decode_base64),
+        cmocka_unit_test(test_cache_decode_binary),
+        cmocka_unit_test(test_cache_mark_binary_raw),
         cmocka_unit_test(test_binary_cell_targets),
         cmocka_unit_test(test_text_to_binary_is_bytes),
         cmocka_unit_test(test_binary_to_char_chunks),

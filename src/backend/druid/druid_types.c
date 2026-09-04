@@ -41,3 +41,17 @@ SQLULEN druid_type_column_size(SQLSMALLINT sql_type)
     default:                 return 255;
     }
 }
+
+/* Scale, for the types that have one. Druid's INFORMATION_SCHEMA gives a
+ * bare type name, so DECIMAL gets the family default; the timestamp scale is
+ * Druid's own millisecond resolution. */
+SQLSMALLINT druid_type_decimal_digits(SQLSMALLINT sql_type)
+{
+    switch (sql_type) {
+    case SQL_REAL:           return 7;
+    case SQL_DOUBLE:         return 15;
+    case SQL_DECIMAL:        return 18;
+    case SQL_TYPE_TIMESTAMP: return 3;
+    default:                 return 0;
+    }
+}

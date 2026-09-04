@@ -36,3 +36,17 @@ SQLULEN pinot_type_column_size(SQLSMALLINT sql_type)
     default:                 return 255;
     }
 }
+
+/* Scale, for the types that have one. Pinot's BIG_DECIMAL carries no
+ * precision or scale in the result metadata, so it gets the family default
+ * the other backends report; the rest are exact. */
+SQLSMALLINT pinot_type_decimal_digits(SQLSMALLINT sql_type)
+{
+    switch (sql_type) {
+    case SQL_REAL:           return 7;
+    case SQL_DOUBLE:         return 15;
+    case SQL_DECIMAL:        return 18;
+    case SQL_TYPE_TIMESTAMP: return 3;   /* Pinot timestamps are milliseconds */
+    default:                 return 0;
+    }
+}

@@ -177,6 +177,18 @@ static int copy_row(const pg_conn_t *conn, PGresult *res, int row, int ncols,
         cell->data[len] = '\0';
         cell->data_len = len;
 
+        /*
+         * bytea comes over as text in whatever `bytea_output` says. The
+         * default since 9.0 is the hex form ("\x00ff"), which decodes in
+         * place to the bytes the application asked for; a server still set to
+         * `escape` sends octal escapes, which the decoder rejects and the
+         * cell keeps its text, as before.
+         */
+        if (oid == PG_OID_BYTEA) {
+            argus_cell_decode_hex(cell);
+            continue;
+        }
+
         uint8_t kind = pg_native_kind(oid);
         if (kind == ARGUS_NATIVE_I64) {
             cell->native_kind = kind;

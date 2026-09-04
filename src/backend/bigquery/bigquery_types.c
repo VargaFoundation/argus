@@ -34,8 +34,10 @@ SQLSMALLINT bq_type_to_sql_type(const char *bq_type)
         return SQL_TYPE_DATE;
     if (strcasecmp(bq_type, "TIME") == 0)
         return SQL_TYPE_TIME;
-    /* STRING, BYTES (base64 text), GEOGRAPHY, JSON, INTERVAL, RANGE,
-     * RECORD/STRUCT (serialized JSON), REPEATED fields */
+    if (strcasecmp(bq_type, "BYTES") == 0)
+        return SQL_VARBINARY;
+    /* STRING, GEOGRAPHY, JSON, INTERVAL, RANGE, RECORD/STRUCT (serialized
+     * JSON), REPEATED fields */
     return SQL_VARCHAR;
 }
 
@@ -163,4 +165,8 @@ void bq_fill_cell(argus_cell_t *cell, const char *bq_type, const char *value)
     cell->data = strdup(value);
     cell->data_len = cell->data ? strlen(cell->data) : 0;
     cell->is_null = (cell->data == NULL);
+
+    /* BYTES comes over the REST API as base64; the application asked for
+     * bytes. Text that is not base64 is left alone rather than dropped. */
+    if (st == SQL_VARBINARY) argus_cell_decode_base64(cell);
 }

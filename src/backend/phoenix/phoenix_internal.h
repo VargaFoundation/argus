@@ -91,6 +91,7 @@ int phoenix_parse_columns(JsonObject *signature,
 /* Parse data rows from Avatica frame into row cache */
 int phoenix_parse_frame(JsonObject *frame,
                         argus_row_cache_t *cache,
+                        const argus_column_desc_t *columns,
                         int num_cols);
 
 #endif /* ARGUS_PHOENIX_INTERNAL_H */

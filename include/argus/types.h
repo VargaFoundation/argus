@@ -66,11 +66,13 @@ typedef enum argus_native_kind {
  *
  * A binary column's value is the bytes themselves (ARGUS_NATIVE_BINARY):
  * `data` then holds data_len raw bytes, which may include NULs, and no text
- * form. The wire encodings the engines use for those bytes — hex on Hive,
- * Impala and Pinot, base64 on Trino, BigQuery and Avatica, \x-hex on
- * PostgreSQL — are decoded by the backend (argus_cell_decode_hex /
- * argus_cell_decode_base64), never guessed from the content at SQLGetData
- * time. SQL_C_BINARY returns the bytes; character targets get them as hex. */
+ * form. Backends that already carry bytes on the wire (Hive and Impala's
+ * TBinaryColumn, Kudu's Slice, Arrow) set this directly; those that send
+ * text — hex on Pinot and PostgreSQL's \x form, base64 on Trino, BigQuery
+ * and Avatica — decode it with argus_cache_decode_binary below. The encoding
+ * belongs to the engine, so it is applied per column, never guessed from the
+ * content at SQLGetData time. SQL_C_BINARY returns the bytes; character
+ * targets get them as hex. */
 typedef struct argus_cell {
     char   *data;       /* string representation of the value (owned, may be NULL) */
     size_t  data_len;   /* length of data (not including NUL) */
@@ -136,6 +138,25 @@ void argus_row_cache_free(argus_row_cache_t *cache);
 
 /* Clear cache contents but keep allocated memory */
 void argus_row_cache_clear(argus_row_cache_t *cache);
+
+/* How a backend spells binary values on the wire. */
+typedef enum argus_binary_encoding {
+    ARGUS_BINARY_RAW = 0,   /* already bytes; only the cell needs marking */
+    ARGUS_BINARY_HEX,       /* Pinot, PostgreSQL's \x form */
+    ARGUS_BINARY_BASE64     /* Trino, BigQuery, Avatica */
+} argus_binary_encoding_t;
+
+/* Decode every BINARY / VARBINARY / LONGVARBINARY column of a freshly filled
+ * cache in place, so the cells reach SQLGetData as bytes. Which columns those
+ * are comes from `columns`, and the encoding from the backend — the value is
+ * never sniffed. A cell the decoder rejects keeps the engine's text, so a
+ * column typed binary by mistake still shows something rather than nothing.
+ * ARGUS_BINARY_RAW is for the backends whose cells already hold the bytes
+ * (MySQL's wire lengths, Kudu's Slice): it only marks them, so a character
+ * target renders hex instead of the bytes. */
+void argus_cache_decode_binary(argus_row_cache_t *cache,
+                               const argus_column_desc_t *columns,
+                               int num_cols, argus_binary_encoding_t enc);
 
 /* Maximum number of bound parameters */
 #define ARGUS_MAX_PARAMS 256

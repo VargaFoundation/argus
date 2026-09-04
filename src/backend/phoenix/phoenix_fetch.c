@@ -90,6 +90,7 @@ int phoenix_parse_columns(JsonObject *signature,
 
 int phoenix_parse_frame(JsonObject *frame,
                         argus_row_cache_t *cache,
+                        const argus_column_desc_t *columns,
                         int num_cols)
 {
     if (!frame || !cache) return -1;
@@ -147,16 +148,12 @@ int phoenix_parse_frame(JsonObject *frame,
                 cell->data = strdup(s ? s : "");
                 cell->data_len = strlen(cell->data);
             } else if (vtype == G_TYPE_INT64) {
-                gint64 v = json_node_get_int(val_node);
-                cell->data = malloc(24);
-                if (cell->data)
-                    cell->data_len = (size_t)snprintf(cell->data, 24,
-                                                       "%lld", (long long)v);
+                /* Native typed value: no text round-trip on SQLGetData. */
+                cell->native_kind = ARGUS_NATIVE_I64;
+                cell->native.i64 = json_node_get_int(val_node);
             } else if (vtype == G_TYPE_DOUBLE) {
-                gdouble v = json_node_get_double(val_node);
-                cell->data = malloc(32);
-                if (cell->data)
-                    cell->data_len = argus_dtoa(cell->data, 32, 15, v);
+                cell->native_kind = ARGUS_NATIVE_F64;
+                cell->native.f64 = json_node_get_double(val_node);
             } else if (vtype == G_TYPE_BOOLEAN) {
                 gboolean v = json_node_get_boolean(val_node);
                 cell->data = strdup(v ? "true" : "false");
@@ -170,6 +167,9 @@ int phoenix_parse_frame(JsonObject *frame,
             }
         }
     }
+
+    /* Avatica encodes BINARY / VARBINARY as base64 in the JSON frame. */
+    argus_cache_decode_binary(cache, columns, num_cols, ARGUS_BINARY_BASE64);
 
     return 0;
 }
@@ -248,7 +248,7 @@ int phoenix_fetch_results(argus_backend_conn_t raw_conn,
     if (json_object_has_member(resp_obj, "frame")) {
         JsonObject *frame = json_object_get_object_member(resp_obj, "frame");
         int ncols = op->num_cols > 0 ? op->num_cols : 1;
-        phoenix_parse_frame(frame, cache, ncols);
+        phoenix_parse_frame(frame, cache, op->columns, ncols);
 
         /* Update offset and done status */
         if (json_object_has_member(frame, "done")) {

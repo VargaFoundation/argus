@@ -242,6 +242,7 @@ static void parse_result_table(pinot_op_t *op, JsonObject *rt)
                                : "STRING";
         col->sql_type = pinot_type_to_sql_type(ty);
         col->column_size = pinot_type_column_size(col->sql_type);
+        col->decimal_digits = pinot_type_decimal_digits(col->sql_type);
         col->nullable = SQL_NULLABLE;
     }
 
@@ -283,6 +284,10 @@ static void parse_result_table(pinot_op_t *op, JsonObject *rt)
         r++;
     }
     op->cache.num_rows = r;
+
+    /* Pinot renders BYTES as a hex string in the JSON rows. */
+    argus_cache_decode_binary(&op->cache, op->columns, ncols,
+                              ARGUS_BINARY_HEX);
 }
 
 static pinot_op_t *op_new(void)

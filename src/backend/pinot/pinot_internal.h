@@ -47,5 +47,6 @@ typedef struct pinot_response {
 /* pinot_types.c */
 SQLSMALLINT pinot_type_to_sql_type(const char *pinot_type);
 SQLULEN     pinot_type_column_size(SQLSMALLINT sql_type);
+SQLSMALLINT pinot_type_decimal_digits(SQLSMALLINT sql_type);
 
 #endif /* ARGUS_PINOT_INTERNAL_H */

@@ -48,6 +48,7 @@ typedef struct druid_response {
 /* druid_types.c */
 SQLSMALLINT druid_type_to_sql_type(const char *druid_sql_type);
 SQLULEN     druid_type_column_size(SQLSMALLINT sql_type);
+SQLSMALLINT druid_type_decimal_digits(SQLSMALLINT sql_type);
 
 /* druid_backend.c (shared by the catalog helpers) */
 int druid_execute(argus_backend_conn_t conn, const char *query,

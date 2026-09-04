@@ -239,6 +239,8 @@ static void parse_result(druid_op_t *op, JsonArray *rows)
                                : "VARCHAR";
         op->columns[c].sql_type = druid_type_to_sql_type(ty);
         op->columns[c].column_size = druid_type_column_size(op->columns[c].sql_type);
+        op->columns[c].decimal_digits =
+            druid_type_decimal_digits(op->columns[c].sql_type);
         op->columns[c].nullable = SQL_NULLABLE;
     }
 

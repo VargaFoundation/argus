@@ -148,7 +148,8 @@ int phoenix_execute(argus_backend_conn_t raw_conn,
                                                                    "offset");
                 }
                 if (frame && op->num_cols > 0) {
-                    phoenix_parse_frame(frame, &op->first_frame, op->num_cols);
+                    phoenix_parse_frame(frame, &op->first_frame, op->columns,
+                                        op->num_cols);
                     op->offset += (int)op->first_frame.num_rows;
                     op->first_frame_ready = true;
                 }

@@ -69,6 +69,42 @@ All notable changes to the Argus ODBC Driver project.
   engines and an identifier elsewhere; comments are stepped over by the
   escape parser too. `SQLNumParams` counts with the dialect.
 
+### Fixed: binary, DECIMAL and the types the engines actually declare
+- **BINARY values reached the application in the engine's wire encoding.**
+  A `SQL_C_BINARY` bind got whatever text the backend had produced — hex on
+  Pinot, base64 on Trino, BigQuery and Avatica, `\x`-hex on PostgreSQL,
+  Arrow's debug rendering on Flight SQL — and `SQLGetData` guessed, decoding
+  any even-length hex string it saw, including a `VARCHAR` that happened to
+  look like one. Each backend now decodes its own encoding into the cell
+  (`argus_cache_decode_binary`), so which columns are binary comes from the
+  result metadata and the spelling from the engine; the value is never
+  sniffed. Text a decoder rejects keeps its text rather than becoming
+  nothing.
+- **Hive and Impala re-encoded bytes they had already received.**
+  `TBinaryColumn` is bytes on the wire; the fetch path rendered them to hex
+  for `SQLGetData` to decode again — twice the payload for the same value.
+  They go into the cell as bytes.
+- **Kudu truncated every binary value at its first NUL** (`strndup` on a
+  `Slice`), and MySQL-wire cells held the bytes without saying so, so a
+  character target got the raw bytes instead of their hex.
+- **`DECIMAL(p,s)`, `CHAR(n)` and `VARCHAR(n)` were reported with the
+  family maximums.** Hive and Impala described a column by mapping its type
+  id to a name and the name back, dropping the `TTypeQualifiers` the reply
+  already carried, so `DECIMAL(5,2)` came back as precision 38 scale 10 and
+  `CHAR(3)` as 65535 — which is what Excel and Tableau size their columns
+  from. Trino's `decimal(18,4)`, `varchar(20)` and `timestamp(6)` are read
+  off the type name the same way; Pinot and Druid report a scale at all.
+- **`DOUBLE` lost two digits on Hive and Impala.** `"%.15g"` turned
+  `0.1 + 0.2` into `0.3`; the text is now the shortest that reads back as
+  the same double.
+- Numeric cells on Hive, Impala and Phoenix carry their native value beside
+  the text, so a numeric `SQLGetData` target no longer parses back a string
+  the driver had just formatted.
+- BigQuery's `BYTES` is `SQL_VARBINARY` instead of `SQL_VARCHAR`, and Hive's
+  `TIMESTAMP WITH LOCAL TIME ZONE` is described as `SQL_VARCHAR` so the zone
+  the engine prints is not silently dropped; `SQL_C_TYPE_TIMESTAMP` still
+  converts it.
+
 ## [0.6.1] — 2026-09-03
 
 A corrective release. An audit of the driver as v0.6.0 shipped it found that
