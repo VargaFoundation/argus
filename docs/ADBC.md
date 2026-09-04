@@ -1,5 +1,13 @@
 # Argus ADBC driver
 
+> **Status: experimental, and not shipped.** `libargus_adbc` is built from
+> this tree (`BUILD_ADBC=ON` by default) but no release artefact contains it,
+> `test_adbc` does not run in CI, and eleven slots of the ADBC 1.0.0 vtable
+> are still NULL — `Commit`, `Rollback`, `ConnectionGetInfo`,
+> `StatementSetOption` and `BindStream` among them. Use the ODBC driver for
+> anything that has to work; this surface is here to be built on, not
+> depended on. See the ADBC line in [ROADMAP.md](ROADMAP.md).
+
 Argus exposes an [Arrow ADBC](https://arrow.apache.org/adbc/) surface
 (`libargus_adbc.so`) layered over its existing, validated ODBC stack. A query's
 result is returned as an Arrow **C Data Interface** stream of typed columns, so

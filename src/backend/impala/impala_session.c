@@ -96,9 +96,12 @@ int impala_connect(argus_dbc_t *dbc,
                 sasl_err, sizeof(sasl_err));
         }
         if (sasl_rc != 0) {
+            /* sasl_err is itself 512 bytes, so the fixed part of this
+             * message leaves it less than that; bound it explicitly rather
+             * than let snprintf truncate wherever it lands. */
             char msg[512];
             snprintf(msg, sizeof(msg),
-                     "[Argus][Impala] SASL handshake failed on %s:%d: %s",
+                     "[Argus][Impala] SASL handshake failed on %s:%d: %.400s",
                      host, port, sasl_err);
             argus_set_error(&dbc->diag, "08001", msg, 0);
             thrift_transport_close(raw, NULL);

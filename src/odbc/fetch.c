@@ -952,7 +952,10 @@ static SQLRETURN convert_cell_to_target(
 
     case SQL_C_FLOAT:
     case SQL_C_DOUBLE: {
-        double v;
+        /* double_from_text only writes on success and the caller returns
+         * on anything else, but the compiler cannot see that through the
+         * call and warns at -O2. */
+        double v = 0;
         SQLRETURN r = double_from_text(text, &v, diag);
         if (r != SQL_SUCCESS) return r;
         return store_double(v, target_type, target_value, str_len_or_ind, diag);

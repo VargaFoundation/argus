@@ -12,7 +12,7 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 - **Statement-level asynchronous execution** (`SQL_ASYNC_MODE = SQL_AM_STATEMENT`): async `SQLExecDirect`/`SQLExecute` on a worker thread, with `SQLCompleteAsync` and `SQLCancelHandle` (ODBC 3.8).
 - **13 backends**, each selected at configure time with `-DARGUS_WITH_<BACKEND>=AUTO|ON|OFF` (`-DARGUS_RELEASE=ON` requires every backend a release ships with); the built driver embeds an `argus-build …` line naming what it contains
 - **Cross-platform**: Linux, macOS and Windows x64
-- **Arrow ADBC driver** (`libargus_adbc`) exposing the same backends through the Arrow C Data Interface
+- **Arrow ADBC driver** (`libargus_adbc`) exposing the same backends through the Arrow C Data Interface — *experimental, built from source only, not in any release artefact* (see [docs/ADBC.md](docs/ADBC.md))
 
 ### Backends
 
