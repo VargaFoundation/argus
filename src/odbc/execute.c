@@ -589,8 +589,9 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
      * own (from the QUERYTIMEOUT keyword) is put back after it.
      */
     int saved_query_timeout = dbc->query_timeout_sec;
-    if (stmt->query_timeout > 0)
-        dbc->query_timeout_sec = (int)stmt->query_timeout;
+    SQLULEN eff_timeout = argus_stmt_effective_timeout(stmt);
+    if (eff_timeout > 0)
+        dbc->query_timeout_sec = (int)eff_timeout;
 
     /* Execute via backend with timing */
     gint64 exec_start = g_get_monotonic_time();

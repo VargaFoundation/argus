@@ -101,15 +101,23 @@ SQLRETURN argus_alloc_stmt(argus_dbc_t *dbc, argus_stmt_t **out)
     argus_row_cache_init(&stmt->row_cache);
     argus_getdata_reset(&stmt->getdata);
 
-    /* Guardrail taps: cap rows / duration when the application has not set
-     * stricter limits itself (the open build is a no-op). */
+    /*
+     * Guardrail taps: a ceiling for this statement (the open build is a
+     * no-op). It is kept separate from the attributes, not written into
+     * them -- a freshly allocated statement always has max_rows == 0, so the
+     * old "only if the application has not set one" test always passed here
+     * and the application's next SQLSetStmtAttr overwrote the policy. A
+     * guardrail that any caller can raise is not one; the effective limit is
+     * the smaller of the two, taken where the limits are honoured.
+     */
     {
         unsigned long g_rows = 0, g_timeout_ms = 0;
         if (argus_obs_hook_guards(dbc, &g_rows, &g_timeout_ms)) {
-            if (g_rows > 0 && stmt->max_rows == 0)
-                stmt->max_rows = (SQLULEN)g_rows;
-            if (g_timeout_ms > 0 && stmt->query_timeout == 0)
-                stmt->query_timeout = (SQLULEN)((g_timeout_ms + 999) / 1000);
+            if (g_rows > 0)
+                stmt->guard_max_rows = (SQLULEN)g_rows;
+            if (g_timeout_ms > 0)
+                stmt->guard_timeout_sec =
+                    (SQLULEN)((g_timeout_ms + 999) / 1000);
         }
     }
 

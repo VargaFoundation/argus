@@ -40,6 +40,8 @@ argus_add_unit_test(test_diag unit/test_diag.c)
 argus_add_unit_test(test_thread_safety unit/test_thread_safety.c)
 argus_add_unit_test(test_info unit/test_info.c)
 argus_add_unit_test(test_backend_caps unit/test_backend_caps.c)
+# Provides a strong argus_obs_hook_guards, overriding the weak no-op.
+argus_add_unit_test(test_guardrails unit/test_guardrails.c)
 argus_add_unit_test(test_build_manifest unit/test_build_manifest.c)
 argus_add_unit_test(test_dialect unit/test_dialect.c)
 argus_add_unit_test(test_escape unit/test_escape.c)

@@ -241,6 +241,18 @@ All notable changes to the Argus ODBC Driver project.
   in a 32-character buffer came back as 15 characters. Chunks also no longer
   end on half a surrogate pair.
 
+### Fixed: a guardrail any caller could raise
+- **A capability tap's row and time ceilings were written into
+  `SQL_ATTR_MAX_ROWS` and `SQL_ATTR_QUERY_TIMEOUT` at `SQLAllocHandle`**,
+  guarded by "only if the application has not set one" — a test that always
+  passes, because a fresh statement has both at zero. The application's next
+  `SQLSetStmtAttr` then overwrote the policy, so a limit meant as a ceiling
+  was *relaxed* by any application that set one of its own, and setting a
+  million rows lifted it entirely. The ceiling is kept apart from the
+  attributes now and the effective limit is the smaller of the two: an
+  application can still be stricter, and can no longer be laxer. The
+  attributes read back exactly what the application set, as ODBC requires.
+
 ### Druid is tested against a real server
 - **The Druid backend had no compose service and no integration test**, so
   its query submission, its result parsing and the catalog SQL it writes

@@ -1404,8 +1404,9 @@ static SQLRETURN deliver_scroll_row(argus_stmt_t *stmt, size_t row_idx,
 
 static SQLRETURN fetch_single_row(argus_stmt_t *stmt, SQLULEN rowset_idx)
 {
-    /* Check SQL_ATTR_MAX_ROWS limit */
-    if (stmt->max_rows > 0 && stmt->rows_fetched_total >= stmt->max_rows) {
+    /* SQL_ATTR_MAX_ROWS, or a guardrail's ceiling, whichever is smaller. */
+    SQLULEN limit = argus_stmt_effective_max_rows(stmt);
+    if (limit > 0 && stmt->rows_fetched_total >= limit) {
         stmt->row_count = (SQLLEN)stmt->rows_fetched_total;
         return SQL_NO_DATA;
     }

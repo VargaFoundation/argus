@@ -307,6 +307,20 @@ struct argus_stmt {
     /* Statement attributes */
     SQLULEN                 max_rows;
     SQLULEN                 query_timeout;
+
+    /*
+     * A guardrail tap's ceiling for this statement (0 = none), kept apart
+     * from the attributes above. It used to be written straight into
+     * max_rows / query_timeout at allocation, where the application's next
+     * SQLSetStmtAttr simply overwrote it -- so a policy meant as a ceiling
+     * was relaxed by any application that set a limit of its own, which is
+     * the opposite of what a guardrail is. The effective limit is the
+     * smaller of the two (argus_stmt_effective_max_rows below); the
+     * attribute keeps reading back exactly what the application set, as
+     * ODBC requires.
+     */
+    SQLULEN                 guard_max_rows;
+    SQLULEN                 guard_timeout_sec;
     SQLULEN                 row_array_size;
     SQLULEN                 row_bind_type;   /* SQL_BIND_BY_COLUMN (default), or
                                               * the size of the application's row
@@ -462,5 +476,24 @@ void argus_metadata_cache_store(argus_dbc_t *dbc, argus_stmt_t *stmt,
                                  const char *func,
                                  const char *a1, const char *a2,
                                  const char *a3, const char *a4);
+
+/* The row limit actually in force: the application's, the guardrail's, or
+ * the smaller of the two when both are set. 0 means unlimited. */
+static inline SQLULEN argus_stmt_effective_max_rows(const argus_stmt_t *stmt)
+{
+    if (!stmt->guard_max_rows) return stmt->max_rows;
+    if (!stmt->max_rows)       return stmt->guard_max_rows;
+    return stmt->max_rows < stmt->guard_max_rows ? stmt->max_rows
+                                                 : stmt->guard_max_rows;
+}
+
+/* The same for the query timeout, in seconds. */
+static inline SQLULEN argus_stmt_effective_timeout(const argus_stmt_t *stmt)
+{
+    if (!stmt->guard_timeout_sec) return stmt->query_timeout;
+    if (!stmt->query_timeout)     return stmt->guard_timeout_sec;
+    return stmt->query_timeout < stmt->guard_timeout_sec
+           ? stmt->query_timeout : stmt->guard_timeout_sec;
+}
 
 #endif /* ARGUS_HANDLE_H */
