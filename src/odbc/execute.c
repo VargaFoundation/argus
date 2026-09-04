@@ -543,6 +543,20 @@ static SQLRETURN async_poll(argus_stmt_t *stmt)
 
 /* ── Internal: execute a query on the backend ────────────────── */
 
+/*
+ * What may be written to a log file. The log path comes from the DSN and the
+ * file is global to the process, so what lands there is not the driver's to
+ * be careless with: `query` at this point has every bound parameter already
+ * interpolated, which is exactly where a password or a token is. A prepared
+ * statement still has its own text with the markers in place, so that is
+ * logged instead; only a literal the application wrote into the SQL itself
+ * can still appear. With no parameters the two are the same string.
+ */
+static const char *loggable_sql(const argus_stmt_t *stmt, const char *query)
+{
+    return (stmt->num_param_bindings > 0 && stmt->query) ? stmt->query : query;
+}
+
 static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
 {
     argus_dbc_t *dbc = stmt->dbc;
@@ -558,10 +572,11 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
     stmt->rows_fetched_total = 0;
 
     /* Log query (truncate if very long) */
-    if (strlen(query) > 100) {
-        ARGUS_LOG_DEBUG("Executing query: %.100s...", query);
+    const char *logsql = loggable_sql(stmt, query);
+    if (strlen(logsql) > 100) {
+        ARGUS_LOG_DEBUG("Executing query: %.100s...", logsql);
     } else {
-        ARGUS_LOG_DEBUG("Executing query: %s", query);
+        ARGUS_LOG_DEBUG("Executing query: %s", logsql);
     }
 
     /*
@@ -593,7 +608,7 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
             return SQL_ERROR;
         }
         ARGUS_LOG_ERROR("Query execution failed: rc=%d, query=%.100s (%.1f ms)",
-                        rc, query, stmt->execute_time_ms);
+                        rc, loggable_sql(stmt, query), stmt->execute_time_ms);
         stmt->errors_total++;
         if (dbc) dbc->errors_total++;
         if (stmt->diag.count == 0) {
@@ -1505,14 +1520,18 @@ SQLRETURN SQL_API SQLMoreResults(SQLHSTMT StatementHandle)
 {
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
+    argus_diag_clear(&stmt->diag);
 
-    /* No multiple result sets — clean up state to prevent stale data */
-    stmt->executed = false;
-    stmt->num_cols = 0;
-    stmt->metadata_fetched = false;
-    stmt->fetch_started = false;
-    argus_getdata_reset(&stmt->getdata);
-
+    /*
+     * No backend here produces more than one result set, so the answer is
+     * always SQL_NO_DATA — but it used to tear the statement down on the way
+     * out (executed = false, num_cols = 0). Excel and Alteryx call
+     * SQLMoreResults after fetching and then ask SQLNumResultCols or
+     * SQLDescribeCol again, and got zero columns for a result set that was
+     * still perfectly good. ODBC says SQL_NO_DATA leaves the statement as it
+     * was, so nothing is discarded now; SQLCloseCursor and SQLFreeStmt are
+     * what release a result set.
+     */
     return SQL_NO_DATA;
 }
 

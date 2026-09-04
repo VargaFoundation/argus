@@ -7,6 +7,10 @@
 #include <string.h>
 #include <stdarg.h>
 #include <time.h>
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #ifdef _WIN32
 #include <windows.h>
@@ -104,6 +108,29 @@ int argus_log_get_level(void)
     return g_argus_log_level;
 }
 
+/*
+ * Append-only open of a log file that will not follow a symlink and is
+ * created private to the user. Falls back to plain fopen only where the
+ * platform has no such flags (Windows, where O_NOFOLLOW does not exist).
+ */
+static FILE *argus_log_fopen_private(const char *path)
+{
+#ifdef _WIN32
+    FILE *fp = fopen(path, "a");
+    return fp;
+#else
+    int flags = O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+    int fd = open(path, flags, 0600);
+    if (fd < 0) return NULL;
+    FILE *fp = fdopen(fd, "a");
+    if (!fp) close(fd);
+    return fp;
+#endif
+}
+
 void argus_log_set_file(const char *path)
 {
 #ifdef _WIN32
@@ -128,7 +155,16 @@ void argus_log_set_file(const char *path)
 
     /* Open new file or use stderr */
     if (path && path[0]) {
-        FILE *fp = fopen(path, "a");
+        /*
+         * The log path comes from a DSN, which anyone who can hand the user
+         * a .odc or .tds file controls, and the driver runs with the
+         * application's privileges. Opening it with O_NOFOLLOW means a
+         * symlink planted at that path is not followed onto something else,
+         * O_CLOEXEC keeps the descriptor out of child processes, and 0600
+         * keeps the SQL it records readable only by the user who produced
+         * it -- fopen(path, "a") gave it whatever the umask allowed.
+         */
+        FILE *fp = argus_log_fopen_private(path);
         if (fp) {
             g_argus_log_file = fp;
             g_argus_log_file_path = strdup(path);

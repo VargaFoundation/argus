@@ -139,9 +139,14 @@ static void test_bulkops_stub(void **state)
     argus_free_env(env);
 }
 
-/* ── Test: SQLSetScrollOptions returns HYC00 ─────────────────── */
+/* ── Test: SQLSetScrollOptions maps onto the 3.x attributes ──── */
 
-static void test_scroll_options_stub(void **state)
+/*
+ * The ODBC 2.x way of asking for a scrollable cursor. It used to answer
+ * HYC00 for everything, including the read-only static cursor the driver
+ * does support, so an older tool fell back to forward-only for no reason.
+ */
+static void test_scroll_options_sets_the_cursor(void **state)
 {
     (void)state;
 
@@ -150,9 +155,56 @@ static void test_scroll_options_stub(void **state)
     argus_stmt_t *stmt = NULL;
     argus_alloc_stmt(dbc, &stmt);
 
-    SQLRETURN ret = SQLSetScrollOptions((SQLHSTMT)stmt,
-                                         SQL_CONCUR_READ_ONLY, 0, 1);
-    assert_int_equal(ret, SQL_ERROR);
+    /* Static + read-only is supported, and lands on the 3.x attributes. */
+    assert_int_equal(SQLSetScrollOptions((SQLHSTMT)stmt, SQL_CONCUR_READ_ONLY,
+                                         SQL_SCROLL_STATIC, 10),
+                     SQL_SUCCESS);
+    SQLULEN v = 0;
+    assert_int_equal(SQLGetStmtAttr((SQLHSTMT)stmt, SQL_ATTR_CURSOR_TYPE,
+                                    &v, 0, NULL), SQL_SUCCESS);
+    assert_int_equal((int)v, SQL_CURSOR_STATIC);
+    assert_int_equal(SQLGetStmtAttr((SQLHSTMT)stmt, SQL_ATTR_ROW_ARRAY_SIZE,
+                                    &v, 0, NULL), SQL_SUCCESS);
+    assert_int_equal((int)v, 10);
+
+    assert_int_equal(SQLSetScrollOptions((SQLHSTMT)stmt, SQL_CONCUR_READ_ONLY,
+                                         SQL_SCROLL_FORWARD_ONLY, 1),
+                     SQL_SUCCESS);
+    assert_int_equal(SQLGetStmtAttr((SQLHSTMT)stmt, SQL_ATTR_CURSOR_TYPE,
+                                    &v, 0, NULL), SQL_SUCCESS);
+    assert_int_equal((int)v, SQL_CURSOR_FORWARD_ONLY);
+
+    /* A cursor the driver does not have, and a writable one, stay HYC00. */
+    assert_int_equal(SQLSetScrollOptions((SQLHSTMT)stmt, SQL_CONCUR_READ_ONLY,
+                                         SQL_SCROLL_DYNAMIC, 1), SQL_ERROR);
+    assert_int_equal(SQLSetScrollOptions((SQLHSTMT)stmt, SQL_CONCUR_LOCK,
+                                         SQL_SCROLL_STATIC, 1), SQL_ERROR);
+    /* A rowset size of zero is out of range. */
+    assert_int_equal(SQLSetScrollOptions((SQLHSTMT)stmt, SQL_CONCUR_READ_ONLY,
+                                         SQL_SCROLL_STATIC, 0), SQL_ERROR);
+
+    argus_free_stmt(stmt);
+    argus_env_t *env = dbc->env;
+    dbc->connected = false;
+    argus_free_dbc(dbc);
+    argus_free_env(env);
+}
+
+/* An attribute the driver has never heard of is HY092, not a happy zero. */
+static void test_unknown_attribute_is_hy092(void **state)
+{
+    (void)state;
+
+    argus_dbc_t *dbc = create_dbc();
+    dbc->connected = true;
+    argus_stmt_t *stmt = NULL;
+    argus_alloc_stmt(dbc, &stmt);
+
+    SQLULEN v = 12345;
+    assert_int_equal(SQLGetStmtAttr((SQLHSTMT)stmt, 0x7FFF0001,
+                                    &v, 0, NULL), SQL_ERROR);
+    assert_int_equal(SQLGetConnectAttr((SQLHDBC)dbc, 0x7FFF0002,
+                                       &v, 0, NULL), SQL_ERROR);
 
     argus_free_stmt(stmt);
     argus_env_t *env = dbc->env;
@@ -312,7 +364,8 @@ int main(void)
         cmocka_unit_test(test_setpos_stub),
         cmocka_unit_test(test_setpos_refresh),
         cmocka_unit_test(test_bulkops_stub),
-        cmocka_unit_test(test_scroll_options_stub),
+        cmocka_unit_test(test_scroll_options_sets_the_cursor),
+        cmocka_unit_test(test_unknown_attribute_is_hy092),
         cmocka_unit_test(test_describe_param),
         cmocka_unit_test(test_max_rows_attr),
         cmocka_unit_test(test_stmt_attr_invalid),

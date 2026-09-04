@@ -166,6 +166,35 @@ All notable changes to the Argus ODBC Driver project.
   but https turns telemetry off, except on loopback, where nothing reaches a
   network.
 
+### Fixed: accepted-then-ignored ODBC behaviour
+- **`SQLMoreResults` tore the statement down on its way out**, setting
+  `executed = false` and `num_cols = 0` before returning `SQL_NO_DATA`. Excel
+  and Alteryx call it after fetching and then ask `SQLNumResultCols` or
+  `SQLDescribeCol` again, and got zero columns for a result set that was
+  still good. `SQL_NO_DATA` leaves the statement as it was.
+- **`SQLSetScrollOptions` answered `HYC00` for everything**, including the
+  read-only static cursor the driver does support, so ODBC 2.x tools fell
+  back to forward-only for no reason. It is expressed in terms of the 3.x
+  attributes, as the specification has it.
+- **`SQLGetConnectAttr` and `SQLGetStmtAttr` answered `SQL_SUCCESS` and a
+  zero for any attribute they did not know.** A tool probing for a capability
+  read a definite "no" where it should have read "never heard of it", and
+  could not fall back. Unknown identifiers are `HY092`.
+- **`SQL_ATTR_METADATA_ID` only stripped trailing blanks.** A null pointer
+  for an identifier argument now answers `HY009` instead of running an
+  unfiltered catalog query over every schema on the server, and a delimited
+  identifier (`"Sales Data"`) has its quotes removed and its doubled quotes
+  collapsed, instead of being searched for with the quote characters still in
+  it. The `%` and `_` wildcards are still wildcards under `METADATA_ID`.
+- **The log file was opened with `fopen(path, "a")`**: no `O_NOFOLLOW`, so a
+  symlink planted at the DSN's log path was followed; no `O_CLOEXEC`, so the
+  descriptor reached child processes; and whatever mode the umask allowed.
+  It is opened `0600`, without following a symlink, and closed on exec.
+- **Every failed statement wrote 100 characters of fully interpolated SQL to
+  that file** — bound parameter values included, which is exactly where a
+  password or a token is. A prepared statement's own text, markers still in
+  place, is logged instead.
+
 ## [0.6.1] — 2026-09-03
 
 A corrective release. An audit of the driver as v0.6.0 shipped it found that

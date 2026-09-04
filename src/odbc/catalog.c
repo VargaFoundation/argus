@@ -1,4 +1,5 @@
 #include "argus/handle.h"
+#include "argus/dialect.h"
 #include "argus/odbc_api.h"
 #include "argus/log.h"
 #include <stdlib.h>
@@ -52,17 +53,68 @@ static SQLRETURN catalog_check_lengths(argus_stmt_t *stmt,
 
 /* ── Helper: dup catalog arg, applying metadata_id rules if set ── */
 
+/*
+ * With SQL_ATTR_METADATA_ID set to SQL_TRUE the argument is an identifier,
+ * not a search pattern, and ODBC gives a delimited one -- "Sales Data",
+ * quotes included -- its own meaning: the delimiters come off, a doubled
+ * quote inside stands for one, and the case between them is the identifier's
+ * own. Only the trailing blanks were being stripped, so an application that
+ * quoted an identifier searched for a name that still had the quote
+ * characters in it, and found nothing.
+ */
+static char *catalog_unquote_identifier(char *raw, const char *quote)
+{
+    char q = (quote && quote[0]) ? quote[0] : '"';
+    size_t n = strlen(raw);
+    if (n < 2 || raw[0] != q || raw[n - 1] != q) return raw;
+
+    char *out = malloc(n - 1);
+    if (!out) return raw;
+    size_t j = 0;
+    for (size_t i = 1; i < n - 1; i++) {
+        if (raw[i] == q && raw[i + 1] == q) i++;   /* "" stands for one quote */
+        out[j++] = raw[i];
+    }
+    out[j] = '\0';
+    free(raw);
+    return out;
+}
+
 static char *catalog_arg_dup(const SQLCHAR *str, SQLSMALLINT len,
-                              SQLULEN metadata_id)
+                             SQLULEN metadata_id, const char *quote)
 {
     char *raw = argus_str_dup_short(str, len);
     if (raw && metadata_id == SQL_TRUE) {
         char *stripped = strip_trailing_spaces(raw);
         free(raw);
-        return stripped;
+        if (!stripped) return NULL;
+        return catalog_unquote_identifier(stripped, quote);
     }
     return raw;
 }
+
+/*
+ * ODBC: with SQL_ATTR_METADATA_ID set, an identifier argument may not be a
+ * null pointer. It is HY009 -- not, as it was, an unfiltered catalog query
+ * over every schema on the server.
+ */
+static SQLRETURN catalog_check_identifiers(argus_stmt_t *stmt,
+                                           const SQLCHAR *const *args,
+                                           size_t n)
+{
+    if (stmt->metadata_id != SQL_TRUE) return SQL_SUCCESS;
+    for (size_t i = 0; i < n; i++)
+        if (!args[i])
+            return argus_set_error(&stmt->diag, "HY009",
+                                   "[Argus] Invalid use of null pointer: with "
+                                   "SQL_ATTR_METADATA_ID set, every identifier "
+                                   "argument is required", 0);
+    return SQL_SUCCESS;
+}
+#define CATALOG_CHECK_IDENTIFIERS(stmt, ...) \
+    catalog_check_identifiers((stmt), (const SQLCHAR *const[]){ __VA_ARGS__ }, \
+                              sizeof((const SQLCHAR *const[]){ __VA_ARGS__ }) / \
+                              sizeof(const SQLCHAR *))
 
 /* ── Helper: dispatch catalog operation and setup result set ─── */
 
@@ -131,6 +183,12 @@ static SQLRETURN sqltables_impl(
                                                         NameLength4);
         if (len_ret != SQL_SUCCESS) return len_ret;
     }
+    {
+        SQLRETURN id_ret = CATALOG_CHECK_IDENTIFIERS(stmt, CatalogName,
+                                                    SchemaName,
+                                                    TableName);
+        if (id_ret != SQL_SUCCESS) return id_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
@@ -179,10 +237,11 @@ static SQLRETURN sqltables_impl(
     }
 
     SQLULEN mid = stmt->metadata_id;
-    char *catalog    = catalog_arg_dup(CatalogName, NameLength1, mid);
-    char *schema     = catalog_arg_dup(SchemaName,  NameLength2, mid);
-    char *table_name = catalog_arg_dup(TableName,   NameLength3, mid);
-    char *table_type = catalog_arg_dup(TableType,   NameLength4, mid);
+    const char *qc = argus_dialect_for(stmt->dbc)->quote_char;
+    char *catalog    = catalog_arg_dup(CatalogName, NameLength1, mid, qc);
+    char *schema     = catalog_arg_dup(SchemaName, NameLength2, mid, qc);
+    char *table_name = catalog_arg_dup(TableName, NameLength3, mid, qc);
+    char *table_type = catalog_arg_dup(TableType, NameLength4, mid, qc);
 
     /* Check metadata cache first */
     if (argus_metadata_cache_lookup(dbc, stmt, "SQLTables",
@@ -258,6 +317,13 @@ static SQLRETURN sqlcolumns_impl(
                                                         NameLength4);
         if (len_ret != SQL_SUCCESS) return len_ret;
     }
+    {
+        SQLRETURN id_ret = CATALOG_CHECK_IDENTIFIERS(stmt, CatalogName,
+                                                    SchemaName,
+                                                    TableName,
+                                                    ColumnName);
+        if (id_ret != SQL_SUCCESS) return id_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
@@ -271,10 +337,11 @@ static SQLRETURN sqlcolumns_impl(
     }
 
     SQLULEN mid2 = stmt->metadata_id;
-    char *catalog     = catalog_arg_dup(CatalogName, NameLength1, mid2);
-    char *schema      = catalog_arg_dup(SchemaName,  NameLength2, mid2);
-    char *table_name  = catalog_arg_dup(TableName,   NameLength3, mid2);
-    char *column_name = catalog_arg_dup(ColumnName,  NameLength4, mid2);
+    const char *qc = argus_dialect_for(stmt->dbc)->quote_char;
+    char *catalog     = catalog_arg_dup(CatalogName, NameLength1, mid2, qc);
+    char *schema      = catalog_arg_dup(SchemaName, NameLength2, mid2, qc);
+    char *table_name  = catalog_arg_dup(TableName, NameLength3, mid2, qc);
+    char *column_name = catalog_arg_dup(ColumnName, NameLength4, mid2, qc);
 
     /* Check metadata cache first */
     if (argus_metadata_cache_lookup(dbc, stmt, "SQLColumns",
@@ -793,14 +860,21 @@ static SQLRETURN sqlspecialcolumns_impl(
         SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3);
         if (len_ret != SQL_SUCCESS) return len_ret;
     }
+    {
+        SQLRETURN id_ret = CATALOG_CHECK_IDENTIFIERS(stmt, CatalogName,
+                                                    SchemaName,
+                                                    TableName);
+        if (id_ret != SQL_SUCCESS) return id_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
     if (dbc && dbc->connected && dbc->backend && dbc->backend->get_special_columns) {
         SQLULEN mid = stmt->metadata_id;
-        char *cat = catalog_arg_dup(CatalogName, NameLength1, mid);
-        char *sch = catalog_arg_dup(SchemaName,  NameLength2, mid);
-        char *tab = catalog_arg_dup(TableName,   NameLength3, mid);
+        const char *qc = argus_dialect_for(stmt->dbc)->quote_char;
+        char *cat = catalog_arg_dup(CatalogName, NameLength1, mid, qc);
+        char *sch = catalog_arg_dup(SchemaName, NameLength2, mid, qc);
+        char *tab = catalog_arg_dup(TableName, NameLength3, mid, qc);
 
         int rc = dbc->backend->get_special_columns(dbc->backend_conn,
                                                    IdentifierType,
@@ -979,17 +1053,27 @@ static SQLRETURN sqlforeignkeys_impl(
                                                         NameLength4, NameLength5, NameLength6);
         if (len_ret != SQL_SUCCESS) return len_ret;
     }
+    {
+        SQLRETURN id_ret = CATALOG_CHECK_IDENTIFIERS(stmt, PKCatalogName,
+                                                    PKSchemaName,
+                                                    PKTableName,
+                                                    FKCatalogName,
+                                                    FKSchemaName,
+                                                    FKTableName);
+        if (id_ret != SQL_SUCCESS) return id_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
     if (dbc && dbc->connected && dbc->backend && dbc->backend->get_foreign_keys) {
         SQLULEN mid = stmt->metadata_id;
-        char *pk_cat = catalog_arg_dup(PKCatalogName, NameLength1, mid);
-        char *pk_sch = catalog_arg_dup(PKSchemaName,  NameLength2, mid);
-        char *pk_tab = catalog_arg_dup(PKTableName,   NameLength3, mid);
-        char *fk_cat = catalog_arg_dup(FKCatalogName, NameLength4, mid);
-        char *fk_sch = catalog_arg_dup(FKSchemaName,  NameLength5, mid);
-        char *fk_tab = catalog_arg_dup(FKTableName,   NameLength6, mid);
+        const char *qc = argus_dialect_for(stmt->dbc)->quote_char;
+        char *pk_cat = catalog_arg_dup(PKCatalogName, NameLength1, mid, qc);
+        char *pk_sch = catalog_arg_dup(PKSchemaName, NameLength2, mid, qc);
+        char *pk_tab = catalog_arg_dup(PKTableName, NameLength3, mid, qc);
+        char *fk_cat = catalog_arg_dup(FKCatalogName, NameLength4, mid, qc);
+        char *fk_sch = catalog_arg_dup(FKSchemaName, NameLength5, mid, qc);
+        char *fk_tab = catalog_arg_dup(FKTableName, NameLength6, mid, qc);
 
         int rc = dbc->backend->get_foreign_keys(dbc->backend_conn,
                                                 pk_cat, pk_sch, pk_tab,
@@ -1069,14 +1153,21 @@ static SQLRETURN sqlprocedures_impl(
         SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3);
         if (len_ret != SQL_SUCCESS) return len_ret;
     }
+    {
+        SQLRETURN id_ret = CATALOG_CHECK_IDENTIFIERS(stmt, CatalogName,
+                                                    SchemaName,
+                                                    ProcName);
+        if (id_ret != SQL_SUCCESS) return id_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
     if (dbc && dbc->connected && dbc->backend && dbc->backend->get_procedures) {
         SQLULEN mid = stmt->metadata_id;
-        char *cat  = catalog_arg_dup(CatalogName, NameLength1, mid);
-        char *sch  = catalog_arg_dup(SchemaName,  NameLength2, mid);
-        char *proc = catalog_arg_dup(ProcName,    NameLength3, mid);
+        const char *qc = argus_dialect_for(stmt->dbc)->quote_char;
+        char *cat  = catalog_arg_dup(CatalogName, NameLength1, mid, qc);
+        char *sch  = catalog_arg_dup(SchemaName, NameLength2, mid, qc);
+        char *proc = catalog_arg_dup(ProcName, NameLength3, mid, qc);
 
         int rc = dbc->backend->get_procedures(dbc->backend_conn,
                                               cat, sch, proc, &stmt->op);
@@ -1158,16 +1249,24 @@ static SQLRETURN sqlprocedurecolumns_impl(
                                                         NameLength4);
         if (len_ret != SQL_SUCCESS) return len_ret;
     }
+    {
+        SQLRETURN id_ret = CATALOG_CHECK_IDENTIFIERS(stmt, CatalogName,
+                                                    SchemaName,
+                                                    ProcName,
+                                                    ColumnName);
+        if (id_ret != SQL_SUCCESS) return id_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
     if (dbc && dbc->connected && dbc->backend &&
         dbc->backend->get_procedure_columns) {
         SQLULEN mid = stmt->metadata_id;
-        char *cat  = catalog_arg_dup(CatalogName, NameLength1, mid);
-        char *sch  = catalog_arg_dup(SchemaName,  NameLength2, mid);
-        char *proc = catalog_arg_dup(ProcName,    NameLength3, mid);
-        char *col  = catalog_arg_dup(ColumnName,  NameLength4, mid);
+        const char *qc = argus_dialect_for(stmt->dbc)->quote_char;
+        char *cat  = catalog_arg_dup(CatalogName, NameLength1, mid, qc);
+        char *sch  = catalog_arg_dup(SchemaName, NameLength2, mid, qc);
+        char *proc = catalog_arg_dup(ProcName, NameLength3, mid, qc);
+        char *col  = catalog_arg_dup(ColumnName, NameLength4, mid, qc);
 
         int rc = dbc->backend->get_procedure_columns(dbc->backend_conn,
                                                      cat, sch, proc, col,
@@ -1243,15 +1342,22 @@ static SQLRETURN sqltableprivileges_impl(
         SQLRETURN len_ret = CATALOG_CHECK_LENGTHS(stmt, NameLength1, NameLength2, NameLength3);
         if (len_ret != SQL_SUCCESS) return len_ret;
     }
+    {
+        SQLRETURN id_ret = CATALOG_CHECK_IDENTIFIERS(stmt, CatalogName,
+                                                    SchemaName,
+                                                    TableName);
+        if (id_ret != SQL_SUCCESS) return id_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
     if (dbc && dbc->connected && dbc->backend &&
         dbc->backend->get_table_privileges) {
         SQLULEN mid = stmt->metadata_id;
-        char *cat = catalog_arg_dup(CatalogName, NameLength1, mid);
-        char *sch = catalog_arg_dup(SchemaName,  NameLength2, mid);
-        char *tab = catalog_arg_dup(TableName,   NameLength3, mid);
+        const char *qc = argus_dialect_for(stmt->dbc)->quote_char;
+        char *cat = catalog_arg_dup(CatalogName, NameLength1, mid, qc);
+        char *sch = catalog_arg_dup(SchemaName, NameLength2, mid, qc);
+        char *tab = catalog_arg_dup(TableName, NameLength3, mid, qc);
 
         int rc = dbc->backend->get_table_privileges(dbc->backend_conn,
                                                     cat, sch, tab, &stmt->op);
@@ -1328,16 +1434,24 @@ static SQLRETURN sqlcolumnprivileges_impl(
                                                         NameLength4);
         if (len_ret != SQL_SUCCESS) return len_ret;
     }
+    {
+        SQLRETURN id_ret = CATALOG_CHECK_IDENTIFIERS(stmt, CatalogName,
+                                                    SchemaName,
+                                                    TableName,
+                                                    ColumnName);
+        if (id_ret != SQL_SUCCESS) return id_ret;
+    }
     argus_stmt_reset(stmt);
 
     argus_dbc_t *dbc = stmt->dbc;
     if (dbc && dbc->connected && dbc->backend &&
         dbc->backend->get_column_privileges) {
         SQLULEN mid = stmt->metadata_id;
-        char *cat = catalog_arg_dup(CatalogName, NameLength1, mid);
-        char *sch = catalog_arg_dup(SchemaName,  NameLength2, mid);
-        char *tab = catalog_arg_dup(TableName,   NameLength3, mid);
-        char *col = catalog_arg_dup(ColumnName,  NameLength4, mid);
+        const char *qc = argus_dialect_for(stmt->dbc)->quote_char;
+        char *cat = catalog_arg_dup(CatalogName, NameLength1, mid, qc);
+        char *sch = catalog_arg_dup(SchemaName, NameLength2, mid, qc);
+        char *tab = catalog_arg_dup(TableName, NameLength3, mid, qc);
+        char *col = catalog_arg_dup(ColumnName, NameLength4, mid, qc);
 
         int rc = dbc->backend->get_column_privileges(dbc->backend_conn,
                                                      cat, sch, tab, col,

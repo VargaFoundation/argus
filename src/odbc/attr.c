@@ -309,11 +309,16 @@ static SQLRETURN sqlgetconnectattr_impl(
         return SQL_SUCCESS;
 
     default:
-        /* Return 0 for unknown attributes */
-        if (Value && BufferLength >= (SQLINTEGER)sizeof(SQLUINTEGER))
-            *(SQLUINTEGER *)Value = 0;
-        if (StringLength) *StringLength = sizeof(SQLUINTEGER);
-        return SQL_SUCCESS;
+        /*
+         * An attribute the driver does not know is HY092, not SQL_SUCCESS
+         * with a zero. Answering "0, and it went fine" told the application
+         * the attribute existed and was off — so a tool probing for a
+         * capability read a definite "no" where it should have read "I have
+         * never heard of this", and could not fall back.
+         */
+        ARGUS_LOG_DEBUG("SQLGetConnectAttr: unknown attribute %d", Attribute);
+        return argus_set_error(&dbc->diag, "HY092",
+                               "[Argus] Invalid attribute identifier", 0);
     }
 }
 
@@ -648,10 +653,11 @@ static SQLRETURN sqlgetstmtattr_impl(
         return SQL_SUCCESS;
 
     default:
-        if (Value && BufferLength >= (SQLINTEGER)sizeof(SQLULEN))
-            *(SQLULEN *)Value = 0;
-        if (StringLength) *StringLength = sizeof(SQLULEN);
-        return SQL_SUCCESS;
+        /* As for the connection attributes above: an unknown identifier is
+         * HY092, not a successful zero. */
+        ARGUS_LOG_DEBUG("SQLGetStmtAttr: unknown attribute %d", Attribute);
+        return argus_set_error(&stmt->diag, "HY092",
+                               "[Argus] Invalid attribute identifier", 0);
     }
 }
 

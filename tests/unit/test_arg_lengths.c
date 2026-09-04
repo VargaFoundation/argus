@@ -215,6 +215,40 @@ static void test_connection_functions(void **state)
     SQLFreeHandle(SQL_HANDLE_ENV, env);
 }
 
+
+/*
+ * With SQL_ATTR_METADATA_ID set, a catalog argument is an identifier, so a
+ * null pointer for one is HY009 -- not, as it used to be, an unfiltered
+ * query over every schema on the server.
+ */
+static void test_metadata_id_rejects_null_identifiers(void **state)
+{
+    (void)state;
+    handles_t h;
+    handles_open(&h);
+    SQLCHAR *t = (SQLCHAR *)"t";
+
+    /* Without the attribute a null argument means "not filtered", so the
+     * call gets as far as the (absent) backend: 08003, not HY009. */
+    assert_int_equal(SQLSetStmtAttr(h.stmt, SQL_ATTR_METADATA_ID,
+                                    (SQLPOINTER)SQL_FALSE, 0), SQL_SUCCESS);
+    assert_int_equal(SQLTables(h.stmt, NULL, 0, NULL, 0, t, SQL_NTS,
+                               NULL, 0), SQL_ERROR);
+    expect_state(SQL_HANDLE_STMT, h.stmt, "08003");
+
+    assert_int_equal(SQLSetStmtAttr(h.stmt, SQL_ATTR_METADATA_ID,
+                                    (SQLPOINTER)SQL_TRUE, 0), SQL_SUCCESS);
+    assert_int_equal(SQLTables(h.stmt, NULL, 0, NULL, 0, t, SQL_NTS,
+                               NULL, 0), SQL_ERROR);
+    expect_state(SQL_HANDLE_STMT, h.stmt, "HY009");
+
+    assert_int_equal(SQLColumns(h.stmt, t, SQL_NTS, t, SQL_NTS, NULL, 0,
+                                t, SQL_NTS), SQL_ERROR);
+    expect_state(SQL_HANDLE_STMT, h.stmt, "HY009");
+
+    handles_close(&h);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -222,6 +256,7 @@ int main(void)
         cmocka_unit_test(test_exec_direct_and_prepare),
         cmocka_unit_test(test_cursor_name),
         cmocka_unit_test(test_catalog_functions),
+        cmocka_unit_test(test_metadata_id_rejects_null_identifiers),
         cmocka_unit_test(test_connection_functions),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

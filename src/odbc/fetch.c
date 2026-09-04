@@ -2243,20 +2243,48 @@ SQLRETURN SQL_API SQLBulkOperations(
 
 /* ── ODBC 2.x: SQLSetScrollOptions (stub) ────────────────────── */
 
+/*
+ * The ODBC 2.x way of asking for a scrollable cursor, which older tools
+ * (and the driver manager, on their behalf) still use. It was refused with
+ * HYC00 even for the one combination the driver does support — a read-only
+ * static cursor — so those tools fell back to forward-only for no reason.
+ * It is expressed in terms of the 3.x attributes, as the specification has
+ * it: KeysetSize selects the cursor type, RowsetSize is the rowset size.
+ */
 SQLRETURN SQL_API SQLSetScrollOptions(
     SQLHSTMT     StatementHandle,
     SQLUSMALLINT Concurrency,
     SQLLEN       KeysetSize,
     SQLUSMALLINT RowsetSize)
 {
-    (void)Concurrency;
-    (void)KeysetSize;
-    (void)RowsetSize;
-
     argus_stmt_t *stmt = (argus_stmt_t *)StatementHandle;
     if (!argus_valid_stmt(stmt)) return SQL_INVALID_HANDLE;
+    argus_diag_clear(&stmt->diag);
 
-    return argus_set_error(&stmt->diag, "HYC00",
-                           "[Argus] SQLSetScrollOptions not supported", 0);
+    /* Only a read-only cursor exists here: the driver never writes back. */
+    if (Concurrency != SQL_CONCUR_READ_ONLY)
+        return argus_set_error(&stmt->diag, "HYC00",
+                               "[Argus] only SQL_CONCUR_READ_ONLY is supported",
+                               0);
+
+    SQLULEN cursor;
+    switch (KeysetSize) {
+    case SQL_SCROLL_FORWARD_ONLY: cursor = SQL_CURSOR_FORWARD_ONLY; break;
+    case SQL_SCROLL_STATIC:       cursor = SQL_CURSOR_STATIC;       break;
+    default:
+        /* SQL_SCROLL_KEYSET_DRIVEN, SQL_SCROLL_DYNAMIC and an explicit
+         * keyset size all need a cursor this driver does not have. */
+        return argus_set_error(&stmt->diag, "HYC00",
+                               "[Argus] only forward-only and static cursors "
+                               "are supported", 0);
+    }
+
+    if (RowsetSize == 0)
+        return argus_set_error(&stmt->diag, "HY107",
+                               "[Argus] row value out of range", 0);
+
+    stmt->cursor_type = cursor;
+    stmt->row_array_size = RowsetSize;
+    return SQL_SUCCESS;
 }
 
