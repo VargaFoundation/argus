@@ -1,4 +1,5 @@
 #include "mywire_internal.h"
+#include "argus/caps.h"
 #include "argus/compat.h"
 #include "argus/error.h"
 #include <stdlib.h>
@@ -369,8 +370,21 @@ static bool mywire_get_server_version(argus_backend_conn_t raw_conn,
 
 /* ── Backend vtable ──────────────────────────────────────────── */
 
+static const argus_backend_caps_t mywire_caps = {
+    .dbms_name       = "MySQL",
+    /* Table names follow the server's file system (case-sensitive on Linux,
+     * not on Windows) while column names never are, so the engine stores
+     * what it is given and matches without regard to case: SQL_IC_MIXED. */
+    .identifier_case = SQL_IC_MIXED,
+    .keywords        = "AUTO_INCREMENT,DATABASES,DUAL,ENGINE,FULLTEXT,"
+                       "IGNORE,INDEX,LIMIT,LOCK,LONGBLOB,LONGTEXT,MEDIUMINT,"
+                       "REGEXP,REPLACE,RLIKE,SHOW,SPATIAL,STRAIGHT_JOIN,"
+                       "TINYINT,UNSIGNED,USE,ZEROFILL",
+};
+
 static const argus_backend_t mywire_backend = {
     .name                  = "mysql",
+    .caps                  = &mywire_caps,
     .connect               = mywire_connect,
     .disconnect            = mywire_disconnect,
     .is_alive              = mywire_is_alive,

@@ -1,4 +1,5 @@
 #include "pinot_internal.h"
+#include "argus/caps.h"
 #include "argus/handle.h"
 #include "argus/log.h"
 #include "argus/compat.h"
@@ -609,8 +610,17 @@ int pinot_get_type_info(argus_backend_conn_t raw, SQLSMALLINT sql_type,
 
 /* ── Backend vtable ──────────────────────────────────────────── */
 
+static const argus_backend_caps_t pinot_caps = {
+    .dbms_name       = "Apache Pinot",
+    /* Pinot table and column names are case-sensitive. */
+    .identifier_case = SQL_IC_SENSITIVE,
+    .keywords        = "OPTION,REGEXP_LIKE,TEXT_MATCH,JSON_MATCH,"
+                       "DISTINCTCOUNT,PERCENTILEEST,ARRAYLENGTH",
+};
+
 static const argus_backend_t pinot_backend = {
     .name                  = "pinot",
+    .caps                  = &pinot_caps,
     .connect               = pinot_connect,
     .disconnect            = pinot_disconnect,
     .is_alive              = pinot_is_alive,

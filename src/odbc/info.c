@@ -167,9 +167,16 @@ SQLRETURN SQL_API SQLGetInfo(
     case SQL_GETDATA_EXTENSIONS:
         return set_uinteger_info(SQL_GD_ANY_COLUMN | SQL_GD_ANY_ORDER,
                                   InfoValue, StringLength);
+    /*
+     * SQL_CB_CLOSE was a promise the driver did not keep: SQLEndTran leaves
+     * every open cursor exactly where it was, so an application that took
+     * the driver at its word and re-fetched without re-executing got its
+     * rows from a cursor that should have been closed. What actually happens
+     * is that cursors survive the transaction, which is SQL_CB_PRESERVE.
+     */
     case SQL_CURSOR_COMMIT_BEHAVIOR:
     case SQL_CURSOR_ROLLBACK_BEHAVIOR:
-        return set_usmallint_info(SQL_CB_CLOSE, InfoValue, StringLength);
+        return set_usmallint_info(SQL_CB_PRESERVE, InfoValue, StringLength);
 
     /* ── Identifier info ─────────────────────────────────────── */
     case SQL_IDENTIFIER_QUOTE_CHAR:
@@ -388,7 +395,9 @@ SQLRETURN SQL_API SQLGetInfo(
         return set_usmallint_info(SQL_IC_SENSITIVE, InfoValue, StringLength);
 
     case SQL_IDENTIFIER_CASE:
-        return set_usmallint_info(SQL_IC_LOWER, InfoValue, StringLength);
+        return set_usmallint_info(
+            argus_caps_u16(argus_caps_for(dbc)->identifier_case, SQL_IC_LOWER),
+            InfoValue, StringLength);
 
     case SQL_CORRELATION_NAME:
         return set_usmallint_info(SQL_CN_ANY, InfoValue, StringLength);
@@ -440,10 +449,21 @@ SQLRETURN SQL_API SQLGetInfo(
             SQL_AF_MAX | SQL_AF_MIN | SQL_AF_SUM,
             InfoValue, StringLength);
 
+    /*
+     * Two different bitmasks that happened to share a case label, so a
+     * catalog was described exactly like a schema. They are separate: the
+     * driver names catalogs in DML and in DDL, and qualifies procedures and
+     * privilege definitions only through the schema.
+     */
     case SQL_CATALOG_USAGE:
-    case SQL_SCHEMA_USAGE:
         return set_uinteger_info(
             SQL_CU_DML_STATEMENTS | SQL_CU_TABLE_DEFINITION,
+            InfoValue, StringLength);
+
+    case SQL_SCHEMA_USAGE:
+        return set_uinteger_info(
+            SQL_SU_DML_STATEMENTS | SQL_SU_TABLE_DEFINITION |
+            SQL_SU_PROCEDURE_INVOCATION | SQL_SU_PRIVILEGE_DEFINITION,
             InfoValue, StringLength);
 
     case SQL_ACCESSIBLE_TABLES:
@@ -471,7 +491,9 @@ SQLRETURN SQL_API SQLGetInfo(
 
     case SQL_KEYWORDS:
         return set_string_info(
-            "LATERAL,MAP,REDUCE,TRANSFORM,TABLESAMPLE,CLUSTER,DISTRIBUTE,SORT",
+            argus_caps_str(argus_caps_for(dbc)->keywords,
+                           "LATERAL,MAP,REDUCE,TRANSFORM,TABLESAMPLE,"
+                           "CLUSTER,DISTRIBUTE,SORT"),
             InfoValue, BufferLength, StringLength);
 
     case SQL_USER_NAME:

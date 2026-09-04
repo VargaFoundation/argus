@@ -54,6 +54,24 @@ typedef struct argus_backend_caps {
     SQLUSMALLINT   odbc_sql_conformance;
 
     bool           describe_parameter;   /* false → SQL_DESCRIBE_PARAMETER = "N" */
+
+    /*
+     * SQL_IDENTIFIER_CASE: how the engine stores an unquoted identifier.
+     * 0 → SQL_IC_LOWER, which is what info.c answered for every backend,
+     * true or not: Phoenix folds to upper, and BigQuery, Druid, Pinot and
+     * Kudu are case-sensitive. A tool that lower-cases a name because the
+     * driver said the engine does looks for a table that is not there.
+     */
+    SQLUSMALLINT   identifier_case;
+
+    /*
+     * SQL_KEYWORDS: the engine's reserved words that are NOT in SQL-92,
+     * comma-separated, no spaces. NULL → the Hive list, which every backend
+     * used to be handed. An application quotes what this names, so a wrong
+     * list means it either quotes the wrong words or leaves a real keyword
+     * bare.
+     */
+    const char    *keywords;
 } argus_backend_caps_t;
 
 typedef struct argus_dbc argus_dbc_t;

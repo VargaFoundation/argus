@@ -1,4 +1,5 @@
 #include "argus/backend.h"
+#include "argus/caps.h"
 #include "argus/handle.h"
 #include <stdlib.h>
 
@@ -68,8 +69,21 @@ int phoenix_get_primary_keys(argus_backend_conn_t conn,
 bool phoenix_get_last_error(argus_backend_conn_t conn, char *buf, size_t buflen);
 
 /* Phoenix backend vtable */
+static const argus_backend_caps_t phoenix_caps = {
+    .dbms_name       = "Apache Phoenix",
+    /* Phoenix folds an unquoted identifier to upper case, like the SQL
+     * standard; the driver used to tell every application it folded to
+     * lower, so a tool that normalised names looked for tables Phoenix
+     * does not have. */
+    .identifier_case = SQL_IC_UPPER,
+    .keywords        = "ARRAY,ASYNC,BINARY,DYNAMIC,INDEX,SALT_BUCKETS,"
+                       "SEQUENCE,SPLIT,TENANT_ID,UNSIGNED_INT,UPSERT,"
+                       "VIEW_STATEMENT",
+};
+
 static const argus_backend_t phoenix_backend = {
     .name                  = "phoenix",
+    .caps                  = &phoenix_caps,
     .connect               = phoenix_connect,
     .disconnect            = phoenix_disconnect,
     .is_alive              = phoenix_is_alive,

@@ -149,9 +149,17 @@ static void test_dbms_name_is_preserved(void **state)
     argus_backends_init();
 
     struct { const char *backend; const char *expect; } known[] = {
-        { "hive",   "Apache Hive" },
-        { "impala", "Apache Impala" },
-        { "trino",  "Trino" },
+        { "hive",      "Apache Hive" },
+        { "impala",    "Apache Impala" },
+        { "trino",     "Trino" },
+        { "phoenix",   "Apache Phoenix" },
+        { "pinot",     "Apache Pinot" },
+        { "druid",     "Apache Druid" },
+        { "kudu",      "Apache Kudu" },
+        { "mysql",     "MySQL" },
+        { "bigquery",  "Google BigQuery" },
+        { "flightsql", "Arrow Flight SQL" },
+        { "postgres",  "PostgreSQL" },
     };
 
     for (size_t i = 0; i < sizeof(known) / sizeof(known[0]); i++) {
@@ -164,14 +172,82 @@ static void test_dbms_name_is_preserved(void **state)
         free_dbc(dbc);
     }
 
-    /* A backend with no display name reports its own name, as before. */
-    const argus_backend_t *b = argus_backend_find("pinot");
-    if (!b) b = argus_backend_find("druid");
+    /*
+     * A backend with no descriptor at all still reports its own name. Every
+     * registered backend has one now, so the fallback is exercised with a
+     * descriptor of the shape a new backend starts from.
+     */
+    argus_backend_t bare;
+    memset(&bare, 0, sizeof(bare));
+    bare.name = "brand_new_engine";
+    argus_dbc_t *dbc = dbc_for(&bare);
+    char buf[128];
+    get_str(dbc, SQL_DBMS_NAME, buf, sizeof(buf));
+    assert_string_equal(buf, "brand_new_engine");
+    free_dbc(dbc);
+}
+
+/*
+ * SQL_IDENTIFIER_CASE was SQL_IC_LOWER for every backend, which is only
+ * true for some of them: Phoenix folds to upper, and BigQuery, Druid,
+ * Pinot and Kudu store an identifier exactly as written.
+ */
+static void test_identifier_case_follows_the_engine(void **state)
+{
+    (void)state;
+    argus_backends_init();
+
+    struct { const char *backend; SQLUSMALLINT expect; } cases[] = {
+        { "hive",     SQL_IC_LOWER },
+        { "impala",   SQL_IC_LOWER },
+        { "trino",    SQL_IC_LOWER },
+        { "postgres", SQL_IC_LOWER },
+        { "phoenix",  SQL_IC_UPPER },
+        { "pinot",    SQL_IC_SENSITIVE },
+        { "druid",    SQL_IC_SENSITIVE },
+        { "kudu",     SQL_IC_SENSITIVE },
+        { "bigquery", SQL_IC_SENSITIVE },
+        { "mysql",    SQL_IC_MIXED },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const argus_backend_t *b = argus_backend_find(cases[i].backend);
+        if (!b) continue;               /* not compiled in */
+        argus_dbc_t *dbc = dbc_for(b);
+        if (get_u16(dbc, SQL_IDENTIFIER_CASE) != cases[i].expect)
+            fail_msg("%s: SQL_IDENTIFIER_CASE is %u, expected %u",
+                     b->name, get_u16(dbc, SQL_IDENTIFIER_CASE),
+                     cases[i].expect);
+        free_dbc(dbc);
+    }
+}
+
+/*
+ * SQL_KEYWORDS handed every backend Hive's list. An application quotes what
+ * this names, so a MySQL connection was told AUTO_INCREMENT was safe bare
+ * and TRANSFORM was not.
+ */
+static void test_keywords_follow_the_engine(void **state)
+{
+    (void)state;
+    argus_backends_init();
+
+    const argus_backend_t *b = argus_backend_find("mysql");
     if (b) {
         argus_dbc_t *dbc = dbc_for(b);
-        char buf[128];
-        get_str(dbc, SQL_DBMS_NAME, buf, sizeof(buf));
-        assert_string_equal(buf, b->name);
+        char buf[512];
+        get_str(dbc, SQL_KEYWORDS, buf, sizeof(buf));
+        assert_non_null(strstr(buf, "AUTO_INCREMENT"));
+        assert_null(strstr(buf, "TRANSFORM"));
+        free_dbc(dbc);
+    }
+
+    b = argus_backend_find("hive");
+    if (b) {
+        argus_dbc_t *dbc = dbc_for(b);
+        char buf[512];
+        get_str(dbc, SQL_KEYWORDS, buf, sizeof(buf));
+        assert_non_null(strstr(buf, "TRANSFORM"));
         free_dbc(dbc);
     }
 }
@@ -287,6 +363,8 @@ int main(void)
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_backends_without_caps_are_unchanged),
         cmocka_unit_test(test_dbms_name_is_preserved),
+        cmocka_unit_test(test_identifier_case_follows_the_engine),
+        cmocka_unit_test(test_keywords_follow_the_engine),
         cmocka_unit_test(test_unconnected_dbc_uses_defaults),
         cmocka_unit_test(test_defaulting_helpers),
         cmocka_unit_test(test_postgres_family_caps),

@@ -1,4 +1,5 @@
 #include "druid_internal.h"
+#include "argus/caps.h"
 #include "argus/handle.h"
 #include "argus/log.h"
 #include "argus/compat.h"
@@ -516,8 +517,18 @@ static int druid_get_schemas(argus_backend_conn_t conn, const char *catalog,
 
 /* ── Backend vtable ──────────────────────────────────────────── */
 
+static const argus_backend_caps_t druid_caps = {
+    .dbms_name       = "Apache Druid",
+    /* Druid datasource and column names are case-sensitive. */
+    .identifier_case = SQL_IC_SENSITIVE,
+    .keywords        = "APPROX_COUNT_DISTINCT,APPROX_QUANTILE,BLOOM_FILTER,"
+                       "DATASOURCE,EARLIEST,LATEST,LOOKUP,TIME_FLOOR,"
+                       "TIME_PARSE,TIME_SHIFT",
+};
+
 static const argus_backend_t druid_backend = {
     .name                  = "druid",
+    .caps                  = &druid_caps,
     .connect               = druid_connect,
     .disconnect            = druid_disconnect,
     .is_alive              = druid_is_alive,

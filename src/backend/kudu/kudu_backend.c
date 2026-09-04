@@ -1,4 +1,5 @@
 #include "argus/backend.h"
+#include "argus/caps.h"
 #include "argus/handle.h"
 #include <stdlib.h>
 
@@ -66,8 +67,17 @@ int kudu_get_primary_keys(argus_backend_conn_t conn,
                            argus_backend_op_t *out_op);
 
 /* Kudu backend vtable */
+static const argus_backend_caps_t kudu_caps = {
+    .dbms_name       = "Apache Kudu",
+    /* Kudu table and column names are case-sensitive. */
+    .identifier_case = SQL_IC_SENSITIVE,
+    /* The driver's own SQL subset over Kudu has no keywords beyond SQL-92. */
+    .keywords        = "",
+};
+
 static const argus_backend_t kudu_backend = {
     .name                  = "kudu",
+    .caps                  = &kudu_caps,
     .connect               = kudu_connect,
     .disconnect            = kudu_disconnect,
     .is_alive              = kudu_is_alive,

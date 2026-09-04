@@ -1,4 +1,5 @@
 #include "bigquery_internal.h"
+#include "argus/caps.h"
 #include "argus/handle.h"
 #include "argus/log.h"
 #include "argus/compat.h"
@@ -1011,8 +1012,17 @@ static int bq_get_columns(argus_backend_conn_t raw, const char *catalog,
 
 /* ── Backend vtable ──────────────────────────────────────────── */
 
+static const argus_backend_caps_t bigquery_caps = {
+    .dbms_name       = "Google BigQuery",
+    /* Dataset and table names are case-sensitive in BigQuery. */
+    .identifier_case = SQL_IC_SENSITIVE,
+    .keywords        = "ASSERT_ROWS_MODIFIED,ENUM,EXCLUDE,HASH,IGNORE,"
+                       "LOOKUP,PROTO,QUALIFY,RESPECT,STRUCT,UNNEST,WINDOW",
+};
+
 static const argus_backend_t bigquery_backend = {
     .name                  = "bigquery",
+    .caps                  = &bigquery_caps,
     .connect               = bq_connect,
     .disconnect            = bq_disconnect,
     .is_alive              = bq_is_alive,

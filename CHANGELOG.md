@@ -194,6 +194,19 @@ All notable changes to the Argus ODBC Driver project.
   that file** — bound parameter values included, which is exactly where a
   password or a token is. A prepared statement's own text, markers still in
   place, is logged instead.
+- **`SQLGetInfo` answered for Hive whatever the connection was.**
+  `SQL_IDENTIFIER_CASE` was `SQL_IC_LOWER` for every backend — true for Hive,
+  Impala, Trino and PostgreSQL, wrong for Phoenix (which folds to upper) and
+  for BigQuery, Druid, Pinot and Kudu (which store an identifier as written),
+  so a tool that normalised names looked for tables that were not there. And
+  `SQL_KEYWORDS` handed every connection Hive's reserved words, so a MySQL
+  application was told `AUTO_INCREMENT` needed no quoting and `TRANSFORM`
+  did. Both come from the backend's capability descriptor now.
+- **`SQL_CATALOG_USAGE` and `SQL_SCHEMA_USAGE` shared a case label**, so a
+  catalog was described exactly like a schema.
+- **`SQL_CURSOR_COMMIT_BEHAVIOR` promised `SQL_CB_CLOSE`** while `SQLEndTran`
+  left every open cursor where it was. It reports `SQL_CB_PRESERVE`, which is
+  what the driver actually does.
 - **The Unicode entry points halved every string buffer.** ODBC gives the W
   functions two units: a count of characters where the buffer can only hold a
   string (`SQLDescribeColW`, `SQLGetCursorNameW`, `SQLDriverConnectW`,

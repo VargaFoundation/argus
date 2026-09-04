@@ -1,4 +1,5 @@
 #include "flightsql_internal.h"
+#include "argus/caps.h"
 #include "flightsql_convert.h"
 
 #include <arrow/ipc/dictionary.h>
@@ -446,6 +447,24 @@ static bool flightsql_get_last_error(argus_backend_conn_t raw_conn,
 
 /* ── Backend vtable ──────────────────────────────────────────── */
 
+static const argus_backend_caps_t flightsql_caps = {
+    /* dbms_name             */ "Arrow Flight SQL",
+    /* catalog_term          */ nullptr,
+    /* schema_term           */ nullptr,
+    /* procedure_term        */ nullptr,
+    /* max_identifier_len    */ 0,
+    /* txn_capable           */ 0,
+    /* txn_isolation_options */ 0,
+    /* default_txn_isolation */ 0,
+    /* odbc_sql_conformance  */ 0,
+    /* describe_parameter    */ false,
+    /* The server behind Flight SQL is unknown, so no case folding is
+     * claimed: an identifier is taken as the application wrote it, rather
+     * than lower-cased on the strength of a guess. */
+    /* identifier_case       */ SQL_IC_SENSITIVE,
+    /* keywords              */ "",
+};
+
 static const argus_backend_t flightsql_backend = {
     /* name                 */ "flightsql",
     /* connect              */ flightsql_connect,
@@ -465,6 +484,21 @@ static const argus_backend_t flightsql_backend = {
     /* get_primary_keys     */ flightsql_get_primary_keys,
     /* get_statistics       */ nullptr,
     /* get_last_error       */ flightsql_get_last_error,
+    /* get_server_version   */ nullptr,
+    /* get_foreign_keys     */ nullptr,
+    /* get_special_columns  */ nullptr,
+    /* get_procedures       */ nullptr,
+    /* get_procedure_columns*/ nullptr,
+    /* get_table_privileges */ nullptr,
+    /* get_column_privileges*/ nullptr,
+    /* set_autocommit       */ nullptr,
+    /* end_transaction      */ nullptr,
+    /* set_isolation        */ nullptr,
+    /* reset_session        */ nullptr,
+    /* describe_params      */ nullptr,
+    /* get_affected_rows    */ nullptr,
+    /* get_last_error_ex    */ nullptr,
+    /* caps                 */ &flightsql_caps,
 };
 
 extern "C" const argus_backend_t* argus_flightsql_backend_get(void)
