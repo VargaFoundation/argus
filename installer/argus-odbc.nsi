@@ -37,6 +37,56 @@ RequestExecutionLevel admin
 
 !insertmacro MUI_LANGUAGE "English"
 
+; ── Upgrade in place ─────────────────────────────────────────────
+
+;
+; Installing over an existing version used to copy the new files on top and
+; leave everything else where it was. A DLL that an older version bundled and
+; this one does not stayed in the directory, and the driver -- which loads
+; from its own directory first -- would go on loading the stale one. So the
+; previous version is uninstalled first, into the same directory, before
+; anything is written.
+;
+Function .onInit
+    SetRegView 64
+
+    ReadRegStr $R0 HKLM \
+        "Software\Microsoft\Windows\CurrentVersion\Uninstall\ArgusODBC" \
+        "UninstallString"
+    StrCmp $R0 "" done
+
+    ; Upgrade in place: keep the directory the previous version chose.
+    ReadRegStr $R2 HKLM "Software\Argus ODBC Driver" "InstallDir"
+    StrCmp $R2 "" +2
+    StrCpy $INSTDIR $R2
+
+    ; A silent install (Intune, and any unattended deployment) must not stop
+    ; on a dialog.
+    IfSilent uninst
+
+    ReadRegStr $R1 HKLM \
+        "Software\Microsoft\Windows\CurrentVersion\Uninstall\ArgusODBC" \
+        "DisplayVersion"
+    MessageBox MB_OKCANCEL|MB_ICONINFORMATION \
+        "Argus ODBC Driver $R1 is already installed in $INSTDIR.$\r$\n$\r$\n\
+It will be removed before ${VERSION} is installed, so that nothing an older \
+version left behind can be loaded by the new one.$\r$\n$\r$\n\
+Close anything using the driver first (Excel, Power BI, Tableau), or files \
+in use will be left for the next restart." \
+        IDOK uninst
+    Abort
+
+uninst:
+    ; _?= runs the uninstaller from $INSTDIR and, crucially, synchronously:
+    ; without it NSIS copies itself to %TEMP% and returns at once, and the
+    ; install below would race the removal. It also means the uninstaller
+    ; does not delete itself, so that is done here.
+    ExecWait '"$R0" /S _?=$INSTDIR'
+    Delete "$INSTDIR\uninstall.exe"
+
+done:
+FunctionEnd
+
 ; ── Install Section ──────────────────────────────────────────────
 Section "Argus ODBC Driver" SecDriver
     SectionIn RO

@@ -448,9 +448,19 @@ jobs:
           $VERSION = "$env:GITHUB_REF_NAME" -replace '^v',''
           # Copy Intune scripts into staging
           Copy-Item installer/intune/*.ps1 installer/staging/
-          # Download IntuneWinAppUtil
-          $intuneToolUrl = "https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool/raw/master/IntuneWinAppUtil.exe"
+          # IntuneWinAppUtil, pinned to the v1.8.7 commit and checked against
+          # its hash. It was fetched from master -- a moving target, run on
+          # the runner that has just signed the installer it is about to
+          # wrap, so whatever master happened to hold got to touch a signed
+          # artefact. A branch is not a version.
+          $intuneRef = "1d6cfcbdf8c28edc596337031f74df951f38f718"   # v1.8.7
+          $intuneSha = "c1ba45b5cb939e84af064bb7ff4b38fb3dfe33c8dc1078fd9b157672eae671f6"
+          $intuneToolUrl = "https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool/raw/$intuneRef/IntuneWinAppUtil.exe"
           Invoke-WebRequest -Uri $intuneToolUrl -OutFile IntuneWinAppUtil.exe
+          $got = (Get-FileHash IntuneWinAppUtil.exe -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $intuneSha) {
+              throw "IntuneWinAppUtil.exe hash mismatch: expected $intuneSha, got $got"
+          }
           # Generate .intunewin package
           .\IntuneWinAppUtil.exe -c installer\staging -s argus-odbc-installer.exe -o . -q
           # Rename with version
