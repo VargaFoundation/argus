@@ -58,7 +58,7 @@ static void test_trino_parameterized_types(void **state)
     assert_int_equal(trino_type_to_sql_type("char(10)"),        SQL_CHAR);
     assert_int_equal(trino_type_to_sql_type("decimal(18,6)"),   SQL_DECIMAL);
     assert_int_equal(trino_type_to_sql_type("timestamp(3)"),    SQL_TYPE_TIMESTAMP);
-    assert_int_equal(trino_type_to_sql_type("time(6)"),         SQL_TYPE_TIMESTAMP);
+    assert_int_equal(trino_type_to_sql_type("time(6)"),         SQL_TYPE_TIME);
     assert_int_equal(trino_type_to_sql_type("varbinary(1024)"), SQL_VARBINARY);
 }
 
@@ -170,6 +170,12 @@ static void test_trino_type_params(void **state)
     trino_type_apply_params("timestamp(0)", &size, &digits);
     assert_int_equal(digits, 0);
     assert_int_equal((int)size, 19);
+
+    /* A time is sized on "HH:MM:SS", not on a whole timestamp. */
+    size = 8; digits = 3;
+    trino_type_apply_params("time(6)", &size, &digits);
+    assert_int_equal(digits, 6);
+    assert_int_equal((int)size, 15);
 
     /* A bare name, and a parameter list that is not numeric, change nothing. */
     size = 65535; digits = 7;

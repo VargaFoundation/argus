@@ -63,7 +63,8 @@ list(APPEND ARGUS_COMPILE_DEFS
 # just the shared driver target.
 if(WIN32)
     list(APPEND ARGUS_SOURCES odbc/setup.c)
-    list(APPEND ARGUS_LINK_LIBS ws2_32 shell32 odbccp32 advapi32)
+    # bcrypt: BCryptGenRandom for the OAuth2 PKCE verifier and state.
+    list(APPEND ARGUS_LINK_LIBS ws2_32 shell32 odbccp32 advapi32 bcrypt)
 else()
     # trunc/fabs in the fetch conversions (glibc keeps them in libm).
     list(APPEND ARGUS_LINK_LIBS m)

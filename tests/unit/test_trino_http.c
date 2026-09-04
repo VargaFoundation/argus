@@ -37,6 +37,7 @@ typedef struct {
     GPtrArray *requests;   /* char*: raw request head of each connection */
     int      to_serve;
     const char *body;      /* JSON body of every reply; "[]" by default */
+    const char *extra;     /* extra response headers, each CRLF-terminated */
 } listener_t;
 
 static gpointer serve(gpointer data)
@@ -55,8 +56,8 @@ static gpointer serve(gpointer data)
         }
         char *reply = g_strdup_printf(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
-            "Content-Length: %zu\r\nConnection: close\r\n\r\n%s",
-            strlen(l->body), l->body);
+            "%sContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+            l->extra ? l->extra : "", strlen(l->body), l->body);
         ssize_t w = write(c, reply, strlen(reply));
         (void)w;
         g_free(reply);
@@ -149,6 +150,10 @@ static trino_conn_t *conn_new(listener_t *origin, trino_auth_mode_t mode)
     conn->password = g_strdup(mode == TRINO_AUTH_BEARER ? "secret-token" : "hunter2");
     conn->catalog = g_strdup("hive");
     conn->schema = g_strdup("default");
+    conn->session_props = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                               g_free, g_free);
+    conn->prepared      = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                               g_free, g_free);
     conn->default_headers = curl_slist_append(NULL, "X-Trino-User: alice");
     conn->default_headers = curl_slist_append(conn->default_headers, "X-Trino-Catalog: hive");
     if (mode == TRINO_AUTH_BEARER)
@@ -163,6 +168,9 @@ static void conn_free(trino_conn_t *conn)
     curl_easy_cleanup(conn->curl);
     g_free(conn->base_url); g_free(conn->user); g_free(conn->password);
     g_free(conn->catalog); g_free(conn->schema);
+    g_free(conn->time_zone); g_free(conn->session_role); g_free(conn->txn_id);
+    if (conn->session_props) g_hash_table_destroy(conn->session_props);
+    if (conn->prepared) g_hash_table_destroy(conn->prepared);
     g_free(conn);
 }
 
@@ -345,6 +353,124 @@ static void test_loopback_listener_is_posix_only(void **state)
 
 #endif /* _WIN32 */
 
+
+/*
+ * Trino carries session changes in response headers and expects them back on
+ * the next request. Without this, USE / SET SESSION / SET ROLE / PREPARE /
+ * START TRANSACTION report success and then have no effect on the statement
+ * that follows.
+ */
+static void test_session_headers_are_echoed_back(void **state)
+{
+    (void)state;
+    listener_t *origin = listener_start(2);
+    origin->extra =
+        "X-Trino-Set-Catalog: iceberg\r\n"
+        "X-Trino-Set-Schema: analytics\r\n"
+        "X-Trino-Set-Session: query_max_run_time=10m\r\n"
+        "X-Trino-Set-Role: ALL\r\n"
+        "X-Trino-Added-Prepare: p1=SELECT 1\r\n"
+        "X-Trino-Started-Transaction-Id: tx-42\r\n";
+    trino_conn_t *conn = conn_new(origin, TRINO_AUTH_BEARER);
+
+    char *url = g_strdup_printf("%s/v1/statement/q/1", conn->base_url);
+    trino_response_t resp = {0};
+    assert_int_equal(trino_http_get(conn, url, &resp), 0);
+    free(resp.data);
+
+    /* The connection took the change... */
+    assert_string_equal(conn->catalog, "iceberg");
+    assert_string_equal(conn->schema, "analytics");
+    assert_string_equal(conn->session_role, "ALL");
+    assert_string_equal(conn->txn_id, "tx-42");
+
+    /* ...and the next request carries it. */
+    origin->extra = NULL;
+    resp = (trino_response_t){0};
+    assert_int_equal(trino_http_get(conn, url, &resp), 0);
+    free(resp.data);
+    g_free(url);
+
+    listener_join(origin);
+    const char *req = listener_request(origin, 1);
+    assert_non_null(req);
+    assert_true(has_header(req, "X-Trino-Catalog: iceberg"));
+    assert_true(has_header(req, "X-Trino-Schema: analytics"));
+    assert_true(has_header(req, "X-Trino-Session: query_max_run_time=10m"));
+    assert_true(has_header(req, "X-Trino-Role: ALL"));
+    assert_true(has_header(req, "X-Trino-Prepared-Statement: p1=SELECT 1"));
+    assert_true(has_header(req, "X-Trino-Transaction-Id: tx-42"));
+
+    conn_free(conn);
+    listener_free(origin);
+}
+
+/* A cleared session property and a closed transaction stop being sent. */
+static void test_cleared_session_state_stops_being_sent(void **state)
+{
+    (void)state;
+    listener_t *origin = listener_start(3);
+    origin->extra =
+        "X-Trino-Set-Session: a=1\r\n"
+        "X-Trino-Started-Transaction-Id: tx-1\r\n";
+    trino_conn_t *conn = conn_new(origin, TRINO_AUTH_BEARER);
+
+    char *url = g_strdup_printf("%s/v1/statement/q/1", conn->base_url);
+    trino_response_t resp = {0};
+    assert_int_equal(trino_http_get(conn, url, &resp), 0);
+    free(resp.data);
+
+    origin->extra =
+        "X-Trino-Clear-Session: a\r\n"
+        "X-Trino-Clear-Transaction-Id: true\r\n";
+    resp = (trino_response_t){0};
+    assert_int_equal(trino_http_get(conn, url, &resp), 0);
+    free(resp.data);
+    assert_null(conn->txn_id);
+
+    origin->extra = NULL;
+    resp = (trino_response_t){0};
+    assert_int_equal(trino_http_get(conn, url, &resp), 0);
+    free(resp.data);
+    g_free(url);
+
+    listener_join(origin);
+    const char *req = listener_request(origin, 2);
+    assert_non_null(req);
+    assert_false(has_header(req, "X-Trino-Session: a=1"));
+    assert_false(has_header(req, "X-Trino-Transaction-Id:"));
+
+    conn_free(conn);
+    listener_free(origin);
+}
+
+/*
+ * A DSN value carrying a CR/LF must not be able to add a header of its own.
+ */
+static void test_dsn_values_cannot_inject_headers(void **state)
+{
+    (void)state;
+    listener_t *origin = listener_start(1);
+    trino_conn_t *conn = conn_new(origin, TRINO_AUTH_BEARER);
+    g_free(conn->catalog);
+    conn->catalog = g_strdup("hive\r\nX-Trino-Role: admin");
+    conn->headers_dirty = true;
+
+    char *url = g_strdup_printf("%s/v1/statement/q/1", conn->base_url);
+    trino_response_t resp = {0};
+    assert_int_equal(trino_http_get(conn, url, &resp), 0);
+    free(resp.data);
+    g_free(url);
+
+    listener_join(origin);
+    const char *req = listener_request(origin, 0);
+    assert_non_null(req);
+    assert_false(has_header(req, "X-Trino-Role: admin"));
+
+    conn_free(conn);
+    listener_free(origin);
+}
+
 int main(void)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -355,6 +481,9 @@ int main(void)
         cmocka_unit_test(test_next_uri_on_another_host_gets_no_credentials),
         cmocka_unit_test(test_basic_credentials_stay_on_the_origin),
         cmocka_unit_test(test_result_doubles_ignore_locale),
+        cmocka_unit_test(test_session_headers_are_echoed_back),
+        cmocka_unit_test(test_cleared_session_state_stops_being_sent),
+        cmocka_unit_test(test_dsn_values_cannot_inject_headers),
 #else
         cmocka_unit_test(test_loopback_listener_is_posix_only),
 #endif

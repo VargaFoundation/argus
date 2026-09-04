@@ -12,9 +12,11 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <bcrypt.h>
 typedef SOCKET argus_sock_t;
 #define ARGUS_CLOSESOCK closesocket
 #define sleep_seconds(n) Sleep((DWORD)(n) * 1000)
+#define sleep_millis(n) Sleep((DWORD)(n))
 #else
 #include <unistd.h>
 #include <sys/socket.h>
@@ -23,6 +25,7 @@ typedef SOCKET argus_sock_t;
 typedef int argus_sock_t;
 #define ARGUS_CLOSESOCK close
 #define sleep_seconds(n) sleep((unsigned)(n))
+#define sleep_millis(n) usleep((useconds_t)(n) * 1000)
 #endif
 
 /* Forward declarations for the OAuth2 token-refresh path. */
@@ -31,6 +34,19 @@ static int trino_fetch_device_token(trino_conn_t *conn, char **out_token);
 static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token,
                                       char *why, size_t why_size);
 static void trino_oidc_discover(trino_conn_t *conn, const char *issuer);
+static void trino_build_default_headers(trino_conn_t *conn);
+
+/* Rebuild the request headers if a response changed the session. Called
+ * after every request to the coordinator, so the next one carries the
+ * catalog, schema, role, session properties, prepared statements and
+ * transaction the server last told us about. */
+static void trino_sync_session(trino_conn_t *conn)
+{
+    if (conn->headers_dirty) {
+        trino_build_default_headers(conn);
+        conn->headers_dirty = false;
+    }
+}
 
 /* ── Helper: Apply SSL and timeout settings to curl ─────────────── */
 
@@ -120,6 +136,119 @@ size_t trino_curl_write_cb(void *contents, size_t size, size_t nmemb,
     return total;
 }
 
+/* ── CURL header callback: the session state the server sets ──── */
+
+/* Trim CR/LF and surrounding spaces from a header value, in place. */
+static char *trino_hdr_trim(char *v)
+{
+    while (*v == ' ' || *v == '\t') v++;
+    size_t n = strlen(v);
+    while (n && (v[n - 1] == '\r' || v[n - 1] == '\n' ||
+                 v[n - 1] == ' '  || v[n - 1] == '\t'))
+        v[--n] = '\0';
+    return v;
+}
+
+/* "name=value" -> the two halves; returns NULL if there is no '='. */
+static char *trino_hdr_split(char *kv)
+{
+    char *eq = strchr(kv, '=');
+    if (!eq) return NULL;
+    *eq = '\0';
+    return eq + 1;
+}
+
+static bool trino_hdr_is(const char *line, const char *name, char **value_out,
+                         char *scratch, size_t scratch_sz)
+{
+    size_t n = strlen(name);
+    if (g_ascii_strncasecmp(line, name, n) != 0 || line[n] != ':') return false;
+    g_strlcpy(scratch, line + n + 1, scratch_sz);
+    *value_out = trino_hdr_trim(scratch);
+    return true;
+}
+
+/*
+ * Trino carries session changes in response headers: the client is expected
+ * to remember them and send them back. `USE db`, `SET SESSION x=y`,
+ * `SET ROLE r`, `PREPARE p FROM ...` and `START TRANSACTION` all work this
+ * way, so a client that ignores these headers runs every statement in the
+ * session it opened with.
+ */
+size_t trino_curl_header_cb(char *buffer, size_t size, size_t nitems,
+                            void *userp)
+{
+    size_t total = size * nitems;
+    trino_conn_t *conn = (trino_conn_t *)userp;
+    if (!conn || total == 0 || total > 65536) return total;
+
+    char line[8192];
+    size_t n = total < sizeof(line) - 1 ? total : sizeof(line) - 1;
+    memcpy(line, buffer, n);
+    line[n] = '\0';
+
+    char scratch[8192];
+    char *v = NULL;
+
+    if (trino_hdr_is(line, "X-Trino-Set-Catalog", &v, scratch, sizeof(scratch))) {
+        if (*v) { free(conn->catalog); conn->catalog = strdup(v);
+                  conn->headers_dirty = true; }
+        return total;
+    }
+    if (trino_hdr_is(line, "X-Trino-Set-Schema", &v, scratch, sizeof(scratch))) {
+        if (*v) { free(conn->schema); conn->schema = strdup(v);
+                  conn->headers_dirty = true; }
+        return total;
+    }
+    if (trino_hdr_is(line, "X-Trino-Set-Role", &v, scratch, sizeof(scratch))) {
+        free(conn->session_role);
+        conn->session_role = *v ? strdup(v) : NULL;
+        conn->headers_dirty = true;
+        return total;
+    }
+    if (trino_hdr_is(line, "X-Trino-Set-Session", &v, scratch, sizeof(scratch))) {
+        char *val = trino_hdr_split(v);
+        if (val && conn->session_props) {
+            g_hash_table_insert(conn->session_props, g_strdup(v), g_strdup(val));
+            conn->headers_dirty = true;
+        }
+        return total;
+    }
+    if (trino_hdr_is(line, "X-Trino-Clear-Session", &v, scratch, sizeof(scratch))) {
+        if (conn->session_props && g_hash_table_remove(conn->session_props, v))
+            conn->headers_dirty = true;
+        return total;
+    }
+    if (trino_hdr_is(line, "X-Trino-Added-Prepare", &v, scratch, sizeof(scratch))) {
+        char *sql = trino_hdr_split(v);
+        if (sql && conn->prepared) {
+            g_hash_table_insert(conn->prepared, g_strdup(v), g_strdup(sql));
+            conn->headers_dirty = true;
+        }
+        return total;
+    }
+    if (trino_hdr_is(line, "X-Trino-Deallocated-Prepare", &v, scratch, sizeof(scratch))) {
+        if (conn->prepared && g_hash_table_remove(conn->prepared, v))
+            conn->headers_dirty = true;
+        return total;
+    }
+    if (trino_hdr_is(line, "X-Trino-Started-Transaction-Id", &v,
+                     scratch, sizeof(scratch))) {
+        free(conn->txn_id);
+        conn->txn_id = *v ? strdup(v) : NULL;
+        conn->headers_dirty = true;
+        return total;
+    }
+    if (trino_hdr_is(line, "X-Trino-Clear-Transaction-Id", &v,
+                     scratch, sizeof(scratch))) {
+        free(conn->txn_id);
+        conn->txn_id = NULL;
+        conn->headers_dirty = true;
+        return total;
+    }
+    return total;
+}
+
 /* ── HTTP helper: POST ───────────────────────────────────────── */
 
 int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
@@ -135,6 +264,8 @@ int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, trino_curl_header_cb);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, conn);
 
     resp->data = NULL;
     resp->size = 0;
@@ -142,6 +273,7 @@ int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
     CURLcode res = curl_easy_perform(curl);
     if (res != CURLE_OK)
         return -1;
+    trino_sync_session(conn);
 
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
@@ -160,9 +292,12 @@ int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, trino_curl_header_cb);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, conn);
         res = curl_easy_perform(curl);
         if (res != CURLE_OK)
             return -1;
+        trino_sync_session(conn);
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     }
 
@@ -191,6 +326,12 @@ static int trino_http_get_with(trino_conn_t *conn, const char *url,
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
+    /* Only the coordinator speaks for our session; a spooled-segment host
+     * must not be able to rewrite the catalog or the transaction id. */
+    if (with_credentials) {
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, trino_curl_header_cb);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, conn);
+    }
 
     resp->data = NULL;
     resp->size = 0;
@@ -198,6 +339,7 @@ static int trino_http_get_with(trino_conn_t *conn, const char *url,
     CURLcode res = curl_easy_perform(curl);
     if (res != CURLE_OK)
         return -1;
+    if (with_credentials) trino_sync_session(conn);
 
     long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
@@ -218,6 +360,25 @@ int trino_http_get(trino_conn_t *conn, const char *url,
     int rc = trino_http_get_with(conn, url,
                                  same_origin ? conn->default_headers : NULL,
                                  same_origin, resp);
+
+    /*
+     * A coordinator behind a load balancer answers 502/503/504 while it is
+     * restarting or shedding load, and 429 when it is rate limiting. Polling
+     * nextUri is the long tail of every query, so a single one of those used
+     * to fail the whole fetch — the client protocol expects the poll to be
+     * retried. Five attempts with a doubling delay, ~1.5s in total.
+     */
+    for (int attempt = 0; attempt < 4 && same_origin &&
+                          (rc == 429 || rc == 502 || rc == 503 || rc == 504);
+         attempt++) {
+        ARGUS_LOG_WARN("Trino: %s answered %d; retrying in %d ms",
+                       url, rc, 100 << attempt);
+        sleep_millis(100 << attempt);
+        free(resp->data);
+        resp->data = NULL;
+        resp->size = 0;
+        rc = trino_http_get_with(conn, url, conn->default_headers, true, resp);
+    }
 
     /* OAuth2 (M2M) access token may have expired; refresh once and retry. */
     if (rc == 401 && same_origin && conn->oauth_m2m &&
@@ -568,11 +729,18 @@ static void trino_b64url(const unsigned char *data, size_t len, char *out, size_
 
 static int trino_rand_bytes(unsigned char *buf, size_t n)
 {
+#ifdef _WIN32
+    /* Windows has no /dev/urandom, so the PKCE verifier and the state were
+     * left uninitialised there and the whole flow was unprotected. */
+    return BCryptGenRandom(NULL, buf, (ULONG)n,
+                           BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0 ? 0 : -1;
+#else
     FILE *f = fopen("/dev/urandom", "rb");
     if (!f) return -1;
     size_t got = fread(buf, 1, n, f);
     fclose(f);
     return got == n ? 0 : -1;
+#endif
 }
 
 /* PKCE: verifier = base64url(32 random bytes); challenge = base64url(SHA256(verifier)). */
@@ -617,8 +785,63 @@ static argus_sock_t trino_loopback_open(int *port)
     return fd;
 }
 
-/* Wait (up to timeout_sec) for the browser redirect; extract the ?code=. */
-static int trino_loopback_get_code(argus_sock_t fd, char *code, size_t clen, int timeout_sec)
+/*
+ * Percent-decode a query-string value in place ('+' is a space). Returns the
+ * decoded length.
+ */
+static size_t trino_url_decode(char *v)
+{
+    char *o = v;
+    for (const char *p = v; *p; p++) {
+        if (*p == '+') { *o++ = ' '; continue; }
+        if (*p == '%' && g_ascii_isxdigit(p[1]) && g_ascii_isxdigit(p[2])) {
+            *o++ = (char)((g_ascii_xdigit_value(p[1]) << 4) |
+                          g_ascii_xdigit_value(p[2]));
+            p += 2;
+            continue;
+        }
+        *o++ = *p;
+    }
+    *o = '\0';
+    return (size_t)(o - v);
+}
+
+/*
+ * Copy the value of query parameter `name` out of `query` (the part after
+ * '?'), decoded. Matching is on a whole parameter, so "code" no longer
+ * matches "error_code" or "postcode" the way strstr(buf, "code=") did —
+ * an IdP that redirects with ?error=access_denied&error_code=... used to
+ * be read as a successful sign-in carrying a nonsense code.
+ */
+static bool trino_query_param(const char *query, const char *name,
+                              char *out, size_t out_sz)
+{
+    size_t nlen = strlen(name);
+    const char *p = query;
+    while (p && *p) {
+        const char *amp = strchr(p, '&');
+        size_t plen = amp ? (size_t)(amp - p) : strlen(p);
+        if (plen > nlen && p[nlen] == '=' && strncmp(p, name, nlen) == 0) {
+            size_t vlen = plen - nlen - 1;
+            if (vlen >= out_sz) vlen = out_sz - 1;
+            memcpy(out, p + nlen + 1, vlen);
+            out[vlen] = '\0';
+            trino_url_decode(out);
+            return true;
+        }
+        p = amp ? amp + 1 : NULL;
+    }
+    return false;
+}
+
+/*
+ * Wait (up to timeout_sec) for the browser redirect and read the code out of
+ * it. `state` is what we sent to the IdP: the redirect must carry it back, or
+ * the response is somebody else's (a cross-site request forgery on the
+ * loopback listener) and is refused.
+ */
+static int trino_loopback_get_code(argus_sock_t fd, char *code, size_t clen,
+                                   const char *state, int timeout_sec)
 {
     fd_set rs;
     FD_ZERO(&rs);
@@ -631,21 +854,45 @@ static int trino_loopback_get_code(argus_sock_t fd, char *code, size_t clen, int
     char buf[8192];
     int n = (int)recv(c, buf, sizeof(buf) - 1, 0);
     int ret = -1;
+    const char *why = "no authorization code in the redirect";
     if (n > 0) {
         buf[n] = '\0';
-        char *q = strstr(buf, "code=");
-        if (q) {
-            q += 5;
-            size_t i = 0;
-            while (q[i] && q[i] != '&' && q[i] != ' ' && q[i] != '\r' && i < clen - 1)
-                code[i] = q[i], i++;
-            code[i] = '\0';
-            ret = 0;
+
+        /* "GET /?code=...&state=... HTTP/1.1" — take the request target. */
+        char *sp = strchr(buf, ' ');
+        char *target = sp ? sp + 1 : NULL;
+        char *end = target ? strpbrk(target, " \r\n") : NULL;
+        if (end) *end = '\0';
+        char *query = target ? strchr(target, '?') : NULL;
+
+        if (query) {
+            query++;
+            char err[256];
+            char got_state[128];
+            if (trino_query_param(query, "error", err, sizeof(err))) {
+                why = "the identity provider refused the sign-in";
+                ARGUS_LOG_ERROR("Trino OAuth2: authorization failed: %s", err);
+            } else if (!trino_query_param(query, "state", got_state,
+                                          sizeof(got_state))) {
+                why = "the redirect carried no state parameter";
+            } else if (strcmp(got_state, state) != 0) {
+                why = "the redirect's state did not match the one sent";
+                ARGUS_LOG_ERROR("Trino OAuth2: state mismatch; "
+                                "ignoring the redirect");
+            } else if (trino_query_param(query, "code", code, clen)) {
+                ret = 0;
+            }
         }
-        const char *resp =
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n"
-            "<html><body style='font-family:sans-serif'>"
-            "<h2>Argus — sign-in complete</h2>You may close this window.</body></html>";
+
+        char resp[512];
+        snprintf(resp, sizeof(resp),
+                 "HTTP/1.1 %s\r\nContent-Type: text/html\r\n"
+                 "Connection: close\r\n\r\n"
+                 "<html><body style='font-family:sans-serif'>"
+                 "<h2>Argus — %s</h2>%s</body></html>",
+                 ret == 0 ? "200 OK" : "400 Bad Request",
+                 ret == 0 ? "sign-in complete" : "sign-in failed",
+                 ret == 0 ? "You may close this window." : why);
         (void)!send(c, resp, (int)strlen(resp), 0);
     }
     ARGUS_CLOSESOCK(c);
@@ -682,9 +929,18 @@ static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token,
     argus_sock_t srv = trino_loopback_open(&port);
     if (srv == (argus_sock_t)-1) return -1;
 
+    /* Without an unguessable state there is nothing to check the redirect
+     * against, so the flow stops rather than running unprotected. */
     unsigned char sr[12];
     char state[64] = {0};
-    if (trino_rand_bytes(sr, sizeof(sr)) == 0) trino_b64url(sr, sizeof(sr), state, sizeof(state));
+    if (trino_rand_bytes(sr, sizeof(sr)) != 0) {
+        if (why_size)
+            g_strlcpy(why, "no source of randomness for the OAuth2 state",
+                      why_size);
+        ARGUS_CLOSESOCK(srv);
+        return -1;
+    }
+    trino_b64url(sr, sizeof(sr), state, sizeof(state));
 
     CURL *e = curl_easy_init();
     char redirect[64];
@@ -711,9 +967,15 @@ static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token,
     g_free(url);
 
     char code[2048] = {0};
-    int gc = trino_loopback_get_code(srv, code, sizeof(code), 300);
+    int gc = trino_loopback_get_code(srv, code, sizeof(code), state, 300);
     ARGUS_CLOSESOCK(srv);
-    if (gc != 0 || !code[0]) { curl_easy_cleanup(e); return -1; }
+    if (gc != 0 || !code[0]) {
+        if (why_size)
+            g_strlcpy(why, "no valid authorization redirect was received",
+                      why_size);
+        curl_easy_cleanup(e);
+        return -1;
+    }
 
     char *ecode = curl_easy_escape(e, code, 0);
     char *eredir2 = curl_easy_escape(e, redirect, 0);
@@ -748,8 +1010,29 @@ static int trino_fetch_authcode_token(trino_conn_t *conn, char **out_token,
 
 /* ── (Re)build the default request headers from connection state ── */
 
+/*
+ * A header value with a CR or LF in it splits the request and lets the next
+ * line be read as a header of its own. The user, catalog, schema and source
+ * all come from the DSN, which a shared .odc or .tds file can carry, so they
+ * are filtered on the way out rather than trusted. Other control characters
+ * go too; a header value is not the place for them.
+ */
+static const char *trino_hdr_safe(const char *v, char *out, size_t out_sz)
+{
+    size_t j = 0;
+    for (size_t i = 0; v && v[i] && j + 1 < out_sz; i++) {
+        unsigned char c = (unsigned char)v[i];
+        if (c == '\r' || c == '\n' || c < 0x20 || c == 0x7f) continue;
+        out[j++] = (char)c;
+    }
+    out[j] = '\0';
+    return out;
+}
+
 static void trino_build_default_headers(trino_conn_t *conn)
 {
+    char safe[1024];
+
     if (conn->default_headers) {
         curl_slist_free_all(conn->default_headers);
         conn->default_headers = NULL;
@@ -762,19 +1045,23 @@ static void trino_build_default_headers(trino_conn_t *conn)
      * conflict. Send the header only when it carries a real identity: an
      * explicit UID, or a non-token auth mode. */
     if (conn->user_explicit || conn->auth_mode != TRINO_AUTH_BEARER) {
-        snprintf(header_buf, sizeof(header_buf), "X-Trino-User: %s", conn->user);
+        snprintf(header_buf, sizeof(header_buf), "X-Trino-User: %s",
+                 trino_hdr_safe(conn->user, safe, sizeof(safe)));
         conn->default_headers =
             curl_slist_append(conn->default_headers, header_buf);
     }
 
-    snprintf(header_buf, sizeof(header_buf), "X-Trino-Catalog: %s", conn->catalog);
+    snprintf(header_buf, sizeof(header_buf), "X-Trino-Catalog: %s",
+             trino_hdr_safe(conn->catalog, safe, sizeof(safe)));
     conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
 
-    snprintf(header_buf, sizeof(header_buf), "X-Trino-Schema: %s", conn->schema);
+    snprintf(header_buf, sizeof(header_buf), "X-Trino-Schema: %s",
+             trino_hdr_safe(conn->schema, safe, sizeof(safe)));
     conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
 
     if (conn->app_name && conn->app_name[0]) {
-        snprintf(header_buf, sizeof(header_buf), "X-Trino-Source: %s", conn->app_name);
+        snprintf(header_buf, sizeof(header_buf), "X-Trino-Source: %s",
+                 trino_hdr_safe(conn->app_name, safe, sizeof(safe)));
         conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
     }
 
@@ -785,9 +1072,61 @@ static void trino_build_default_headers(trino_conn_t *conn)
     }
 
     if (conn->auth_mode == TRINO_AUTH_BEARER && conn->password) {
-        snprintf(header_buf, sizeof(header_buf),
-                 "Authorization: Bearer %s", conn->password);
+        snprintf(header_buf, sizeof(header_buf), "Authorization: Bearer %s",
+                 trino_hdr_safe(conn->password, safe, sizeof(safe)));
         conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+    }
+
+    /*
+     * Trino renders TIMESTAMP WITH TIME ZONE and now() in the session's zone,
+     * and defaults to the coordinator's when the client does not say. A BI
+     * tool showing timestamps an hour off from the same query in the Trino UI
+     * is this header missing.
+     */
+    if (conn->time_zone && conn->time_zone[0]) {
+        snprintf(header_buf, sizeof(header_buf), "X-Trino-Time-Zone: %s",
+                 trino_hdr_safe(conn->time_zone, safe, sizeof(safe)));
+        conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+    }
+
+    if (conn->session_role && conn->session_role[0]) {
+        snprintf(header_buf, sizeof(header_buf), "X-Trino-Role: %s",
+                 trino_hdr_safe(conn->session_role, safe, sizeof(safe)));
+        conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+    }
+
+    if (conn->txn_id && conn->txn_id[0]) {
+        snprintf(header_buf, sizeof(header_buf), "X-Trino-Transaction-Id: %s",
+                 trino_hdr_safe(conn->txn_id, safe, sizeof(safe)));
+        conn->default_headers = curl_slist_append(conn->default_headers, header_buf);
+    }
+
+    /*
+     * Session properties and prepared statements go back one header each
+     * rather than comma-joined: a prepared statement is a whole SQL text,
+     * and a fixed buffer is the wrong shape for it.
+     */
+    if (conn->session_props) {
+        GHashTableIter it;
+        gpointer k, v;
+        g_hash_table_iter_init(&it, conn->session_props);
+        while (g_hash_table_iter_next(&it, &k, &v)) {
+            char *h = g_strdup_printf("X-Trino-Session: %s=%s",
+                                      (const char *)k, (const char *)v);
+            conn->default_headers = curl_slist_append(conn->default_headers, h);
+            g_free(h);
+        }
+    }
+    if (conn->prepared) {
+        GHashTableIter it;
+        gpointer k, v;
+        g_hash_table_iter_init(&it, conn->prepared);
+        while (g_hash_table_iter_next(&it, &k, &v)) {
+            char *h = g_strdup_printf("X-Trino-Prepared-Statement: %s=%s",
+                                      (const char *)k, (const char *)v);
+            conn->default_headers = curl_slist_append(conn->default_headers, h);
+            g_free(h);
+        }
     }
 }
 
@@ -978,6 +1317,27 @@ int trino_connect(argus_dbc_t *dbc,
     if (dbc->app_name && dbc->app_name[0])
         conn->app_name = strdup(dbc->app_name);
 
+    conn->session_props = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                               g_free, g_free);
+    conn->prepared      = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                               g_free, g_free);
+
+    /*
+     * The zone the application's machine is in, so the server renders
+     * timestamps the way the user's other tools do. g_time_zone_get_identifier
+     * gives the IANA name Trino expects ("Europe/Paris"); a machine that only
+     * knows an offset yields something like "+02:00", which Trino also
+     * accepts. "local" means glib could not name the zone — send nothing then
+     * and let the coordinator's default stand, as before.
+     */
+    GTimeZone *tz = g_time_zone_new_local();
+    if (tz) {
+        const char *id = g_time_zone_get_identifier(tz);
+        if (id && *id && strcmp(id, "local") != 0)
+            conn->time_zone = strdup(id);
+        g_time_zone_unref(tz);
+    }
+
     /* Build the default request headers (X-Trino-*, optional Bearer token). */
     trino_build_default_headers(conn);
 
@@ -1066,6 +1426,11 @@ void trino_disconnect(argus_backend_conn_t raw_conn)
     free(conn->catalog);
     free(conn->schema);
     free(conn->app_name);
+    free(conn->time_zone);
+    free(conn->session_role);
+    free(conn->txn_id);
+    if (conn->session_props) g_hash_table_destroy(conn->session_props);
+    if (conn->prepared)      g_hash_table_destroy(conn->prepared);
 
     /* Free OAuth2 (M2M) refresh params */
     free(conn->oauth_token_url);

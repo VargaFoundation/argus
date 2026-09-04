@@ -26,7 +26,23 @@ typedef struct trino_conn {
     char               *catalog;
     char               *schema;
     char               *app_name;       /* X-Trino-Source (NULL if unset) */
+    char               *time_zone;      /* X-Trino-Time-Zone (IANA name) */
     struct curl_slist   *default_headers;
+
+    /*
+     * Session state the coordinator hands back on every response. Trino's
+     * protocol is that the client remembers what the server set and echoes
+     * it on the next request — without this, USE, SET SESSION, SET ROLE,
+     * PREPARE and START TRANSACTION appear to succeed and then have no
+     * effect, because the next statement is sent with the original session.
+     * `headers_dirty` records that a response changed one of these, so the
+     * default header list is rebuilt once per request rather than per header.
+     */
+    GHashTable         *session_props;  /* name -> value, X-Trino-Session */
+    GHashTable         *prepared;       /* name -> SQL, X-Trino-Prepared-Statement */
+    char               *session_role;   /* X-Trino-Role */
+    char               *txn_id;         /* X-Trino-Transaction-Id */
+    bool                headers_dirty;
 
     /* OAuth2 client-credentials (M2M) params, retained so the access token can
      * be transparently re-fetched when the server returns 401 (token expiry). */

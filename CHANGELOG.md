@@ -105,6 +105,41 @@ All notable changes to the Argus ODBC Driver project.
   the engine prints is not silently dropped; `SQL_C_TYPE_TIMESTAMP` still
   converts it.
 
+### Fixed: Trino sessions, retries and the OAuth2 redirect
+- **The session the server set was thrown away.** Trino carries session
+  changes in response headers and expects the client to send them back:
+  `USE`, `SET SESSION`, `SET ROLE`, `PREPARE` and `START TRANSACTION` all
+  work that way. The driver never read them, so each of those reported
+  success and then had no effect — the next statement ran in the session the
+  connection opened with, and a transaction was never joined. The connection
+  now tracks `X-Trino-Set-Catalog`, `-Set-Schema`, `-Set-Session`,
+  `-Clear-Session`, `-Set-Role`, `-Added-Prepare`, `-Deallocated-Prepare`,
+  `-Started-Transaction-Id` and `-Clear-Transaction-Id`, and echoes them.
+  Only the coordinator is listened to: a spooled-segment host cannot rewrite
+  the catalog or the transaction id.
+- **`X-Trino-Time-Zone` was never sent**, so `TIMESTAMP WITH TIME ZONE` and
+  `now()` were rendered in the coordinator's zone rather than the
+  application's.
+- **A 502, 503, 504 or 429 while polling `nextUri` failed the whole fetch.**
+  Those are what a coordinator behind a load balancer answers while it
+  restarts or sheds load, and polling is the long tail of every query. Four
+  retries with a doubling delay.
+- **The OAuth2 authorization-code flow did not check its own `state`.** The
+  value was generated and sent but never compared, and the code was found
+  with `strstr(buf, "code=")`, which matches `error_code=` — an IdP
+  redirecting with an error was read as a successful sign-in. The redirect is
+  parsed as a query string now, `state` must come back unchanged, an `error`
+  parameter is reported, and the browser is told which of those failed.
+- **PKCE was dead on Windows**: the verifier and the state came from
+  `/dev/urandom`, which does not exist there, so both were left as they were.
+  They come from `BCryptGenRandom`; with no source of randomness the flow
+  stops instead of running unprotected.
+- **A DSN value with a CR/LF in it could add a header of its own** to every
+  request (`X-Trino-User`, `-Catalog`, `-Schema`, `-Source` and the bearer
+  token all come from the connection string, which a shared `.odc` or `.tds`
+  carries). Control characters are filtered out of header values.
+- Trino's `time` and `time(p)` are `SQL_TYPE_TIME` instead of a timestamp.
+
 ## [0.6.1] — 2026-09-03
 
 A corrective release. An audit of the driver as v0.6.0 shipped it found that
