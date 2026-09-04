@@ -173,6 +173,9 @@ static const char *sj_skip_string(const char *p, const char *e)
 }
 
 /* Skip a complete JSON value; returns the pointer just past it, or NULL. */
+/* Deeper than this hands the page to the json-glib path. */
+#define SJ_MAX_DEPTH 128
+
 static const char *sj_skip_value(const char *p, const char *e)
 {
     p = sj_ws(p, e);
@@ -180,13 +183,30 @@ static const char *sj_skip_value(const char *p, const char *e)
     char c = *p;
     if (c == '"') return sj_skip_string(p, e);
     if (c == '[' || c == '{') {
-        char open = c, close = (c == '[') ? ']' : '}';
+        /*
+         * Both bracket kinds, matched on one stack. Counting only the kind
+         * this value happened to open with made the two passes disagree: a
+         * ']' inside a nested object ended the row for the pass that sizes
+         * its block, while the pass that copies a nested object ran on to
+         * the matching '}' well past that point -- and wrote outside the
+         * allocation. The sizing bound only holds while both passes agree
+         * on where a container ends, so they have to match it the same way.
+         *
+         * Nesting past the limit, an unbalanced bracket or a mismatched
+         * pair all return NULL, which hands the page to the json-glib path.
+         */
+        char closers[SJ_MAX_DEPTH];
         int depth = 0;
         while (p < e) {
             char d = *p;
             if (d == '"') { p = sj_skip_string(p, e); if (!p) return NULL; continue; }
-            if (d == open) depth++;
-            else if (d == close) { depth--; if (depth == 0) return p + 1; }
+            if (d == '[' || d == '{') {
+                if (depth == SJ_MAX_DEPTH) return NULL;
+                closers[depth++] = (d == '[') ? ']' : '}';
+            } else if (d == ']' || d == '}') {
+                if (depth == 0 || closers[depth - 1] != d) return NULL;
+                if (--depth == 0) return p + 1;
+            }
             p++;
         }
         return NULL;

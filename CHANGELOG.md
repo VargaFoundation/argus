@@ -242,6 +242,13 @@ All notable changes to the Argus ODBC Driver project.
   end on half a surrogate pair.
 
 ### Fixed: heap overflow in the Trino result-page scanner
+- **A nested object inside a result row wrote past the end of a heap
+  block.** The scanner matched a container by counting only the bracket it
+  had opened with, so a `]` inside a nested object ended the row for the
+  pass that sizes its allocation while the pass that copies that object ran
+  on to the matching `}` beyond it. Both brackets are matched on one stack
+  now, and nesting deeper than 128, an unbalanced bracket or a mismatched
+  pair hand the page to the json-glib path.
 - **A truncated `true`, `false` or `null` in a result page wrote past the end
   of a heap block.** The fetch fast path sizes a row's single allocation from
   its raw JSON slice, on the rule that a decoded value never exceeds its own

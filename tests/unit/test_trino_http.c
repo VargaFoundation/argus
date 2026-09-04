@@ -502,6 +502,44 @@ static void test_truncated_literal_does_not_overrun_the_row(void **state)
     argus_row_cache_free(&cache);
 }
 
+
+/*
+ * The scanner matched a container by counting only the bracket it opened
+ * with, so a ']' inside a nested object ended the row for the pass that
+ * sizes its block while the pass that copies the object ran on to the
+ * matching '}' beyond that point -- writing outside the allocation. Both
+ * passes have to agree on where a container ends. Found by
+ * fuzz/fuzz_trino_json.c; the reproducer is in that corpus.
+ */
+static void test_nested_containers_agree_on_where_a_row_ends(void **state)
+{
+    (void)state;
+    const char *cases[] = {
+        "[[{\"k\":[1,2,{\"z\":\"]\"}]}]]",
+        "[[{\"k\":[1,2,{\"z\"#:false,null]]}\"y\"}]}]]",
+        "[[[}]]",
+        "[[{]}]]",
+        "[[{\"a\":[}]]",
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        argus_row_cache_t cache;
+        memset(&cache, 0, sizeof(cache));
+        const char *d = cases[i];
+        (void)trino_sj_scan_data(d, d + strlen(d), &cache, 1);
+        argus_row_cache_free(&cache);
+    }
+
+    /* Well-formed nesting still scans, and the cell holds the whole value. */
+    const char *ok = "[[{\"k\":[1,2]},\"s\"]]";
+    argus_row_cache_t cache;
+    memset(&cache, 0, sizeof(cache));
+    assert_int_equal(trino_sj_scan_data(ok, ok + strlen(ok), &cache, 2), 0);
+    assert_int_equal((int)cache.num_rows, 1);
+    assert_string_equal(cache.rows[0].cells[0].data, "{\"k\":[1,2]}");
+    assert_string_equal(cache.rows[0].cells[1].data, "s");
+    argus_row_cache_free(&cache);
+}
+
 #else /* _WIN32 */
 
 /* The fake Trino above is a POSIX socket listener; an empty test table is
@@ -526,6 +564,7 @@ int main(void)
         cmocka_unit_test(test_basic_credentials_stay_on_the_origin),
         cmocka_unit_test(test_result_doubles_ignore_locale),
         cmocka_unit_test(test_truncated_literal_does_not_overrun_the_row),
+        cmocka_unit_test(test_nested_containers_agree_on_where_a_row_ends),
         cmocka_unit_test(test_session_headers_are_echoed_back),
         cmocka_unit_test(test_cleared_session_state_stops_being_sent),
         cmocka_unit_test(test_dsn_values_cannot_inject_headers),
