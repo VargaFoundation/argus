@@ -34,23 +34,26 @@ static void test_tables_query_escapes_patterns(void **state)
     char *q = mywire_build_tables_query(g_mysql, "shop", NULL, "ord_%", NULL);
     assert_non_null(q);
     assert_non_null(strstr(q, " AND table_schema = 'shop'"));
-    assert_non_null(strstr(q, " AND table_name LIKE 'ord_%'"));
+    assert_non_null(strstr(q, " AND table_name LIKE 'ord_%' ESCAPE '\\\\'"));
     assert_non_null(strstr(q, " ORDER BY table_schema, table_name"));
     g_free(q);
 
     /* Schema is the fallback filter when no catalog is given. */
     q = mywire_build_tables_query(g_mysql, NULL, "sh%", NULL, NULL);
-    assert_non_null(strstr(q, " AND table_schema LIKE 'sh%'"));
+    assert_non_null(strstr(q, " AND table_schema LIKE 'sh%' ESCAPE '\\\\'"));
     g_free(q);
 
     /* MySQL escapes with a backslash: quote and backslash both survive
      * as data, and the clause cannot be closed early. */
     q = mywire_build_tables_query(g_mysql, NULL, NULL, "x' OR 1=1 --", NULL);
-    assert_non_null(strstr(q, " AND table_name LIKE 'x\\' OR 1=1 --'"));
+    assert_non_null(strstr(q, " AND table_name = 'x\\' OR 1=1 --'"));
     g_free(q);
 
     q = mywire_build_columns_query(g_mysql, NULL, NULL, "t", "c\\'");
-    assert_non_null(strstr(q, " AND column_name LIKE 'c\\\\\\''"));
+    /* The backslash is the advertised search-pattern escape, so it makes the
+     * quote literal and is consumed; what reaches MySQL is the one quote,
+     * escaped for the literal by mysql_real_escape_string. */
+    assert_non_null(strstr(q, " AND column_name = 'c\\''"));
     g_free(q);
 }
 
@@ -89,7 +92,7 @@ static void test_primary_keys_and_long_names(void **state)
     name[sizeof(name) - 1] = '\0';
     q = mywire_build_columns_query(g_mysql, "c", NULL, name, "col");
     assert_non_null(q);
-    assert_non_null(strstr(q, " AND column_name LIKE 'col'"));
+    assert_non_null(strstr(q, " AND column_name = 'col'"));
     assert_non_null(strstr(q, " ORDER BY "));
     g_free(q);
 }

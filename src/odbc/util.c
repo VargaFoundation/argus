@@ -265,6 +265,44 @@ static char *quote_text(const char *value, size_t len, char quote,
     return out;
 }
 
+/* ── ODBC search patterns ────────────────────────────────────── */
+
+char *argus_sql_escape_pattern(const char *value)
+{
+    if (!value) return NULL;
+    size_t n = strlen(value);
+    char *out = malloc(n * 2 + 1);
+    if (!out) return NULL;
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (value[i] == '%' || value[i] == '_' || value[i] == '\\')
+            out[o++] = '\\';
+        out[o++] = value[i];
+    }
+    out[o] = '\0';
+    return out;
+}
+
+char *argus_sql_pattern_literal(const char *pattern)
+{
+    if (!pattern) return NULL;
+    size_t n = strlen(pattern);
+    char *out = malloc(n + 1);
+    if (!out) return NULL;
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (pattern[i] == '\\' && i + 1 < n) {
+            out[o++] = pattern[++i];
+            continue;
+        }
+        /* An unescaped wildcard: this pattern is not one value. */
+        if (pattern[i] == '%' || pattern[i] == '_') { free(out); return NULL; }
+        out[o++] = pattern[i];
+    }
+    out[o] = '\0';
+    return out;
+}
+
 char *argus_sql_quote_literal_n(const char *value, size_t len,
                                 bool backslash_escapes)
 {

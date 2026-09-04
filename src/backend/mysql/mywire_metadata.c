@@ -36,15 +36,27 @@ static bool append_filter(GString *q, MYSQL *mysql, const char *column,
                           const char *op, const char *value)
 {
     if (!value || !*value) return true;
-    size_t len = strlen(value);
+
+    /* A pattern with no unescaped wildcard names one thing: equality, on the
+     * value the escapes stood for. Otherwise LIKE with the escape character
+     * SQLGetInfo advertises -- which happens to be MySQL's own default, but
+     * saying it makes the query mean the same on a server that changed it. */
+    bool is_like = strcmp(op, "LIKE") == 0;
+    char *exact = is_like ? argus_sql_pattern_literal(value) : NULL;
+    const char *v = exact ? exact : value;
+
+    size_t len = strlen(v);
     char *esc = malloc(len * 2 + 1);
-    if (!esc) return false;
-    unsigned long n = mysql_real_escape_string(mysql, esc, value,
+    if (!esc) { free(exact); return false; }
+    unsigned long n = mysql_real_escape_string(mysql, esc, v,
                                                (unsigned long)len);
-    g_string_append_printf(q, " AND %s %s '", column, op);
+    g_string_append_printf(q, " AND %s %s '", column,
+                           is_like ? (exact ? "=" : "LIKE") : op);
     g_string_append_len(q, esc, (gssize)n);
     g_string_append_c(q, '\'');
+    if (is_like && !exact) g_string_append(q, " ESCAPE '\\\\'");
     free(esc);
+    free(exact);
     return true;
 }
 

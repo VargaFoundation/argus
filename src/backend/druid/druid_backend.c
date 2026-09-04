@@ -419,9 +419,19 @@ static bool append_filter(GString *q, const char *column, const char *op,
                           const char *value)
 {
     if (!value || !*value) return true;
-    char *lit = argus_sql_quote_literal(value, false);
+
+    /* ESCAPE '\\' makes the escape character SQLGetInfo advertises real; a
+     * pattern with no unescaped wildcard is one name, so equality. */
+    bool is_like = strcmp(op, "LIKE") == 0;
+    char *exact = is_like ? argus_sql_pattern_literal(value) : NULL;
+    char *lit = argus_sql_quote_literal(exact ? exact : value, false);
+    free(exact);
     if (!lit) return false;
-    g_string_append_printf(q, " AND %s %s %s", column, op, lit);
+    if (is_like && !exact)
+        g_string_append_printf(q, " AND %s LIKE %s ESCAPE '\\'", column, lit);
+    else
+        g_string_append_printf(q, " AND %s %s %s", column,
+                               is_like ? "=" : op, lit);
     free(lit);
     return true;
 }

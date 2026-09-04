@@ -234,6 +234,29 @@ char *argus_sql_quote_literal_n(const char *value, size_t len,
                                 bool backslash_escapes);
 char *argus_sql_quote_literal(const char *value, bool backslash_escapes);
 
+/*
+ * ODBC search patterns and identifiers.
+ *
+ * SQLGetInfo(SQL_SEARCH_PATTERN_ESCAPE) has always answered "\\", which
+ * promises an application that a backslash makes the next character literal
+ * in a catalog pattern -- and nothing acted on it, so `WHERE name LIKE
+ * 'a\_b'` matched `axb` as well. The backends that build a LIKE now say
+ * ESCAPE '\\', which makes that promise true and, with the escaping below,
+ * is also what lets SQL_ATTR_METADATA_ID make an identifier literal.
+ */
+
+/* `%`, `_` and `\` escaped with a backslash, so the result matches `value`
+ * exactly under LIKE ... ESCAPE '\\'. This is what an identifier becomes
+ * when SQL_ATTR_METADATA_ID is set: `my_table` must not also find `myXtable`.
+ * Caller frees with free(); NULL on OOM. */
+char *argus_sql_escape_pattern(const char *value);
+
+/* The inverse: the literal value a pattern stands for, or NULL when the
+ * pattern still has an unescaped wildcard and so stands for more than one.
+ * Lets a backend use `=` (and the catalog's index) instead of LIKE.
+ * Caller frees with free(). */
+char *argus_sql_pattern_literal(const char *pattern);
+
 /* `name` as a delimited identifier: wrapped in `quote` with embedded quote
  * characters doubled. NULL on embedded NUL or OOM. Caller frees with free(). */
 char *argus_sql_quote_ident(const char *name, char quote);

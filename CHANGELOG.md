@@ -241,6 +241,21 @@ All notable changes to the Argus ODBC Driver project.
   in a 32-character buffer came back as 15 characters. Chunks also no longer
   end on half a surrogate pair.
 
+### Fixed: the search-pattern escape, and `METADATA_ID` wildcards
+- **`SQL_SEARCH_PATTERN_ESCAPE` answered `"\\"` and nothing acted on it.**
+  The driver promised an application that a backslash makes the next
+  character literal in a catalog pattern, then passed the pattern through
+  untouched — so `SQLColumns` with `a\_b` matched `axb` too, and there was
+  no way to ask for a name containing an underscore. Trino, Druid and
+  MySQL-wire emit `ESCAPE '\\'` and read the escapes, which makes the
+  answer true.
+- **`SQL_ATTR_METADATA_ID` left `%` and `_` as wildcards**, so asking for the
+  identifier `my_table` also found `myXtable`. An identifier is escaped into
+  a pattern that matches only itself.
+- A pattern with no unescaped wildcard is now matched with `=` rather than
+  `LIKE`, which is the same result and lets the catalog use its indexes —
+  what the PostgreSQL family already did.
+
 ### Retries
 - **The retry policy is one shared function** rather than a constant inlined
   in one client, and it reads the server's `Retry-After` instead of ignoring

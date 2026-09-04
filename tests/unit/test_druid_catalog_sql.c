@@ -16,8 +16,8 @@ static void test_tables_query(void **state)
     char *q = druid_build_tables_query("druid", "dr%", "wiki'", "TABLE");
     assert_non_null(q);
     assert_non_null(strstr(q, " AND TABLE_CATALOG = 'druid'"));
-    assert_non_null(strstr(q, " AND TABLE_SCHEMA LIKE 'dr%'"));
-    assert_non_null(strstr(q, " AND TABLE_NAME LIKE 'wiki'''"));
+    assert_non_null(strstr(q, " AND TABLE_SCHEMA LIKE 'dr%' ESCAPE '\\'"));
+    assert_non_null(strstr(q, " AND TABLE_NAME = 'wiki'''"));
     assert_non_null(strstr(q, " AND TABLE_TYPE IN ('TABLE','BASE TABLE')"));
     assert_non_null(strstr(q, " ORDER BY TABLE_SCHEMA, TABLE_NAME"));
     g_free(q);
@@ -33,12 +33,14 @@ static void test_columns_and_schemas_escape(void **state)
     (void)state;
     char *q = druid_build_columns_query(NULL, NULL, "t",
                                         "c' OR 1=1 --");
-    assert_non_null(strstr(q, " AND COLUMN_NAME LIKE 'c'' OR 1=1 --'"));
+    assert_non_null(strstr(q, " AND COLUMN_NAME = 'c'' OR 1=1 --'"));
     assert_null(strstr(q, "c' OR"));
     g_free(q);
 
     q = druid_build_schemas_query("c'", "s\\'");
-    assert_non_null(strstr(q, " AND CATALOG_NAME = 'c''' AND SCHEMA_NAME LIKE 's\\'''"));
+    /* The backslash is the advertised search-pattern escape: it makes the
+     * quote literal and is consumed, and the quote is still doubled. */
+    assert_non_null(strstr(q, " AND CATALOG_NAME = 'c''' AND SCHEMA_NAME = 's'''"));
     g_free(q);
 }
 
@@ -50,7 +52,7 @@ static void test_long_pattern_not_truncated(void **state)
     name[sizeof(name) - 1] = '\0';
     char *q = druid_build_columns_query("c", "s", name, "col");
     assert_non_null(q);
-    assert_non_null(strstr(q, " AND COLUMN_NAME LIKE 'col'"));
+    assert_non_null(strstr(q, " AND COLUMN_NAME = 'col'"));
     assert_non_null(strstr(q, " ORDER BY "));
     g_free(q);
 }

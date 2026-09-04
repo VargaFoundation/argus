@@ -88,7 +88,17 @@ static char *catalog_arg_dup(const SQLCHAR *str, SQLSMALLINT len,
         char *stripped = strip_trailing_spaces(raw);
         free(raw);
         if (!stripped) return NULL;
-        return catalog_unquote_identifier(stripped, quote);
+        char *ident = catalog_unquote_identifier(stripped, quote);
+        if (!ident) return NULL;
+        /*
+         * An identifier, not a pattern: `%` and `_` in it stand for
+         * themselves. They were left as LIKE's wildcards, so asking for
+         * `my_table` under SQL_ATTR_METADATA_ID also found `myXtable`.
+         * Escaping them here is what the backends' ESCAPE clause acts on.
+         */
+        char *pat = argus_sql_escape_pattern(ident);
+        free(ident);
+        return pat;
     }
     return raw;
 }

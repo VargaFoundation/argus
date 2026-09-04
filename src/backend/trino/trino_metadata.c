@@ -42,9 +42,24 @@ static bool append_filter(GString *q, const char *column, const char *op,
                           const char *value)
 {
     if (!value || !*value) return true;
-    char *lit = argus_sql_quote_literal(value, false);
+
+    /*
+     * A LIKE pattern gets ESCAPE '\\', which is the escape character
+     * SQLGetInfo has always advertised and nothing acted on; and when the
+     * pattern stands for exactly one name -- every escaped wildcard, which
+     * is what SQL_ATTR_METADATA_ID produces -- equality is both correct and
+     * something the catalog can index.
+     */
+    bool is_like = strcmp(op, "LIKE") == 0;
+    char *exact = is_like ? argus_sql_pattern_literal(value) : NULL;
+    char *lit = argus_sql_quote_literal(exact ? exact : value, false);
+    free(exact);
     if (!lit) return false;
-    g_string_append_printf(q, " AND %s %s %s", column, op, lit);
+    if (is_like && !exact)
+        g_string_append_printf(q, " AND %s LIKE %s ESCAPE '\\'", column, lit);
+    else
+        g_string_append_printf(q, " AND %s %s %s", column,
+                               is_like ? "=" : op, lit);
     free(lit);
     return true;
 }

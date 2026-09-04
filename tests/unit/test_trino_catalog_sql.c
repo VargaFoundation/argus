@@ -17,8 +17,8 @@ static void test_tables_query_quotes_patterns(void **state)
     char *q = trino_build_tables_query("hive", "def%", "ord_%", NULL);
     assert_non_null(q);
     assert_non_null(strstr(q, " AND table_catalog = 'hive'"));
-    assert_non_null(strstr(q, " AND table_schema LIKE 'def%'"));
-    assert_non_null(strstr(q, " AND table_name LIKE 'ord_%'"));
+    assert_non_null(strstr(q, " AND table_schema LIKE 'def%' ESCAPE '\\'"));
+    assert_non_null(strstr(q, " AND table_name LIKE 'ord_%' ESCAPE '\\'"));
     assert_non_null(strstr(q, " ORDER BY table_catalog, table_schema, table_name"));
     g_free(q);
 
@@ -34,15 +34,17 @@ static void test_tables_query_escapes_injection(void **state)
     char *q = trino_build_tables_query(NULL, NULL,
                                        "x' OR 1=1 --", NULL);
     assert_non_null(q);
-    assert_non_null(strstr(q, " AND table_name LIKE 'x'' OR 1=1 --'"));
+    assert_non_null(strstr(q, " AND table_name = 'x'' OR 1=1 --'"));
     /* The single quote never closes the literal early. */
     assert_null(strstr(q, "x' OR"));
     g_free(q);
 
-    /* A backslash before the quote must not neutralise the doubling:
-     * Trino literals are ANSI, the backslash is an ordinary character. */
+    /* A backslash before the quote must not neutralise the doubling. The
+     * backslash is the search-pattern escape SQLGetInfo advertises, so it
+     * makes the quote literal and is consumed; the quote is still doubled
+     * in the SQL literal and never closes it early. */
     q = trino_build_columns_query(NULL, NULL, "t", "c\\'; DROP TABLE t; --");
-    assert_non_null(strstr(q, "column_name LIKE 'c\\''; DROP TABLE t; --'"));
+    assert_non_null(strstr(q, "column_name = 'c''; DROP TABLE t; --'"));
     g_free(q);
 }
 
@@ -84,7 +86,7 @@ static void test_long_patterns_are_not_truncated(void **state)
     char *q = trino_build_columns_query("c", "s", name, "col");
     assert_non_null(q);
     assert_true(strlen(q) > sizeof(name));
-    assert_non_null(strstr(q, " AND column_name LIKE 'col'"));
+    assert_non_null(strstr(q, " AND column_name = 'col'"));
     assert_non_null(strstr(q, " ORDER BY "));
     g_free(q);
 }
@@ -93,7 +95,7 @@ static void test_schemas_and_primary_keys(void **state)
 {
     (void)state;
     char *q = trino_build_schemas_query("c'at", "s%");
-    assert_non_null(strstr(q, " AND catalog_name = 'c''at' AND schema_name LIKE 's%'"));
+    assert_non_null(strstr(q, " AND catalog_name = 'c''at' AND schema_name LIKE 's%' ESCAPE '\\'"));
     assert_non_null(strstr(q, " ORDER BY catalog_name, schema_name"));
     g_free(q);
 
