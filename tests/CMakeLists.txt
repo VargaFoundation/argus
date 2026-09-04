@@ -242,6 +242,7 @@ if(BUILD_INTEGRATION_TESTS)
     argus_add_integration_test(test_hive_http integration/test_hive_http.c)
     argus_add_integration_test(test_bi_folding integration/test_bi_folding.c)
     argus_add_integration_test(test_bi_escapes integration/test_bi_escapes.c)
+    argus_add_integration_test(test_druid_query integration/test_druid_query.c)
     argus_add_integration_test(test_block_cursor integration/test_block_cursor.c)
     argus_add_integration_test(test_async integration/test_async.c)
 

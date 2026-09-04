@@ -446,6 +446,11 @@ jobs:
         run: |
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
             mariadb postgres influxdb3 influxdb3-seed trino pinot bigquery
+          # Druid is four containers (ZooKeeper, coordinator, historical,
+          # broker) and none of them holds data; the backend had no
+          # integration coverage at all before this.
+          docker compose -f tests/integration/docker-compose.yml up -d --wait \
+            druid-zk druid-coordinator druid-historical druid-broker
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
             trino-ssl hiveserver2
 
@@ -471,6 +476,8 @@ jobs:
           TRINO_SSL_CA_FILE: ${{ github.workspace }}/tests/integration/certs/ca-cert.pem
           MYSQL_HOST: "127.0.0.1"
           MYSQL_PORT: "3306"
+          DRUID_HOST: "127.0.0.1"
+          DRUID_PORT: "8082"
           PINOT_HOST: "127.0.0.1"
           PINOT_PORT: "8000"
           BQ_ENDPOINT: "http://127.0.0.1:9050"
@@ -653,6 +660,11 @@ jobs:
         run: |
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
             mariadb influxdb3 influxdb3-seed trino pinot bigquery
+          # Druid is four containers (ZooKeeper, coordinator, historical,
+          # broker) and none of them holds data, so it starts with the light
+          # wave rather than the heavy JVM one.
+          docker compose -f tests/integration/docker-compose.yml up -d --wait \
+            druid-zk druid-coordinator druid-historical druid-broker
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
             trino-ssl hiveserver2
           # Second wave: the heavy JVM services, sequenced to avoid runner
@@ -681,6 +693,8 @@ jobs:
           TRINO_SSL_CA_FILE: ${{ github.workspace }}/tests/integration/certs/ca-cert.pem
           MYSQL_HOST: "127.0.0.1"
           MYSQL_PORT: "3306"
+          DRUID_HOST: "127.0.0.1"
+          DRUID_PORT: "8082"
           PINOT_HOST: "127.0.0.1"
           PINOT_PORT: "8000"
           BQ_ENDPOINT: "http://127.0.0.1:9050"

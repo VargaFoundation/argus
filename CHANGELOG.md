@@ -241,6 +241,16 @@ All notable changes to the Argus ODBC Driver project.
   in a 32-character buffer came back as 15 characters. Chunks also no longer
   end on half a surrogate pair.
 
+### Druid is tested against a real server
+- **The Druid backend had no compose service and no integration test**, so
+  its query submission, its result parsing and the catalog SQL it writes
+  were only ever checked against strings. Four containers (ZooKeeper, a
+  coordinator holding the Derby metadata, a historical and the broker) bring
+  up a Druid that answers SQL, and `test_druid_query` drives connect, a
+  scalar query, a NULL through `SQLGetData`, and `SQLTables`/`SQLColumns`
+  both as patterns and under `SQL_ATTR_METADATA_ID`. It runs on every push,
+  not only in the weekly full matrix.
+
 ### Fixed: a NULL with no indicator was reported as success
 - **`SQLGetData` and a bound column returned `SQL_SUCCESS` for a NULL when
   the application had supplied no indicator**, leaving whatever the buffer

@@ -267,6 +267,77 @@ services:
       retries: 40
       start_period: 40s
 
+  # ── Apache Druid (BACKEND=druid) ───────────────────────────────────────
+  # The Druid backend had no compose service and no integration test, so its
+  # query submission, its result parsing and the catalog SQL it writes were
+  # only ever checked against strings in a unit test.
+  #
+  # The image runs one service per container, so the smallest stack that
+  # answers SQL is four: ZooKeeper, a coordinator (which also hosts the Derby
+  # metadata store), a historical, and the broker that serves /druid/v2/sql.
+  # Heap sizes are cut well below the defaults -- these hold no data, they
+  # only have to plan and answer.
+  druid-zk:
+    image: zookeeper:3.9
+    container_name: argus-druid-zk
+    environment:
+      ZOO_MY_ID: "1"
+
+  druid-coordinator:
+    image: apache/druid:31.0.1
+    container_name: argus-druid-coordinator
+    command: coordinator
+    depends_on:
+      - druid-zk
+    environment: &druid_env
+      ZOOKEEPER: druid-zk:2181
+      DRUID_XMS: 256m
+      DRUID_XMX: 512m
+      DRUID_MAXDIRECTMEMORYSIZE: 512m
+      druid_zk_service_host: druid-zk
+      druid_metadata_storage_type: derby
+      druid_metadata_storage_connector_connectURI: jdbc:derby://druid-coordinator:1527/var/druid/metadata.db;create=true
+      druid_metadata_storage_connector_host: druid-coordinator
+      druid_metadata_storage_connector_port: "1527"
+      druid_coordinator_balancer_strategy: cachingCost
+      druid_storage_type: local
+      druid_storage_storageDirectory: /opt/shared/segments
+      druid_indexer_logs_type: file
+      druid_indexer_logs_directory: /opt/shared/indexing-logs
+      druid_extensions_loadList: '["druid-hdfs-storage"]'
+      druid_processing_numThreads: "1"
+      druid_processing_numMergeBuffers: "2"
+      druid_processing_buffer_sizeBytes: "25000000"
+      druid_server_maxSize: "1000000000"
+      druid_emitter: noop
+
+  druid-historical:
+    image: apache/druid:31.0.1
+    container_name: argus-druid-historical
+    command: historical
+    depends_on:
+      - druid-coordinator
+    environment: *druid_env
+
+  druid-broker:
+    image: apache/druid:31.0.1
+    container_name: argus-druid-broker
+    command: broker
+    depends_on:
+      - druid-coordinator
+    environment: *druid_env
+    ports:
+      - "8082:8082"
+    healthcheck:
+      # /status/health answers before the broker can plan, so the check is a
+      # query. The image ships busybox wget and no curl, which is why this
+      # is not shaped like the others.
+      test: ["CMD-SHELL", "wget -q -O - --header='Content-Type: application/json' --post-data='{\"query\":\"SELECT 1\"}' http://localhost:8082/druid/v2/sql | grep -q 1"]
+      interval: 10s
+      timeout: 8s
+      retries: 40
+      start_period: 30s
+
   # ── PostgreSQL (BACKEND=postgres) ──────────────────────────────────────
   # Also the reference server for the PostgreSQL-family dialect probe:
   #   PG_HOST=127.0.0.1 PG_PORT=5432 ./test_postgres_escapes
