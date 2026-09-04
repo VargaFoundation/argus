@@ -279,9 +279,30 @@ static const char *sj_value_to_cell(const char *p, const char *e,
     p = sj_ws(p, e);
     if (p >= e) return NULL;
     char c = *p;
-    if (c == 'n') { cell->is_null = true; return (p + 4 <= e) ? p + 4 : e; }
-    if (c == 't') { sj_put(cell, cursor, "true", 4);  return (p + 4 <= e) ? p + 4 : e; }
-    if (c == 'f') { sj_put(cell, cursor, "false", 5); return (p + 5 <= e) ? p + 5 : e; }
+    /*
+     * The row block is sized from the raw JSON slice, so a value may only
+     * ever write as many bytes as its own token spans. These three were
+     * dispatched on their first character alone and then wrote the whole
+     * literal: a row of "[f]" reserves three bytes plus one NUL and had six
+     * written into it, past the end of the heap block. The literal has to be
+     * there in full, and anything else hands the page to the DOM path, which
+     * is what this scanner does with every other difficulty.
+     */
+    if (c == 'n') {
+        if (p + 4 > e || memcmp(p, "null", 4) != 0) return NULL;
+        cell->is_null = true;
+        return p + 4;
+    }
+    if (c == 't') {
+        if (p + 4 > e || memcmp(p, "true", 4) != 0) return NULL;
+        sj_put(cell, cursor, "true", 4);
+        return p + 4;
+    }
+    if (c == 'f') {
+        if (p + 5 > e || memcmp(p, "false", 5) != 0) return NULL;
+        sj_put(cell, cursor, "false", 5);
+        return p + 5;
+    }
     if (c == '"') {
         size_t sl = 0;
         const char *q = sj_parse_string(p, e, *cursor, &sl);

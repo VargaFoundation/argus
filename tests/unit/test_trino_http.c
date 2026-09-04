@@ -341,19 +341,6 @@ static void test_result_doubles_ignore_locale(void **state)
     argus_test_restore_c_locale();
 }
 
-#else /* _WIN32 */
-
-/* The fake Trino above is a POSIX socket listener; an empty test table is
- * a compile error, so say explicitly that nothing runs here. */
-static void test_loopback_listener_is_posix_only(void **state)
-{
-    (void)state;
-    skip();
-}
-
-#endif /* _WIN32 */
-
-
 /*
  * Trino carries session changes in response headers and expects them back on
  * the next request. Without this, USE / SET SESSION / SET ROLE / PREPARE /
@@ -471,6 +458,63 @@ static void test_dsn_values_cannot_inject_headers(void **state)
     listener_free(origin);
 }
 
+
+/*
+ * The scanner sizes a row's single allocation from the raw JSON slice, so a
+ * value may only write as many bytes as its own token spans. `true`, `false`
+ * and `null` were dispatched on their first character alone and then wrote
+ * the whole literal, so a coordinator answering with "[[f]]" -- three bytes
+ * of slice -- got six written into the block, past its end. Found by
+ * fuzz/fuzz_trino_json.c; the reproducer is in that corpus.
+ */
+static void test_truncated_literal_does_not_overrun_the_row(void **state)
+{
+    (void)state;
+    const struct { const char *data; int ncols; } cases[] = {
+        { "[[f]]",         1 },
+        { "[[t]]",         1 },
+        { "[[n]]",         1 },
+        { "[[f,f,f,f]]",   4 },
+        { "[[tru]]",       1 },
+        { "[[fals,1]]",    2 },
+        { "[[nul]]",       1 },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        argus_row_cache_t cache;
+        memset(&cache, 0, sizeof(cache));
+        const char *d = cases[i].data;
+        /* Whatever it decides, it must not write outside the row block --
+         * which is what ASan checks in the sanitizer job. */
+        (void)trino_sj_scan_data(d, d + strlen(d), &cache, cases[i].ncols);
+        argus_row_cache_free(&cache);
+    }
+
+    /* The literals in full still scan, and still reach the cells. */
+    const char *ok = "[[true,false,null]]";
+    argus_row_cache_t cache;
+    memset(&cache, 0, sizeof(cache));
+    assert_int_equal(trino_sj_scan_data(ok, ok + strlen(ok), &cache, 3), 0);
+    assert_int_equal((int)cache.num_rows, 1);
+    assert_string_equal(cache.rows[0].cells[0].data, "true");
+    assert_string_equal(cache.rows[0].cells[1].data, "false");
+    assert_true(cache.rows[0].cells[2].is_null);
+    argus_row_cache_free(&cache);
+}
+
+#else /* _WIN32 */
+
+/* The fake Trino above is a POSIX socket listener; an empty test table is
+ * a compile error, so say explicitly that nothing runs here. */
+static void test_loopback_listener_is_posix_only(void **state)
+{
+    (void)state;
+    skip();
+}
+
+#endif /* _WIN32 */
+
+
 int main(void)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -481,6 +525,7 @@ int main(void)
         cmocka_unit_test(test_next_uri_on_another_host_gets_no_credentials),
         cmocka_unit_test(test_basic_credentials_stay_on_the_origin),
         cmocka_unit_test(test_result_doubles_ignore_locale),
+        cmocka_unit_test(test_truncated_literal_does_not_overrun_the_row),
         cmocka_unit_test(test_session_headers_are_echoed_back),
         cmocka_unit_test(test_cleared_session_state_stops_being_sent),
         cmocka_unit_test(test_dsn_values_cannot_inject_headers),

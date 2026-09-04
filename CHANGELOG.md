@@ -241,6 +241,18 @@ All notable changes to the Argus ODBC Driver project.
   in a 32-character buffer came back as 15 characters. Chunks also no longer
   end on half a surrogate pair.
 
+### Fixed: heap overflow in the Trino result-page scanner
+- **A truncated `true`, `false` or `null` in a result page wrote past the end
+  of a heap block.** The fetch fast path sizes a row's single allocation from
+  its raw JSON slice, on the rule that a decoded value never exceeds its own
+  token — but those three were dispatched on their first character alone and
+  then wrote the whole literal, so a page containing `[[f]]` reserved three
+  bytes plus a NUL and had six written into it. The literal must now be
+  present in full; anything else hands the page to the json-glib path, as
+  every other difficulty in that scanner already does. Found by the new fuzz
+  harness on its first CI run, with a unit-test reproducer and the input kept
+  in the corpus.
+
 ### Docs
 - **`SECURITY.md` still said no release had been cut**, three releases in —
   the worst file in the tree to be stale, since it is what a reporter reads
