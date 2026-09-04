@@ -241,6 +241,24 @@ All notable changes to the Argus ODBC Driver project.
   in a 32-character buffer came back as 15 characters. Chunks also no longer
   end on half a surrogate pair.
 
+### Supply chain
+- **Every GitHub Action was pinned to a floating tag** (`@v4`), so the
+  pipeline that builds, signs and publishes the packages could change under
+  it without anyone deciding to take the change. All 50 uses are pinned to a
+  commit SHA, with the tag kept in a comment so Dependabot still proposes
+  updates as reviewable pull requests.
+- **The releases carried no SBOM.** The driver links GLib, json-glib,
+  libcurl, Thrift, MariaDB Connector/C, libpq and Kerberos, several of them
+  LGPL, and a recipient had no machine-readable way to know which versions —
+  `NOTICE` says what, not which. An SPDX document is published with the
+  artefacts, generated before the checksum manifest so the manifest and its
+  GPG signature cover it.
+- **Nothing tied the binaries to the build that produced them.** Every
+  published artefact now carries a provenance attestation naming this
+  workflow, commit and runner, verifiable with `gh attestation verify <file>
+  --repo VargaFoundation/argus`. The GPG signature says the manifest came
+  from the maintainer; this says the binaries came out of this build.
+
 ### Fixed: the Kudu SQL parser, now built everywhere
 - **It is plain C with no dependency on the Kudu client**, but was compiled
   only where `libkudu_client` happened to be installed — so the

@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Install dependencies
         run: |
@@ -145,7 +145,7 @@ jobs:
           done
 
       - name: Upload tar.gz
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: release-linux
           path: |
@@ -153,7 +153,7 @@ jobs:
             argus-odbc-*-linux-x64.tar.gz.asc
 
       - name: Upload .deb
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: release-deb
           path: |
@@ -161,7 +161,7 @@ jobs:
             argus-odbc_*.deb.asc
 
       - name: Upload .rpm
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: release-rpm
           path: argus-odbc-*.rpm
@@ -177,7 +177,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Install dependencies
         run: |
@@ -199,7 +199,7 @@ jobs:
 
       - name: Cache thrift_c_glib
         id: cache-thrift
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: thrift-c-glib-prefix
           key: thrift-c-glib-0.23.0-macos-${{ runner.arch }}-v1
@@ -249,7 +249,7 @@ jobs:
           tar -czf argus-odbc-${VERSION}-macos-${ARCH}.tar.gz -C staging argus-odbc
 
       - name: Upload tar.gz
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: release-macos
           path: argus-odbc-*-macos-*.tar.gz
@@ -303,7 +303,7 @@ jobs:
           xcrun stapler staple "$PKG"
 
       - name: Upload .pkg
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: release-pkg
           path: argus-odbc-*.pkg
@@ -323,10 +323,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2
         with:
           msystem: UCRT64
           update: false
@@ -349,7 +349,7 @@ jobs:
 
       - name: Cache thrift_c_glib
         id: cache-thrift
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: thrift-c-glib-prefix
           key: thrift-c-glib-0.23.0-ucrt64-v1
@@ -402,7 +402,7 @@ jobs:
 
       - name: Sign driver DLL
         if: env.SIGN_ENABLED != ''
-        uses: azure/trusted-signing-action@v0.5.0
+        uses: azure/trusted-signing-action@07c81171dd46a04e1b9f382b6c693815828bbbf7  # v0.5.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -423,7 +423,7 @@ jobs:
 
       - name: Sign installer
         if: env.SIGN_ENABLED != ''
-        uses: azure/trusted-signing-action@v0.5.0
+        uses: azure/trusted-signing-action@07c81171dd46a04e1b9f382b6c693815828bbbf7  # v0.5.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -457,7 +457,7 @@ jobs:
           Move-Item argus-odbc-installer.intunewin "argus-odbc-${VERSION}-windows-x64.intunewin"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: release-windows
           path: |
@@ -478,10 +478,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Cache Power Query SdkTools
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: ${{ runner.temp }}\argus-pqsdk\sdktools-2.155.2.nupkg
           key: pq-sdktools-2.155.2
@@ -491,7 +491,7 @@ jobs:
         run: connectors/powerbi/build.ps1 -OutDir connector-dist -ToolsCacheDir "$env:RUNNER_TEMP\argus-pqsdk"
 
       - name: Upload connector
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: release-powerbi
           if-no-files-found: warn
@@ -504,12 +504,21 @@ jobs:
     needs: [build-linux, build-macos, build-windows, build-powerbi-connector]
     runs-on: ubuntu-latest
 
+    # id-token and attestations are what actions/attest-build-provenance
+    # needs to mint a signed statement tying these artefacts to this
+    # workflow, this commit and this runner. contents: write is the release
+    # itself; the workflow-level default only grants that one.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
     env:
       GPG_SIGN_ENABLED: ${{ secrets.GPG_PRIVATE_KEY }}
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: artifacts
           merge-multiple: true
@@ -535,6 +544,21 @@ jobs:
             fi
           done
           [ "$missing" -eq 0 ]
+
+      # What is actually inside the binaries. The driver links GLib,
+      # json-glib, libcurl, Thrift, MariaDB Connector/C, libpq and Kerberos,
+      # several of them LGPL, and until now a recipient had no machine-
+      # readable way to know which versions -- NOTICE says what, not which.
+      # Generated before the checksums so the manifest and its GPG signature
+      # cover the SBOM too.
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: artifacts/argus-odbc-${{ github.ref_name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
 
       # One manifest covering every published file. This is the verification
       # path that works the same on every platform, including the ones whose
@@ -566,8 +590,19 @@ jobs:
               -u "$GPG_KEY_ID" --armor --detach-sign SHA256SUMS
           gpg --verify SHA256SUMS.asc SHA256SUMS
 
+      # A signed statement tying every artefact in the manifest to this
+      # workflow, commit and runner, verifiable with:
+      #   gh attestation verify <file> --repo VargaFoundation/argus
+      # The GPG signature says the manifest came from the maintainer; this
+      # says the binaries came out of this build and not off someone's
+      # laptop.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
+        with:
+          subject-checksums: artifacts/SHA256SUMS
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           generate_release_notes: true
           draft: false
@@ -578,5 +613,6 @@ jobs:
             artifacts/Argus.mez
             artifacts/Argus.pqx
             artifacts/Argus.pqx.thumbprint.txt
+            artifacts/*.spdx.json
             artifacts/SHA256SUMS
             artifacts/SHA256SUMS.asc
