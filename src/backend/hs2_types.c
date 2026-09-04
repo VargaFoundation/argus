@@ -8,6 +8,9 @@
 #include <string.h>
 #include <strings.h>
 
+#include <glib-object.h>
+#include "gen-c_glib/t_c_l_i_service_types.h"
+
 SQLSMALLINT argus_hs2_type_to_sql_type(const char *type_name)
 {
     if (!type_name) return SQL_VARCHAR;
@@ -71,5 +74,85 @@ SQLSMALLINT argus_hs2_type_decimal_digits(SQLSMALLINT sql_type)
     case SQL_DECIMAL:        return 18;
     case SQL_TYPE_TIMESTAMP: return 9;
     default:                 return 0;
+    }
+}
+
+/* ── Result-set metadata ─────────────────────────────────────── */
+
+static SQLSMALLINT type_id_to_sql_type(TTypeId id)
+{
+    switch (id) {
+    case T_TYPE_ID_BOOLEAN_TYPE:        return SQL_BIT;
+    case T_TYPE_ID_TINYINT_TYPE:        return SQL_TINYINT;
+    case T_TYPE_ID_SMALLINT_TYPE:       return SQL_SMALLINT;
+    case T_TYPE_ID_INT_TYPE:            return SQL_INTEGER;
+    case T_TYPE_ID_BIGINT_TYPE:         return SQL_BIGINT;
+    case T_TYPE_ID_FLOAT_TYPE:          return SQL_FLOAT;
+    case T_TYPE_ID_DOUBLE_TYPE:         return SQL_DOUBLE;
+    case T_TYPE_ID_TIMESTAMP_TYPE:      return SQL_TYPE_TIMESTAMP;
+    case T_TYPE_ID_BINARY_TYPE:         return SQL_BINARY;
+    case T_TYPE_ID_DECIMAL_TYPE:        return SQL_DECIMAL;
+    case T_TYPE_ID_DATE_TYPE:           return SQL_TYPE_DATE;
+    case T_TYPE_ID_CHAR_TYPE:           return SQL_CHAR;
+    case T_TYPE_ID_STRING_TYPE:
+    case T_TYPE_ID_VARCHAR_TYPE:
+    case T_TYPE_ID_TIMESTAMPLOCALTZ_TYPE:
+    case T_TYPE_ID_INTERVAL_YEAR_MONTH_TYPE:
+    case T_TYPE_ID_INTERVAL_DAY_TIME_TYPE:
+    default:                            /* ARRAY, MAP, STRUCT, UNION, NULL */
+        return SQL_VARCHAR;
+    }
+}
+
+/* TCLIService's PRECISION / SCALE / CHARACTER_MAXIMUM_LENGTH qualifiers. */
+static bool qualifier_i32(TTypeQualifiers *q, const char *key, gint32 *out)
+{
+    if (!q || !q->qualifiers) return false;
+    TTypeQualifierValue *v = g_hash_table_lookup(q->qualifiers, key);
+    if (!v || !v->__isset_i32Value) return false;
+    *out = v->i32Value;
+    return true;
+}
+
+void argus_hs2_describe_column(TColumnDesc *cd, argus_column_desc_t *col)
+{
+    memset(col, 0, sizeof(*col));
+    if (cd->columnName) {
+        strncpy((char *)col->name, cd->columnName, ARGUS_MAX_COLUMN_NAME - 1);
+        col->name_len = (SQLSMALLINT)strlen((char *)col->name);
+    }
+
+    TTypeId type_id = T_TYPE_ID_STRING_TYPE;
+    TTypeQualifiers *q = NULL;
+    GPtrArray *types = cd->typeDesc ? cd->typeDesc->types : NULL;
+    if (types && types->len > 0) {
+        TTypeEntry *te = g_ptr_array_index(types, 0);
+        if (te && te->__isset_primitiveEntry && te->primitiveEntry) {
+            type_id = te->primitiveEntry->type;
+            if (te->primitiveEntry->__isset_typeQualifiers)
+                q = te->primitiveEntry->typeQualifiers;
+        }
+    }
+
+    col->sql_type       = type_id_to_sql_type(type_id);
+    col->column_size    = argus_hs2_type_column_size(col->sql_type);
+    col->decimal_digits = argus_hs2_type_decimal_digits(col->sql_type);
+    col->nullable       = SQL_NULLABLE_UNKNOWN;
+
+    gint32 n;
+    switch (type_id) {
+    case T_TYPE_ID_DECIMAL_TYPE:
+        if (qualifier_i32(q, "precision", &n) && n > 0)
+            col->column_size = (SQLULEN)n;
+        if (qualifier_i32(q, "scale", &n) && n >= 0)
+            col->decimal_digits = (SQLSMALLINT)n;
+        break;
+    case T_TYPE_ID_CHAR_TYPE:
+    case T_TYPE_ID_VARCHAR_TYPE:
+        if (qualifier_i32(q, "characterMaximumLength", &n) && n > 0)
+            col->column_size = (SQLULEN)n;
+        break;
+    default:
+        break;
     }
 }

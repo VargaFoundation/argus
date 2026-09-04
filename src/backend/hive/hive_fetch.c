@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "../hs2_fetch.h"
+#include "../hs2_types.h"
 
 /* Forward declaration */
 int hive_get_result_metadata(argus_backend_conn_t raw_conn,
@@ -153,67 +154,7 @@ int hive_get_result_metadata(argus_backend_conn_t raw_conn,
 
     for (int i = 0; i < ncols; i++) {
         TColumnDesc *cd = (TColumnDesc *)g_ptr_array_index(col_descs, i);
-
-        gchar *col_name = NULL;
-        g_object_get(cd, "columnName", &col_name, NULL);
-
-        TTypeDesc *type_desc = NULL;
-        g_object_get(cd, "typeDesc", &type_desc, NULL);
-
-        /* Get type name from type descriptor */
-        const char *type_name = "STRING";
-        if (type_desc) {
-            GPtrArray *types = NULL;
-            types = type_desc->types;
-            if (types && types->len > 0) {
-                TTypeEntry *te = (TTypeEntry *)g_ptr_array_index(types, 0);
-                TPrimitiveTypeEntry *pte = NULL;
-                g_object_get(te, "primitiveEntry", &pte, NULL);
-                if (pte) {
-                    TTypeId type_id;
-                    g_object_get(pte, "type", &type_id, NULL);
-
-                    /* Map TTypeId to type name string */
-                    switch (type_id) {
-                    case T_TYPE_ID_BOOLEAN_TYPE:   type_name = "BOOLEAN"; break;
-                    case T_TYPE_ID_TINYINT_TYPE:   type_name = "TINYINT"; break;
-                    case T_TYPE_ID_SMALLINT_TYPE:  type_name = "SMALLINT"; break;
-                    case T_TYPE_ID_INT_TYPE:        type_name = "INT"; break;
-                    case T_TYPE_ID_BIGINT_TYPE:     type_name = "BIGINT"; break;
-                    case T_TYPE_ID_FLOAT_TYPE:      type_name = "FLOAT"; break;
-                    case T_TYPE_ID_DOUBLE_TYPE:     type_name = "DOUBLE"; break;
-                    case T_TYPE_ID_STRING_TYPE:     type_name = "STRING"; break;
-                    case T_TYPE_ID_TIMESTAMP_TYPE:  type_name = "TIMESTAMP"; break;
-                    case T_TYPE_ID_BINARY_TYPE:     type_name = "BINARY"; break;
-                    case T_TYPE_ID_DECIMAL_TYPE:    type_name = "DECIMAL"; break;
-                    case T_TYPE_ID_DATE_TYPE:       type_name = "DATE"; break;
-                    case T_TYPE_ID_VARCHAR_TYPE:    type_name = "VARCHAR"; break;
-                    case T_TYPE_ID_CHAR_TYPE:       type_name = "CHAR"; break;
-                    default:                        type_name = "STRING"; break;
-                    }
-                    g_object_unref(pte);
-                }
-            }
-            g_object_unref(type_desc);
-        }
-
-        if (columns) {
-            argus_column_desc_t *col = &columns[i];
-            memset(col, 0, sizeof(*col));
-
-            if (col_name) {
-                strncpy((char *)col->name, col_name,
-                        ARGUS_MAX_COLUMN_NAME - 1);
-                col->name_len = (SQLSMALLINT)strlen(col_name);
-            }
-
-            col->sql_type       = hive_type_to_sql_type(type_name);
-            col->column_size    = hive_type_column_size(col->sql_type);
-            col->decimal_digits = hive_type_decimal_digits(col->sql_type);
-            col->nullable       = SQL_NULLABLE_UNKNOWN;
-        }
-
-        g_free(col_name);
+        if (columns) argus_hs2_describe_column(cd, &columns[i]);
     }
 
     if (num_cols) *num_cols = ncols;

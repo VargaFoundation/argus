@@ -4,8 +4,12 @@
  * Two passes over the column-major TColumn union:
  *   1. size pass — computes an upper bound of each row's payload (strings and
  *      binary are exact; numerics use their maximum formatted width),
+ *      BINARY columns arrive as bytes (TBinaryColumn) and stay bytes
+ *      (ARGUS_NATIVE_BINARY), no hex rendering,
  *   2. fill pass — allocates ONE block per row (cell array + payloads,
  *      argus_row_alloc_block) and formats values into a per-row cursor.
+ *      Numeric columns also keep their native value on the cell, so a
+ *      numeric SQLGetData target skips the text round-trip.
  * The scroll cache's ownership transfer keeps working: a block row moves as
  * one unit and frees with one free.
  */
@@ -24,7 +28,7 @@
 #define HS2_W_I16    8
 #define HS2_W_I32   16
 #define HS2_W_I64   24
-#define HS2_W_DBL   32   /* "%.15g" */
+#define HS2_W_DBL   32   /* 17 significant digits, sign, exponent */
 #define HS2_W_BOOL   6   /* "false" */
 
 static inline bool hs2_is_null(GByteArray *nulls, int r)
@@ -57,7 +61,7 @@ static void size_column(TColumn *tcol, int num_rows, size_t *row_sz)
         for (int r = 0; r < num_rows && r < (int)v->len; r++) {
             if (hs2_is_null(n, r)) continue;
             GByteArray *val = g_ptr_array_index(v, r);
-            if (val) row_sz[r] += (size_t)val->len * 2 + 1;
+            if (val) row_sz[r] += (size_t)val->len + 1;
         }
         return;
     }
@@ -114,13 +118,8 @@ static void fill_column(TColumn *tcol, int col_idx, int num_rows,
             if (hs2_is_null(n, r)) { cell->is_null = true; continue; }
             GByteArray *val = g_ptr_array_index(v, r);
             if (!val) continue;
-            char *dst = cursors[r];
-            for (guint i = 0; i < val->len; i++)
-                snprintf(dst + i * 2, 3, "%02x", val->data[i]);
-            dst[(size_t)val->len * 2] = '\0';
-            cell->data = dst;
-            cell->data_len = (size_t)val->len * 2;
-            cursors[r] += (size_t)val->len * 2 + 1;
+            put_text(cell, &cursors[r], (const char *)val->data, val->len);
+            cell->native_kind = ARGUS_NATIVE_BINARY;
         }
         return;
     }
@@ -131,9 +130,11 @@ static void fill_column(TColumn *tcol, int col_idx, int num_rows,
         for (int r = 0; r < num_rows && r < (int)v->len; r++) {
             argus_cell_t *cell = &cache->rows[r].cells[col_idx];
             if (hs2_is_null(n, r)) { cell->is_null = true; continue; }
-            int len = snprintf(buf, sizeof(buf), "%d",
-                               g_array_index(v, gint32, r));
+            gint32 x = g_array_index(v, gint32, r);
+            int len = snprintf(buf, sizeof(buf), "%d", x);
             put_text(cell, &cursors[r], buf, (size_t)len);
+            cell->native_kind = ARGUS_NATIVE_I64;
+            cell->native.i64 = x;
         }
         return;
     }
@@ -143,9 +144,11 @@ static void fill_column(TColumn *tcol, int col_idx, int num_rows,
         for (int r = 0; r < num_rows && r < (int)v->len; r++) {
             argus_cell_t *cell = &cache->rows[r].cells[col_idx];
             if (hs2_is_null(n, r)) { cell->is_null = true; continue; }
-            int len = snprintf(buf, sizeof(buf), "%" G_GINT64_FORMAT,
-                               g_array_index(v, gint64, r));
+            gint64 x = g_array_index(v, gint64, r);
+            int len = snprintf(buf, sizeof(buf), "%" G_GINT64_FORMAT, x);
             put_text(cell, &cursors[r], buf, (size_t)len);
+            cell->native_kind = ARGUS_NATIVE_I64;
+            cell->native.i64 = x;
         }
         return;
     }
@@ -155,9 +158,11 @@ static void fill_column(TColumn *tcol, int col_idx, int num_rows,
         for (int r = 0; r < num_rows && r < (int)v->len; r++) {
             argus_cell_t *cell = &cache->rows[r].cells[col_idx];
             if (hs2_is_null(n, r)) { cell->is_null = true; continue; }
-            size_t len = argus_dtoa(buf, sizeof(buf), 15,
-                                    g_array_index(v, gdouble, r));
+            gdouble x = g_array_index(v, gdouble, r);
+            size_t len = argus_dtoa_shortest(buf, sizeof(buf), x);
             put_text(cell, &cursors[r], buf, len);
+            cell->native_kind = ARGUS_NATIVE_F64;
+            cell->native.f64 = x;
         }
         return;
     }
@@ -178,9 +183,11 @@ static void fill_column(TColumn *tcol, int col_idx, int num_rows,
         for (int r = 0; r < num_rows && r < (int)v->len; r++) {
             argus_cell_t *cell = &cache->rows[r].cells[col_idx];
             if (hs2_is_null(n, r)) { cell->is_null = true; continue; }
-            int len = snprintf(buf, sizeof(buf), "%d",
-                               (int)g_array_index(v, gint8, r));
+            int x = (int)g_array_index(v, gint8, r);
+            int len = snprintf(buf, sizeof(buf), "%d", x);
             put_text(cell, &cursors[r], buf, (size_t)len);
+            cell->native_kind = ARGUS_NATIVE_I64;
+            cell->native.i64 = x;
         }
         return;
     }
@@ -190,9 +197,11 @@ static void fill_column(TColumn *tcol, int col_idx, int num_rows,
         for (int r = 0; r < num_rows && r < (int)v->len; r++) {
             argus_cell_t *cell = &cache->rows[r].cells[col_idx];
             if (hs2_is_null(n, r)) { cell->is_null = true; continue; }
-            int len = snprintf(buf, sizeof(buf), "%d",
-                               (int)g_array_index(v, gint16, r));
+            int x = (int)g_array_index(v, gint16, r);
+            int len = snprintf(buf, sizeof(buf), "%d", x);
             put_text(cell, &cursors[r], buf, (size_t)len);
+            cell->native_kind = ARGUS_NATIVE_I64;
+            cell->native.i64 = x;
         }
         return;
     }

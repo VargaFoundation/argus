@@ -134,9 +134,13 @@ static void test_rowset_to_cache_binary_only(void **state)
     assert_int_equal(num_cols, 1);
     assert_int_equal(cache.num_cols, 1);
     assert_int_equal(cache.num_rows, 3);
-    assert_string_equal(cache.rows[0].cells[0].data, "00ff10");
+    /* The bytes themselves, not a hex rendering; the NUL after them is
+     * the block layout's, not part of the value. */
+    assert_int_equal(cache.rows[0].cells[0].native_kind, ARGUS_NATIVE_BINARY);
+    assert_int_equal(cache.rows[0].cells[0].data_len, 3);
+    assert_memory_equal(cache.rows[0].cells[0].data, "\x00\xff\x10", 3);
     assert_true(cache.rows[1].cells[0].is_null);
-    assert_string_equal(cache.rows[2].cells[0].data, "02ff10");
+    assert_memory_equal(cache.rows[2].cells[0].data, "\x02\xff\x10", 3);
 
     argus_row_cache_clear(&cache);
     g_ptr_array_unref(cols);
@@ -164,7 +168,32 @@ static void test_rowset_to_cache_double_ignores_locale(void **state)
     assert_string_equal(cache.rows[0].cells[0].data, "1.5");
     assert_int_equal(cache.rows[0].cells[0].data_len, 3);
     assert_string_equal(cache.rows[1].cells[0].data, "2.5");
+    /* ...and the native value rides along for numeric targets. */
+    assert_int_equal(cache.rows[0].cells[0].native_kind, ARGUS_NATIVE_F64);
+    assert_true(cache.rows[1].cells[0].native.f64 == 2.5);
 
+    argus_row_cache_clear(&cache);
+    g_ptr_array_unref(cols);
+}
+
+/* The text of a DOUBLE reads back as the same double: 15 digits when they
+ * round-trip, the 17 a double can need otherwise. */
+static void test_rowset_to_cache_double_round_trips(void **state)
+{
+    (void)state;
+    GPtrArray *cols = columns(double_column(1, 0.1 + 0.2), NULL);
+    argus_row_cache_t cache;
+    memset(&cache, 0, sizeof(cache));
+
+    assert_int_equal(argus_hs2_rowset_to_cache(cols, &cache, NULL), 0);
+    assert_string_equal(cache.rows[0].cells[0].data, "0.30000000000000004");
+    argus_row_cache_clear(&cache);
+    g_ptr_array_unref(cols);
+
+    cols = columns(double_column(1, 0.1), NULL);
+    memset(&cache, 0, sizeof(cache));
+    assert_int_equal(argus_hs2_rowset_to_cache(cols, &cache, NULL), 0);
+    assert_string_equal(cache.rows[0].cells[0].data, "0.1");
     argus_row_cache_clear(&cache);
     g_ptr_array_unref(cols);
 }
@@ -181,7 +210,8 @@ static void test_rowset_to_cache_short_column_leaves_cells_empty(void **state)
     assert_int_equal(cache.num_rows, 2);
     assert_string_equal(cache.rows[0].cells[0].data, "s0");
     assert_null(cache.rows[1].cells[0].data);
-    assert_string_equal(cache.rows[1].cells[1].data, "01ff10");
+    assert_int_equal(cache.rows[1].cells[1].data_len, 3);
+    assert_memory_equal(cache.rows[1].cells[1].data, "\x01\xff\x10", 3);
 
     argus_row_cache_clear(&cache);
     g_ptr_array_unref(cols);
@@ -362,7 +392,7 @@ static void test_hive_retries_empty_batch_with_more_rows(void **state)
     assert_int_equal(num_cols, 2);
     assert_int_equal(cache.num_rows, 2);
     assert_string_equal(cache.rows[1].cells[0].data, "s1");
-    assert_string_equal(cache.rows[1].cells[1].data, "01ff10");
+    assert_memory_equal(cache.rows[1].cells[1].data, "\x01\xff\x10", 3);
     assert_int_equal(replies_left(&f), 0);      /* all three consumed */
     assert_false(cache.exhausted);              /* the ODBC layer decides */
 
@@ -439,6 +469,7 @@ int main(void)
         cmocka_unit_test(test_row_count_is_longest_column),
         cmocka_unit_test(test_rowset_to_cache_binary_only),
         cmocka_unit_test(test_rowset_to_cache_double_ignores_locale),
+        cmocka_unit_test(test_rowset_to_cache_double_round_trips),
         cmocka_unit_test(test_rowset_to_cache_short_column_leaves_cells_empty),
         cmocka_unit_test(test_rowset_to_cache_empty),
         cmocka_unit_test(test_status_ok),
