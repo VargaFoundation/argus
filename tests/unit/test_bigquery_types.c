@@ -27,7 +27,8 @@ static void test_type_mapping(void **state)
     assert_int_equal(bq_type_to_sql_type("DATE"), SQL_TYPE_DATE);
     assert_int_equal(bq_type_to_sql_type("TIME"), SQL_TYPE_TIME);
     assert_int_equal(bq_type_to_sql_type("STRING"), SQL_VARCHAR);
-    assert_int_equal(bq_type_to_sql_type("BYTES"), SQL_VARCHAR);
+    /* BYTES is binary, not the base64 text it travels as. */
+    assert_int_equal(bq_type_to_sql_type("BYTES"), SQL_VARBINARY);
     assert_int_equal(bq_type_to_sql_type("GEOGRAPHY"), SQL_VARCHAR);
     assert_int_equal(bq_type_to_sql_type("JSON"), SQL_VARCHAR);
     assert_int_equal(bq_type_to_sql_type(NULL), SQL_VARCHAR);
@@ -133,6 +134,33 @@ static void test_cell_string_passthrough(void **state)
     free(cell.data);
 }
 
+/* BYTES arrives as base64 over the REST API and must reach the row cache as
+ * the bytes themselves, embedded NULs included. */
+static void test_cell_bytes_decoded(void **state)
+{
+    (void)state;
+    argus_cell_t cell;
+    memset(&cell, 0, sizeof(cell));
+    bq_fill_cell(&cell, "BYTES", "SGVsbG8=");
+    assert_int_equal(cell.native_kind, ARGUS_NATIVE_BINARY);
+    assert_int_equal(cell.data_len, 5);
+    assert_memory_equal(cell.data, "Hello", 5);
+    free(cell.data);
+
+    memset(&cell, 0, sizeof(cell));
+    bq_fill_cell(&cell, "BYTES", "AP8Q");
+    assert_int_equal(cell.data_len, 3);
+    assert_memory_equal(cell.data, "\x00\xff\x10", 3);
+    free(cell.data);
+
+    /* Text that is not base64 is left as it was, not dropped. */
+    memset(&cell, 0, sizeof(cell));
+    bq_fill_cell(&cell, "BYTES", "not base64!");
+    assert_int_equal(cell.native_kind, ARGUS_NATIVE_NONE);
+    assert_string_equal(cell.data, "not base64!");
+    free(cell.data);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -145,6 +173,7 @@ int main(void)
         cmocka_unit_test(test_cell_datetime),
         cmocka_unit_test(test_cell_null),
         cmocka_unit_test(test_cell_string_passthrough),
+        cmocka_unit_test(test_cell_bytes_decoded),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
