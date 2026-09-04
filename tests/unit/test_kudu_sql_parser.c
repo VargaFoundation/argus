@@ -306,12 +306,147 @@ static void test_semicolon(void **state)
     kudu_parsed_query_free(&q);
 }
 
+
+/*
+ * SQL escapes a quote by doubling it. The tokenizer ended the literal at the
+ * second quote, so `WHERE name = 'O''Brien'` searched for "O" and silently
+ * matched the wrong rows -- and it treated a backslash as an escape, which
+ * this dialect does not, mangling a Windows path.
+ */
+static void test_doubled_quote_is_one_quote(void **state)
+{
+    (void)state;
+    kudu_parsed_query_t q;
+    const char *err = NULL;
+
+    assert_int_equal(kudu_sql_parse(
+        "SELECT * FROM t WHERE name = 'O''Brien'", &q, &err), 0);
+    assert_int_equal(q.num_predicates, 1);
+    assert_string_equal(q.predicates[0].value, "O'Brien");
+    kudu_parsed_query_free(&q);
+
+    assert_int_equal(kudu_sql_parse(
+        "SELECT * FROM t WHERE p = 'C:\\path'", &q, &err), 0);
+    assert_string_equal(q.predicates[0].value, "C:\\path");
+    kudu_parsed_query_free(&q);
+
+    /* Four quotes: one escaped quote. */
+    assert_int_equal(kudu_sql_parse(
+        "SELECT * FROM t WHERE s = ''''", &q, &err), 0);
+    assert_string_equal(q.predicates[0].value, "'");
+    kudu_parsed_query_free(&q);
+
+    /* An empty literal is still a literal. */
+    assert_int_equal(kudu_sql_parse(
+        "SELECT * FROM t WHERE s = ''", &q, &err), 0);
+    assert_string_equal(q.predicates[0].value, "");
+    kudu_parsed_query_free(&q);
+
+    /* Unterminated: an error, not a value running to the end. */
+    err = NULL;
+    assert_int_not_equal(kudu_sql_parse(
+        "SELECT * FROM t WHERE s = 'oops", &q, &err), 0);
+    assert_non_null(err);
+}
+
+/* A character this dialect has no meaning for was skipped, so the statement
+ * silently became a different one. */
+static void test_unknown_character_is_an_error(void **state)
+{
+    (void)state;
+    kudu_parsed_query_t q;
+    const char *err = NULL;
+
+    assert_int_not_equal(kudu_sql_parse("SELECT * FROM t WHERE a # 1",
+                                        &q, &err), 0);
+    assert_non_null(err);
+
+    err = NULL;
+    assert_int_not_equal(kudu_sql_parse("SELECT * FROM t WHERE a @@ 1",
+                                        &q, &err), 0);
+    assert_non_null(err);
+
+    /*
+     * The cases that matter are the ones where dropping the character left
+     * something that parsed: these used to come back as a valid query with
+     * the stray character quietly gone.
+     */
+    err = NULL;
+    assert_int_not_equal(kudu_sql_parse("SELECT * FROM t WHERE a = 1 #",
+                                        &q, &err), 0);
+    assert_non_null(err);
+
+    err = NULL;
+    assert_int_not_equal(kudu_sql_parse("SELECT * FROM t$", &q, &err), 0);
+    assert_non_null(err);
+}
+
+/* Comments, which were tokenized as words. */
+static void test_comments_are_skipped(void **state)
+{
+    (void)state;
+    kudu_parsed_query_t q;
+    const char *err = NULL;
+
+    assert_int_equal(kudu_sql_parse(
+        "SELECT a, b -- the columns\nFROM t /* the table */ WHERE a = 1",
+        &q, &err), 0);
+    assert_int_equal(q.num_columns, 2);
+    assert_string_equal(q.table_name, "t");
+    assert_int_equal(q.num_predicates, 1);
+    kudu_parsed_query_free(&q);
+
+    /* A comment marker inside a literal is part of the value. */
+    assert_int_equal(kudu_sql_parse(
+        "SELECT * FROM t WHERE s = '-- not a comment'", &q, &err), 0);
+    assert_string_equal(q.predicates[0].value, "-- not a comment");
+    kudu_parsed_query_free(&q);
+
+    err = NULL;
+    assert_int_not_equal(kudu_sql_parse("SELECT * FROM t /* unterminated",
+                                        &q, &err), 0);
+    assert_non_null(err);
+}
+
+/* Column aliases: "AS x" used to be read as two more columns, and the
+ * scanner then asked the table for a column named "AS". */
+static void test_column_aliases(void **state)
+{
+    (void)state;
+    kudu_parsed_query_t q;
+    const char *err = NULL;
+
+    assert_int_equal(kudu_sql_parse("SELECT a AS x, b AS y FROM t",
+                                    &q, &err), 0);
+    assert_int_equal(q.num_columns, 2);
+    assert_string_equal(q.columns[0], "a");
+    assert_string_equal(q.columns[1], "b");
+    assert_string_equal(q.table_name, "t");
+    kudu_parsed_query_free(&q);
+
+    /* The bare form, without AS. */
+    assert_int_equal(kudu_sql_parse("SELECT a x, b y FROM t", &q, &err), 0);
+    assert_int_equal(q.num_columns, 2);
+    assert_string_equal(q.columns[0], "a");
+    assert_string_equal(q.columns[1], "b");
+    kudu_parsed_query_free(&q);
+
+    /* AS with nothing after it is an error, not a column called "AS". */
+    err = NULL;
+    assert_int_not_equal(kudu_sql_parse("SELECT a AS FROM t", &q, &err), 0);
+    assert_non_null(err);
+}
+
 /* ── Main ─────────────────────────────────────────────────────── */
 
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_select_star),
+        cmocka_unit_test(test_doubled_quote_is_one_quote),
+        cmocka_unit_test(test_unknown_character_is_an_error),
+        cmocka_unit_test(test_comments_are_skipped),
+        cmocka_unit_test(test_column_aliases),
         cmocka_unit_test(test_select_columns),
         cmocka_unit_test(test_where_comparisons),
         cmocka_unit_test(test_where_multiple_and),

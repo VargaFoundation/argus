@@ -34,6 +34,8 @@ argus_add_unit_test(test_connect_string unit/test_connect_string.c)
 argus_add_unit_test(test_driver_connect unit/test_driver_connect.c)
 argus_add_unit_test(test_dm_pooling unit/test_dm_pooling.c)
 argus_add_unit_test(test_sql_quote unit/test_sql_quote.c)
+# Plain C, no Kudu client needed: built and run everywhere.
+argus_add_unit_test(test_kudu_sql_parser unit/test_kudu_sql_parser.c)
 argus_add_unit_test(test_diag unit/test_diag.c)
 argus_add_unit_test(test_thread_safety unit/test_thread_safety.c)
 argus_add_unit_test(test_info unit/test_info.c)
@@ -163,7 +165,6 @@ endif()
 
 if(ARGUS_BUILD_KUDU)
     argus_add_unit_test(test_kudu_types unit/test_kudu_types.c)
-    argus_add_unit_test(test_kudu_sql_parser unit/test_kudu_sql_parser.c)
 endif()
 
 # Flight SQL Arrow->ODBC conversion (plain libarrow, no live endpoint needed)

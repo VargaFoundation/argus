@@ -241,6 +241,26 @@ All notable changes to the Argus ODBC Driver project.
   in a 32-character buffer came back as 15 characters. Chunks also no longer
   end on half a surrogate pair.
 
+### Fixed: the Kudu SQL parser, now built everywhere
+- **It is plain C with no dependency on the Kudu client**, but was compiled
+  only where `libkudu_client` happened to be installed — so the
+  hand-written parser most exposed to a user's own SQL, and its tests, ran
+  on almost no CI job. It builds and is tested on every platform now.
+- **`''` did not escape a quote.** `WHERE name = 'O''Brien'` ended the
+  literal at the second quote, so the predicate searched for `O` and matched
+  the wrong rows without a word. A backslash was treated as an escape, which
+  this dialect does not do, mangling `'C:\path'`. An unterminated literal
+  ran to the end of the statement; it is an error.
+- **An unknown character was silently skipped**, so `WHERE a = 1 #` parsed
+  as a perfectly good query with the stray character quietly gone. It is an
+  error naming what was not understood.
+- **Comments were tokenized as words.** `--` to end of line and `/* … */`
+  are skipped, an unterminated block comment is an error, and a comment
+  marker inside a literal stays part of the value.
+- **Column aliases were read as more columns**, so `SELECT a AS x FROM t`
+  asked the table for columns named `AS` and `x`. Both `AS x` and the bare
+  `a x` form are understood.
+
 ### Fixed: heap overflow in the Trino result-page scanner
 - **Each row is now parsed against its own end, not the end of the whole
   page.** The two overflows below were both the same shape: the row's single

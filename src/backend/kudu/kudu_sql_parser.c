@@ -68,6 +68,18 @@ static void token_add(tokenizer_t *t, token_type_t type, const char *text,
     t->count++;
 }
 
+/* Add a token whose text is already decoded; takes ownership of `text`. */
+static void token_add_owned(tokenizer_t *t, token_type_t type, char *text)
+{
+    if (t->count >= t->capacity) {
+        t->capacity = t->capacity ? t->capacity * 2 : 32;
+        t->tokens = realloc(t->tokens, (size_t)t->capacity * sizeof(token_t));
+    }
+    t->tokens[t->count].type = type;
+    t->tokens[t->count].text = text;
+    t->count++;
+}
+
 static void tokenizer_free(tokenizer_t *t)
 {
     for (int i = 0; i < t->count; i++)
@@ -76,26 +88,74 @@ static void tokenizer_free(tokenizer_t *t)
     memset(t, 0, sizeof(*t));
 }
 
-static int tokenize(const char *sql, tokenizer_t *t)
+static int tokenize(const char *sql, tokenizer_t *t,
+                    const char **error_msg)
 {
     memset(t, 0, sizeof(*t));
     const char *p = sql;
 
     while (*p) {
-        /* Skip whitespace */
-        while (*p && isspace((unsigned char)*p)) p++;
+        /* Skip whitespace and comments */
+        for (;;) {
+            while (*p && isspace((unsigned char)*p)) p++;
+            /* -- to end of line */
+            if (p[0] == '-' && p[1] == '-') {
+                p += 2;
+                while (*p && *p != '\n') p++;
+                continue;
+            }
+            /* Block comment; an unterminated one is an error, not the rest
+             * of the statement silently disappearing. */
+            if (p[0] == '/' && p[1] == '*') {
+                const char *close = strstr(p + 2, "*/");
+                if (!close) {
+                    if (error_msg) *error_msg = "unterminated block comment";
+                    return -1;
+                }
+                p = close + 2;
+                continue;
+            }
+            break;
+        }
         if (!*p) break;
 
-        /* Single-quoted string literal */
+        /*
+         * Single-quoted string literal. SQL escapes a quote by doubling it,
+         * so 'O''Brien' is one value; the tokenizer used to end the literal
+         * at the second quote, yielding "O" and then a stray token, and the
+         * predicate silently matched the wrong rows. A backslash is an
+         * ordinary character here, as it is in standard SQL -- treating it
+         * as an escape mangled 'C:\path'. An unterminated literal is an
+         * error rather than a value that runs to the end of the statement.
+         */
         if (*p == '\'') {
             p++;
             const char *start = p;
-            while (*p && *p != '\'') {
-                if (*p == '\\' && *(p + 1)) p++; /* skip escaped char */
-                p++;
+            size_t out_len = 0;
+            for (;;) {
+                if (!*p) {
+                    if (error_msg) *error_msg = "unterminated string literal";
+                    return -1;
+                }
+                if (*p == '\'') {
+                    if (p[1] == '\'') { p += 2; out_len++; continue; }
+                    break;
+                }
+                p++; out_len++;
             }
-            token_add(t, TOK_STRING, start, (int)(p - start));
-            if (*p == '\'') p++;
+            char *val = malloc(out_len + 1);
+            if (!val) {
+                if (error_msg) *error_msg = "out of memory";
+                return -1;
+            }
+            size_t o = 0;
+            for (const char *r = start; r < p; ) {
+                if (*r == '\'' && r[1] == '\'') { val[o++] = '\''; r += 2; continue; }
+                val[o++] = *r++;
+            }
+            val[o] = '\0';
+            token_add_owned(t, TOK_STRING, val);
+            p++;                                    /* past the closing quote */
             continue;
         }
 
@@ -136,8 +196,13 @@ static int tokenize(const char *sql, tokenizer_t *t)
             continue;
         }
 
-        /* Unknown character, skip */
-        p++;
+        /*
+         * Anything else is not this dialect. Skipping it silently turned
+         * "WHERE a # 1" into "WHERE a 1" and then into some other query
+         * altogether; the caller gets an error and the SQL it wrote back.
+         */
+        if (error_msg) *error_msg = "unexpected character in statement";
+        return -1;
     }
 
     token_add(t, TOK_END, "", 0);
@@ -289,8 +354,9 @@ int kudu_sql_parse(const char *sql, kudu_parsed_query_t *query,
     query->limit = -1;
 
     tokenizer_t t;
-    if (tokenize(sql, &t) != 0) {
-        if (error_msg) *error_msg = "tokenization failed";
+    if (tokenize(sql, &t, error_msg) != 0) {
+        if (error_msg && !*error_msg) *error_msg = "could not read the statement";
+        tokenizer_free(&t);
         return -1;
     }
 
@@ -350,6 +416,27 @@ int kudu_sql_parse(const char *sql, kudu_parsed_query_t *query,
                                          (size_t)cap * sizeof(char *));
             }
             query->columns[query->num_columns++] = strdup(col->text);
+
+            /*
+             * "col AS alias" and the bare "col alias" form. Kudu has no
+             * projection expressions, so the alias cannot change what is
+             * read -- but it used to be taken for another column, and the
+             * scanner then asked the table for a column named "AS".
+             * ODBC reports the column under its real name either way.
+             */
+            if (is_keyword(peek(&t), "AS")) {
+                advance(&t);
+                if (peek(&t)->type != TOK_WORD) {
+                    if (error_msg) *error_msg = "expected an alias after AS";
+                    kudu_parsed_query_free(query);
+                    tokenizer_free(&t);
+                    return -1;
+                }
+                advance(&t);
+            } else if (peek(&t)->type == TOK_WORD &&
+                       !is_keyword(peek(&t), "FROM")) {
+                advance(&t);            /* bare alias */
+            }
 
             if (peek(&t)->type == TOK_COMMA)
                 advance(&t);

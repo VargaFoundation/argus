@@ -249,6 +249,13 @@ if(ARGUS_BUILD_BIGQUERY)
     endif()
 endif()
 
+# The Kudu SQL parser is plain C with no dependency on the Kudu client, and
+# it is the hand-written parser most exposed to a user's own SQL. Building it
+# unconditionally means it -- and test_kudu_sql_parser -- are compiled and run
+# on every platform, not only where libkudu_client happens to be installed.
+list(APPEND ARGUS_SOURCES backend/kudu/kudu_sql_parser.c)
+list(APPEND ARGUS_PRIVATE_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/backend/kudu)
+
 # Conditionally add Kudu backend (requires libkudu_client C++ library)
 if(ARGUS_BUILD_KUDU)
     enable_language(CXX)
@@ -258,7 +265,6 @@ if(ARGUS_BUILD_KUDU)
     list(APPEND ARGUS_SOURCES
         backend/kudu/kudu_backend.c
         backend/kudu/kudu_types.c
-        backend/kudu/kudu_sql_parser.c
         backend/kudu/kudu_fetch.c
         backend/kudu/kudu_session.cpp
         backend/kudu/kudu_query.cpp
