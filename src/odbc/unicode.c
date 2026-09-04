@@ -43,11 +43,25 @@ static char *wchar_to_utf8(const SQLWCHAR *wstr, SQLSMALLINT len_chars)
 
 /* ── Helper: convert UTF-8 to SQLWCHAR* (UTF-16) ─────────────── */
 
-static SQLSMALLINT utf8_to_wchar(const SQLCHAR *utf8, SQLSMALLINT utf8_len,
-                                   SQLWCHAR *out, SQLSMALLINT out_buf_len)
+/*
+ * ODBC gives the W entry points two different units for their buffer
+ * lengths, and the driver used one for both. Where the buffer can only ever
+ * hold a string -- SQLDriverConnectW, SQLBrowseConnectW, SQLDescribeColW,
+ * SQLGetCursorNameW, SQLGetDescRecW, SQLGetDiagRecW, SQLNativeSqlW -- the
+ * length is a count of SQLWCHARs; where it may hold a string or a number --
+ * SQLGetInfoW, SQLColAttributeW, SQLGetConnectAttrW, SQLGetStmtAttrW,
+ * SQLGetDiagFieldW, SQLGetDescFieldW -- it is a byte count. Dividing by
+ * sizeof(SQLWCHAR) everywhere halved every buffer of the first kind, so a
+ * column name, a cursor name or a diagnostic message came back cut in two
+ * with SQL_SUCCESS_WITH_INFO and no way for the caller to get the rest.
+ *
+ * This takes a count of characters; utf8_to_wchar below takes bytes.
+ */
+static SQLSMALLINT utf8_to_wchar_n(const SQLCHAR *utf8, SQLSMALLINT utf8_len,
+                                   SQLWCHAR *out, SQLSMALLINT out_buf_chars)
 {
     if (!utf8) {
-        if (out && out_buf_len > 0) out[0] = 0;
+        if (out && out_buf_chars > 0) out[0] = 0;
         return 0;
     }
 
@@ -65,22 +79,34 @@ static SQLSMALLINT utf8_to_wchar(const SQLCHAR *utf8, SQLSMALLINT utf8_len,
 
     if (err) {
         g_error_free(err);
-        if (out && out_buf_len > 0) out[0] = 0;
+        if (out && out_buf_chars > 0) out[0] = 0;
         return 0;
     }
 
     SQLSMALLINT total_chars = (SQLSMALLINT)items_written;
 
-    if (out && out_buf_len > 0) {
-        SQLSMALLINT max_chars = (SQLSMALLINT)((size_t)out_buf_len / sizeof(SQLWCHAR)) - 1;
-        if (max_chars < 0) max_chars = 0;
+    if (out && out_buf_chars > 0) {
+        SQLSMALLINT max_chars = (SQLSMALLINT)(out_buf_chars - 1);
         SQLSMALLINT copy = total_chars < max_chars ? total_chars : max_chars;
+        /* Never split a surrogate pair across the end of the buffer: half of
+         * one is not a character. */
+        if (copy > 0 && utf16[copy - 1] >= 0xD800 && utf16[copy - 1] <= 0xDBFF)
+            copy--;
         memcpy(out, utf16, (size_t)copy * sizeof(SQLWCHAR));
         out[copy] = 0;
     }
 
     g_free(utf16);
     return total_chars;
+}
+
+/* The same, for the entry points whose buffer length ODBC gives in bytes. */
+static SQLSMALLINT utf8_to_wchar(const SQLCHAR *utf8, SQLSMALLINT utf8_len,
+                                 SQLWCHAR *out, SQLSMALLINT out_buf_bytes)
+{
+    return utf8_to_wchar_n(utf8, utf8_len, out,
+                           (SQLSMALLINT)((size_t)out_buf_bytes /
+                                         sizeof(SQLWCHAR)));
 }
 
 /* ── SQLDriverConnectW ───────────────────────────────────────── */
@@ -111,8 +137,8 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLDriverConnectW(
 
     /* Convert output to UTF-16 */
     if (OutConnectionString && BufferLength > 0) {
-        SQLSMALLINT wlen = utf8_to_wchar(out_buf, out_len,
-                                           OutConnectionString, BufferLength);
+        SQLSMALLINT wlen = utf8_to_wchar_n(out_buf, out_len,
+                                             OutConnectionString, BufferLength);
         if (StringLength2Ptr) *StringLength2Ptr = wlen;
     } else if (StringLength2Ptr) {
         /* Measure character count by converting without output buffer */
@@ -209,11 +235,10 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLGetDiagRecW(
 
     if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
         if (Sqlstate) {
-            utf8_to_wchar(state_buf, SQL_NTS,
-                           Sqlstate, 6 * (SQLSMALLINT)sizeof(SQLWCHAR));
+            utf8_to_wchar_n(state_buf, SQL_NTS, Sqlstate, 6);
         }
         if (MessageText && BufferLength > 0) {
-            SQLSMALLINT wlen = utf8_to_wchar(
+            SQLSMALLINT wlen = utf8_to_wchar_n(
                 msg_buf, msg_len,
                 MessageText, BufferLength);
             if (TextLength)
@@ -398,7 +423,7 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLGetDescRecW(
 
     if ((ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) &&
         Name && BufferLength > 0) {
-        SQLSMALLINT wlen = utf8_to_wchar(name_buf, name_len, Name, BufferLength);
+        SQLSMALLINT wlen = utf8_to_wchar_n(name_buf, name_len, Name, BufferLength);
         if (StringLengthPtr) *StringLengthPtr = wlen;
     } else if (StringLengthPtr) {
         *StringLengthPtr = name_len;
@@ -429,7 +454,7 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLDescribeColW(
 
     if ((ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) &&
         ColumnName && BufferLength > 0) {
-        SQLSMALLINT wlen = utf8_to_wchar(
+        SQLSMALLINT wlen = utf8_to_wchar_n(
             name_buf, name_len,
             ColumnName, BufferLength);
         if (NameLengthPtr) *NameLengthPtr = wlen;
@@ -627,7 +652,7 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLNativeSqlW(
 
     if ((ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) &&
         OutStatementText && BufferLength > 0) {
-        SQLSMALLINT wout = utf8_to_wchar(
+        SQLSMALLINT wout = utf8_to_wchar_n(
             out_buf, (SQLSMALLINT)out_len,
             OutStatementText, (SQLSMALLINT)BufferLength);
         if (TextLength2Ptr)
@@ -1049,11 +1074,10 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLErrorW(
 
     if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
         if (Sqlstate) {
-            utf8_to_wchar(state_buf, SQL_NTS,
-                           Sqlstate, 6 * (SQLSMALLINT)sizeof(SQLWCHAR));
+            utf8_to_wchar_n(state_buf, SQL_NTS, Sqlstate, 6);
         }
         if (MessageText && BufferLength > 0) {
-            SQLSMALLINT wlen = utf8_to_wchar(
+            SQLSMALLINT wlen = utf8_to_wchar_n(
                 msg_buf, msg_len,
                 MessageText, BufferLength);
             if (TextLength)
@@ -1082,8 +1106,8 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLGetCursorNameW(
     SQLRETURN ret = SQLGetCursorName(StatementHandle,
                                       name_buf, sizeof(name_buf), &name_len);
     if (ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO) {
-        SQLSMALLINT wlen = utf8_to_wchar(name_buf, name_len,
-                                          CursorName, BufferLength);
+        SQLSMALLINT wlen = utf8_to_wchar_n(name_buf, name_len,
+                                            CursorName, BufferLength);
         if (NameLengthPtr) *NameLengthPtr = wlen;
     }
     return ret;
@@ -1129,8 +1153,8 @@ ARGUS_EXPORT SQLRETURN SQL_API SQLBrowseConnectW(
     if ((ret == SQL_SUCCESS || ret == SQL_SUCCESS_WITH_INFO ||
          ret == SQL_NEED_DATA) &&
         OutConnectionString && BufferLength > 0) {
-        SQLSMALLINT wlen = utf8_to_wchar(out_buf, out_len,
-                                          OutConnectionString, BufferLength);
+        SQLSMALLINT wlen = utf8_to_wchar_n(out_buf, out_len,
+                                            OutConnectionString, BufferLength);
         if (StringLength2Ptr) *StringLength2Ptr = wlen;
     } else if (StringLength2Ptr) {
         *StringLength2Ptr = 0;

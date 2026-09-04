@@ -182,12 +182,81 @@ static void test_stmt_metadata_w(void **state)
     free_fake_stmt(stmt);
 }
 
+
+/*
+ * ODBC gives SQLDescribeColW, SQLGetCursorNameW and the other string-only W
+ * entry points their buffer length in characters; the driver divided it by
+ * sizeof(SQLWCHAR) as if it were bytes, so every one of those buffers was
+ * half the size the application had provided and long names came back cut in
+ * two. A name of exactly n-1 characters must fit a buffer of n.
+ */
+static void test_w_buffer_lengths_are_characters(void **state)
+{
+    (void)state;
+    argus_stmt_t *stmt = make_fake_stmt();
+    const char *long_name = "a_column_name_of_thirty_one_chr";   /* 31 */
+    assert_int_equal((int)strlen(long_name), 31);
+    strncpy((char *)stmt->columns[0].name, long_name, ARGUS_MAX_COLUMN_NAME);
+    stmt->columns[0].name_len = 31;
+
+    SQLWCHAR name[32];
+    SQLSMALLINT nlen = 0, dtype = 0, digits = 0, nullable = 0;
+    SQLULEN size = 0;
+    memset(name, 0xAA, sizeof(name));
+    assert_int_equal(SQLDescribeColW(stmt, 1, name, 32, &nlen, &dtype, &size,
+                                     &digits, &nullable),
+                     SQL_SUCCESS);
+    assert_string_equal(narrow(name), long_name);
+    assert_int_equal(nlen, 31);
+
+    /* Same for the cursor name. */
+    stmt->executed = false;
+    SQLWCHAR cname[32], got[32];
+    SQLSMALLINT glen = 0;
+    assert_true(SQL_SUCCEEDED(SQLSetCursorNameW(stmt,
+                                                w(long_name, cname, 32),
+                                                SQL_NTS)));
+    assert_true(SQL_SUCCEEDED(SQLGetCursorNameW(stmt, got, 32, &glen)));
+    assert_string_equal(narrow(got), long_name);
+    assert_int_equal(glen, 31);
+    stmt->executed = true;
+
+    free_fake_stmt(stmt);
+}
+
+/*
+ * The buffers that may hold a number instead of a string keep their byte
+ * count: SQLColAttributeW and SQLGetStmtAttrW must not start reading their
+ * length as characters.
+ */
+static void test_w_attribute_lengths_stay_bytes(void **state)
+{
+    (void)state;
+    argus_stmt_t *stmt = make_fake_stmt();
+    const char *long_name = "a_column_name_of_thirty_one_chr";
+    strncpy((char *)stmt->columns[0].name, long_name, ARGUS_MAX_COLUMN_NAME);
+    stmt->columns[0].name_len = 31;
+
+    /* 64 bytes is 32 characters: exactly enough for 31 plus the NUL. */
+    SQLWCHAR attr[32];
+    SQLSMALLINT alen = 0;
+    SQLLEN num = 0;
+    assert_true(SQL_SUCCEEDED(SQLColAttributeW(stmt, 1, SQL_DESC_NAME, attr,
+                                               (SQLSMALLINT)sizeof(attr),
+                                               &alen, &num)));
+    assert_string_equal(narrow(attr), long_name);
+
+    free_fake_stmt(stmt);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_env_attr_w),
         cmocka_unit_test(test_connect_attr_info_and_diag_w),
         cmocka_unit_test(test_stmt_metadata_w),
+        cmocka_unit_test(test_w_buffer_lengths_are_characters),
+        cmocka_unit_test(test_w_attribute_lengths_stay_bytes),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

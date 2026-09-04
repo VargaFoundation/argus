@@ -194,6 +194,16 @@ All notable changes to the Argus ODBC Driver project.
   that file** — bound parameter values included, which is exactly where a
   password or a token is. A prepared statement's own text, markers still in
   place, is logged instead.
+- **The Unicode entry points halved every string buffer.** ODBC gives the W
+  functions two units: a count of characters where the buffer can only hold a
+  string (`SQLDescribeColW`, `SQLGetCursorNameW`, `SQLDriverConnectW`,
+  `SQLBrowseConnectW`, `SQLNativeSqlW`, `SQLGetDiagRecW`, `SQLGetDescRecW`),
+  and a count of bytes where it may hold a number (`SQLGetInfoW`,
+  `SQLColAttributeW`, `SQLGetConnectAttrW`, `SQLGetStmtAttrW`,
+  `SQLGetDiagFieldW`, `SQLGetDescFieldW`). The driver divided by
+  `sizeof(SQLWCHAR)` in both cases, so a 31-character column name asked for
+  in a 32-character buffer came back as 15 characters. Chunks also no longer
+  end on half a surrogate pair.
 
 ## [0.6.1] — 2026-09-03
 
