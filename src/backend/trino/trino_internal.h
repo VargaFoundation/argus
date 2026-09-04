@@ -44,6 +44,7 @@ typedef struct trino_conn {
     char               *session_role;   /* X-Trino-Role */
     char               *txn_id;         /* X-Trino-Transaction-Id */
     bool                headers_dirty;
+    long                retry_after_sec;  /* last Retry-After seen, 0 if none */
 
     /* OAuth2 client-credentials (M2M) params, retained so the access token can
      * be transparently re-fetched when the server returns 401 (token expiry). */

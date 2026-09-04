@@ -169,6 +169,16 @@ size_t trino_curl_header_cb(char *buffer, size_t size, size_t nitems,
     char scratch[8192];
     char *v = NULL;
 
+    /* Not a session header, but the one other thing worth reading off a
+     * response: how long the server wants us to wait before asking again. */
+    if (trino_hdr_is(line, "Retry-After", &v, scratch, sizeof(scratch))) {
+        char *end = NULL;
+        long secs = strtol(v, &end, 10);
+        /* Only the delta-seconds form; the HTTP-date form would need a clock
+         * both ends agree on, and the backoff below is a fine substitute. */
+        conn->retry_after_sec = (end && *end == '\0' && secs > 0) ? secs : 0;
+        return total;
+    }
     if (trino_hdr_is(line, "X-Trino-Set-Catalog", &v, scratch, sizeof(scratch))) {
         if (*v) { free(conn->catalog); conn->catalog = strdup(v);
                   conn->headers_dirty = true; }
@@ -347,12 +357,14 @@ int trino_http_get(trino_conn_t *conn, const char *url,
      * to fail the whole fetch — the client protocol expects the poll to be
      * retried. Five attempts with a doubling delay, ~1.5s in total.
      */
-    for (int attempt = 0; attempt < 4 && same_origin &&
-                          (rc == 429 || rc == 502 || rc == 503 || rc == 504);
-         attempt++) {
-        ARGUS_LOG_WARN("Trino: %s answered %d; retrying in %d ms",
-                       url, rc, 100 << attempt);
-        sleep_millis(100 << attempt);
+    for (int attempt = 0; attempt < 4 && same_origin; attempt++) {
+        unsigned wait = argus_http_retry_delay_ms(rc, attempt,
+                                                  conn->retry_after_sec);
+        if (!wait) break;
+        ARGUS_LOG_WARN("Trino: %s answered %d; retrying in %u ms", url, rc,
+                       wait);
+        sleep_millis(wait);
+        conn->retry_after_sec = 0;
         free(resp->data);
         resp->data = NULL;
         resp->size = 0;

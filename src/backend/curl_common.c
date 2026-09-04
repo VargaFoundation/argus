@@ -36,6 +36,30 @@ void argus_http_buf_free(argus_http_buf_t *buf)
     buf->truncated = false;
 }
 
+/* The ceiling on one wait a server can ask for. The backoff has its own,
+ * lower ceiling: it stops doubling at the eighth attempt (25.6 s). */
+#define ARGUS_HTTP_RETRY_MAX_MS 30000u
+
+unsigned argus_http_retry_delay_ms(long http_code, int attempt,
+                                   long retry_after_sec)
+{
+    if (http_code != 429 && http_code != 502 &&
+        http_code != 503 && http_code != 504)
+        return 0;
+
+    if (retry_after_sec > 0) {
+        unsigned ms = retry_after_sec > (long)(ARGUS_HTTP_RETRY_MAX_MS / 1000)
+                      ? ARGUS_HTTP_RETRY_MAX_MS
+                      : (unsigned)retry_after_sec * 1000u;
+        return ms;
+    }
+
+    if (attempt < 0) attempt = 0;
+    if (attempt > 8) attempt = 8;          /* 100 ms << 8 = 25.6 s */
+    unsigned ms = 100u << attempt;
+    return ms > ARGUS_HTTP_RETRY_MAX_MS ? ARGUS_HTTP_RETRY_MAX_MS : ms;
+}
+
 void argus_curl_apply_timeouts(CURL *curl, long connect_sec, long total_sec)
 {
     if (!curl) return;

@@ -241,6 +241,18 @@ All notable changes to the Argus ODBC Driver project.
   in a 32-character buffer came back as 15 characters. Chunks also no longer
   end on half a surrogate pair.
 
+### Retries
+- **The retry policy is one shared function** rather than a constant inlined
+  in one client, and it reads the server's `Retry-After` instead of ignoring
+  it — a coordinator that says "come back in two seconds" was being asked
+  again after 100 ms. A hostile or mistaken value is clamped, so it cannot
+  park the calling thread.
+- It stays a policy rather than a loop on purpose: only a request that can
+  safely be repeated may use it. Polling a result page is one; submitting a
+  statement is not, because a POST that appeared to fail may still have run
+  it. Pinot, Druid, Phoenix and BigQuery submit their queries by POST and so
+  keep no retry.
+
 ### Supply chain
 - **Every GitHub Action was pinned to a floating tag** (`@v4`), so the
   pipeline that builds, signs and publishes the packages could change under

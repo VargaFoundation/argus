@@ -112,6 +112,45 @@ static void test_response_body_is_assembled(void **state)
     argus_http_buf_free(&buf);
 }
 
+
+/*
+ * Which statuses are worth asking again about, and how long to wait. A
+ * policy rather than a loop: only a request that can be repeated safely may
+ * use it, which is why it lives here and not inside a client.
+ */
+static void test_retry_policy(void **state)
+{
+    (void)state;
+
+    /* Not transient: no retry, whatever the attempt. */
+    assert_int_equal(argus_http_retry_delay_ms(200, 0, 0), 0);
+    assert_int_equal(argus_http_retry_delay_ms(400, 0, 0), 0);
+    assert_int_equal(argus_http_retry_delay_ms(401, 3, 0), 0);
+    assert_int_equal(argus_http_retry_delay_ms(404, 0, 0), 0);
+    assert_int_equal(argus_http_retry_delay_ms(500, 0, 0), 0);
+
+    /* Transient: a doubling backoff from 100 ms. */
+    assert_int_equal(argus_http_retry_delay_ms(429, 0, 0), 100);
+    assert_int_equal(argus_http_retry_delay_ms(502, 1, 0), 200);
+    assert_int_equal(argus_http_retry_delay_ms(503, 2, 0), 400);
+    assert_int_equal(argus_http_retry_delay_ms(504, 3, 0), 800);
+
+    /* The server's own Retry-After wins over the backoff. */
+    assert_int_equal(argus_http_retry_delay_ms(503, 0, 2), 2000);
+    assert_int_equal(argus_http_retry_delay_ms(429, 5, 1), 1000);
+
+    /* ...but cannot park the calling thread: a hostile or mistaken
+     * Retry-After is clamped to 30 s. */
+    assert_int_equal(argus_http_retry_delay_ms(503, 0, 86400), 30000);
+    /* The backoff has its own ceiling, reached at the eighth attempt. */
+    assert_int_equal(argus_http_retry_delay_ms(503, 8, 0), 25600);
+    assert_int_equal(argus_http_retry_delay_ms(503, 99, 0), 25600);
+
+    /* A negative or zero Retry-After is treated as absent. */
+    assert_int_equal(argus_http_retry_delay_ms(503, 0, 0), 100);
+    assert_int_equal(argus_http_retry_delay_ms(503, 0, -5), 100);
+}
+
 int main(void)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -121,6 +160,7 @@ int main(void)
         cmocka_unit_test(test_baseline_refuses_non_http_schemes),
         cmocka_unit_test(test_response_body_has_a_ceiling),
         cmocka_unit_test(test_response_body_is_assembled),
+        cmocka_unit_test(test_retry_policy),
     };
     int rc = cmocka_run_group_tests(tests, NULL, NULL);
     curl_global_cleanup();

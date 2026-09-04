@@ -63,6 +63,24 @@ void argus_curl_apply_baseline(CURL *curl);
 void argus_curl_apply_timeouts(CURL *curl, long connect_sec, long total_sec);
 
 /*
+ * How long to wait before retrying a request that came back with
+ * `http_code`, in milliseconds, for a zero-based `attempt`; 0 means the
+ * status is not one to retry.
+ *
+ * Retryable is 429 (rate limited) and 502/503/504 -- what a coordinator
+ * behind a load balancer answers while it restarts or sheds load. The delay
+ * doubles from 100 ms, and a Retry-After the server sent (in seconds, 0 if
+ * absent or unparsed) wins over it, clamped so a hostile or mistaken value
+ * cannot park the calling thread for an hour.
+ *
+ * This is a policy, not a loop: only a request that can be repeated safely
+ * may use it. Polling a result page is; submitting a statement is not,
+ * because a POST that timed out may still have run.
+ */
+unsigned argus_http_retry_delay_ms(long http_code, int attempt,
+                                   long retry_after_sec);
+
+/*
  * True when `url` and `origin` share scheme, host and port (default ports
  * normalised, host compared case-insensitively). Credentials obtained for
  * `origin` are only ever sent to URLs that satisfy this.
