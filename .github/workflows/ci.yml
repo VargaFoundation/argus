@@ -554,10 +554,14 @@ jobs:
             build-essential cmake pkg-config unixodbc-dev \
             libglib2.0-dev libcmocka-dev libcurl4-openssl-dev \
             libjson-glib-dev ca-certificates lsb-release wget
-          # Apache's own repository; the package is not in Ubuntu's.
-          wget -q "https://repo1.maven.org/maven2/org/apache/arrow/arrow-apt-source/1.0.1/arrow-apt-source-1.0.1-$(lsb_release --codename --short).deb" \
-            -O /tmp/arrow-apt-source.deb
-          sudo apt-get -o Acquire::Retries=5 install -y /tmp/arrow-apt-source.deb
+          # Apache's own apt repository; libarrow-flight-sql-dev is in no
+          # Ubuntu release. The apt-source package registers it and pins its
+          # signing key.
+          wget -q --tries=3 \
+            "https://packages.apache.org/artifactory/arrow/ubuntu/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb" \
+            -O /tmp/apache-arrow-apt-source.deb
+          sudo apt-get -o Acquire::Retries=5 install -y \
+            /tmp/apache-arrow-apt-source.deb
           for i in 1 2 3; do sudo apt-get update && break || sleep 5; done
           sudo apt-get -o Acquire::Retries=5 install -y \
             libarrow-dev libarrow-flight-dev libarrow-flight-sql-dev
