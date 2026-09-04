@@ -6,7 +6,20 @@
  * WEAK no-op in obs_hooks.c, so the open, Apache-2.0 driver links and runs with
  * zero behaviour change on its own. A build that links an object providing
  * STRONG definitions of the same symbols overrides the no-ops and the taps light
- * up. Signatures are primitives only, so the open driver never depends on any
+ * up.
+ *
+ * A provider must define EVERY tap below, not only the ones it cares about.
+ * The no-ops all live in one obs_hooks.c, so they reach a link as one object;
+ * an archive member is extracted whole or not at all, and a reference to any
+ * tap a provider left undefined pulls in the no-op of every other tap with
+ * it -- including the ones the provider did define. On ELF the no-op is weak
+ * and loses quietly; on PE/COFF it is strong (a weak definition cannot be
+ * linked there at all) and the link fails on a duplicate definition.
+ * Defining all of them leaves the member nothing to contribute, so it is
+ * never extracted. A build that compiles the driver from source can instead
+ * define ARGUS_OBS_HOOKS_EXTERNAL, which empties obs_hooks.c entirely.
+ *
+ * Signatures are primitives only, so the open driver never depends on any
  * external type.
  *
  * Conventions:
