@@ -4,6 +4,7 @@
 #include <curl/curl.h>
 #include <json-glib/json-glib.h>
 
+#include "../curl_common.h"
 #include "argus/types.h"
 #include "argus/backend.h"
 
@@ -63,14 +64,10 @@ void phoenix_operation_free(phoenix_operation_t *op);
 int phoenix_create_statement(phoenix_conn_t *conn, int *out_stmt_id);
 
 /* CURL response buffer */
-typedef struct phoenix_response {
-    char   *data;
-    size_t  size;
-} phoenix_response_t;
+/* The shared bounded response body (curl_common.h). */
+typedef argus_http_buf_t phoenix_response_t;
 
 /* CURL write callback */
-size_t phoenix_curl_write_cb(void *contents, size_t size, size_t nmemb,
-                              void *userp);
 
 /* HTTP request helpers */
 int phoenix_http_post(phoenix_conn_t *conn, const char *url,

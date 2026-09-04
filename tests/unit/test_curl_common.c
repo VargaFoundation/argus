@@ -66,6 +66,52 @@ static void test_baseline_refuses_non_http_schemes(void **state)
     curl_easy_cleanup(c);
 }
 
+
+/*
+ * Every HTTP backend used to accumulate a response body with an unbounded
+ * realloc, so a server that never stopped sending grew the host
+ * application's heap until it died. The shared buffer has a ceiling, and
+ * hitting it aborts the transfer rather than handing back a short body that
+ * would read as a complete one.
+ */
+static void test_response_body_has_a_ceiling(void **state)
+{
+    (void)state;
+    char chunk[64];
+    memset(chunk, 'x', sizeof(chunk));
+
+    argus_http_buf_t buf = {0};
+    buf.limit = 100;
+
+    /* Under the ceiling: accepted, and the body stays NUL-terminated. */
+    assert_int_equal(argus_http_write_cb(chunk, 1, 64, &buf), 64);
+    assert_int_equal((int)buf.size, 64);
+    assert_int_equal(buf.data[64], '\0');
+    assert_false(buf.truncated);
+
+    /* Over it: a short write, which is how curl is told to give up. */
+    assert_int_equal(argus_http_write_cb(chunk, 1, 64, &buf), 0);
+    assert_true(buf.truncated);
+    assert_int_equal((int)buf.size, 64);   /* nothing was appended */
+
+    argus_http_buf_free(&buf);
+    assert_null(buf.data);
+    assert_int_equal((int)buf.size, 0);
+}
+
+/* A body that fits is assembled across as many writes as curl makes. */
+static void test_response_body_is_assembled(void **state)
+{
+    (void)state;
+    argus_http_buf_t buf = {0};
+    assert_int_equal(argus_http_write_cb("he", 1, 2, &buf), 2);
+    assert_int_equal(argus_http_write_cb("llo", 1, 3, &buf), 3);
+    assert_string_equal(buf.data, "hello");
+    assert_int_equal((int)buf.size, 5);
+    assert_false(buf.truncated);
+    argus_http_buf_free(&buf);
+}
+
 int main(void)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -73,6 +119,8 @@ int main(void)
         cmocka_unit_test(test_same_origin_matches_scheme_host_port),
         cmocka_unit_test(test_same_origin_rejects_other_hosts),
         cmocka_unit_test(test_baseline_refuses_non_http_schemes),
+        cmocka_unit_test(test_response_body_has_a_ceiling),
+        cmocka_unit_test(test_response_body_is_assembled),
     };
     int rc = cmocka_run_group_tests(tests, NULL, NULL);
     curl_global_cleanup();

@@ -28,18 +28,6 @@ void bq_apply_tls(bq_conn_t *conn, CURL *curl)
         curl_easy_setopt(curl, CURLOPT_SSLKEY, conn->ssl_key_file);
 }
 
-size_t argus_bq_write_cb(void *contents, size_t size, size_t nmemb, void *userp)
-{
-    size_t total = size * nmemb;
-    bq_response_t *resp = (bq_response_t *)userp;
-    char *p = realloc(resp->data, resp->size + total + 1);
-    if (!p) return 0;
-    resp->data = p;
-    memcpy(resp->data + resp->size, contents, total);
-    resp->size += total;
-    resp->data[resp->size] = '\0';
-    return total;
-}
 
 int bq_http(bq_conn_t *conn, const char *url, const char *post_body,
             bq_response_t *resp, long *http_code)
@@ -52,16 +40,14 @@ int bq_http(bq_conn_t *conn, const char *url, const char *post_body,
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->headers);
     bq_apply_tls(conn, curl);
-    if (conn->connect_timeout_sec > 0)
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
-                         (long)conn->connect_timeout_sec);
+    argus_curl_apply_timeouts(curl, (long)conn->connect_timeout_sec, 0);
     if (post_body) {
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_body);
     } else {
         curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     }
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, argus_bq_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, argus_http_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
     resp->data = NULL;
     resp->size = 0;

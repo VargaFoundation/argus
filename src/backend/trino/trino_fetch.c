@@ -386,7 +386,7 @@ fail:
 }
 
 /* Locate the value bounds of a named member in the top-level object. Returns 0
- * (found, *vs/*ve set), 1 (absent), or -1 (malformed). */
+ * (found, with vs and ve set), 1 (absent), or -1 (malformed). */
 static int sj_find_member(const char *text, size_t len, const char *key,
                           const char **vs, const char **ve)
 {

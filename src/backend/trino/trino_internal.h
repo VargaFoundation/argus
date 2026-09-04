@@ -4,6 +4,7 @@
 #include <curl/curl.h>
 #include <json-glib/json-glib.h>
 
+#include "../curl_common.h"
 #include "argus/types.h"
 #include "argus/backend.h"
 
@@ -117,13 +118,10 @@ void trino_operation_free(trino_operation_t *op);
 void trino_capture_error(trino_conn_t *conn, JsonObject *obj);
 
 /* CURL response buffer */
-typedef struct trino_response {
-    char   *data;
-    size_t  size;
-} trino_response_t;
+/* The shared bounded response body (curl_common.h). */
+typedef argus_http_buf_t trino_response_t;
 
 /* CURL write callback */
-size_t trino_curl_write_cb(void *contents, size_t size, size_t nmemb, void *userp);
 
 /* HTTP request helpers */
 int trino_http_post(trino_conn_t *conn, const char *url, const char *body,

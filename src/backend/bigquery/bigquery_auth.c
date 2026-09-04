@@ -140,8 +140,7 @@ static int bq_fetch_token(bq_conn_t *conn)
     if (conn->connect_timeout_sec > 0)
         curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT,
                          (long)conn->connect_timeout_sec);
-    extern size_t argus_bq_write_cb(void *, size_t, size_t, void *);
-    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, argus_bq_write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, argus_http_write_cb);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &resp);
 
     CURLcode cc = curl_easy_perform(c);

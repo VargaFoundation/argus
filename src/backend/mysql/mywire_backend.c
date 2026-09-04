@@ -42,6 +42,18 @@ static int mywire_connect(argus_dbc_t *dbc,
         mysql_options(conn->mysql, MYSQL_OPT_CONNECT_TIMEOUT, &t);
     }
 
+    /*
+     * Without these, a server that accepts the connection and then stops
+     * answering hangs the calling thread forever: MYSQL_OPT_CONNECT_TIMEOUT
+     * only covers the handshake. SOCKETTIMEOUT (and SQL_ATTR_CONNECTION_TIMEOUT
+     * through it) is what an application asks with.
+     */
+    if (dbc && dbc->socket_timeout_sec > 0) {
+        unsigned int t = (unsigned int)dbc->socket_timeout_sec;
+        mysql_options(conn->mysql, MYSQL_OPT_READ_TIMEOUT, &t);
+        mysql_options(conn->mysql, MYSQL_OPT_WRITE_TIMEOUT, &t);
+    }
+
     /* SSL/TLS, driven by the same DBC attributes as the other backends.
      * SSL=0 must be honoured explicitly. libmariadb >= 3.4 negotiates TLS
      * whenever the server offers it, so without MYSQL_OPT_SSL_ENFORCE=0 a

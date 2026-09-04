@@ -34,35 +34,11 @@ static void phoenix_apply_curl_settings(phoenix_conn_t *conn, CURL *curl)
         }
     }
 
-    /* Timeout settings */
-    if (conn->connect_timeout_sec > 0) {
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
-                         (long)conn->connect_timeout_sec);
-    }
-    if (conn->query_timeout_sec > 0) {
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT,
-                         (long)conn->query_timeout_sec);
-    }
+    /* Timeouts, plus the shared low-speed abort. */
+    argus_curl_apply_timeouts(curl, (long)conn->connect_timeout_sec,
+                              (long)conn->query_timeout_sec);
 }
 
-/* ── CURL write callback ─────────────────────────────────────── */
-
-size_t phoenix_curl_write_cb(void *contents, size_t size, size_t nmemb,
-                              void *userp)
-{
-    size_t total = size * nmemb;
-    phoenix_response_t *resp = (phoenix_response_t *)userp;
-
-    char *ptr = realloc(resp->data, resp->size + total + 1);
-    if (!ptr) return 0;
-
-    resp->data = ptr;
-    memcpy(resp->data + resp->size, contents, total);
-    resp->size += total;
-    resp->data[resp->size] = '\0';
-
-    return total;
-}
 
 /* ── HTTP helper: POST ───────────────────────────────────────── */
 
@@ -77,7 +53,7 @@ int phoenix_http_post(phoenix_conn_t *conn, const char *url,
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, phoenix_curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, argus_http_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
 
     resp->data = NULL;

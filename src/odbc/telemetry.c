@@ -387,6 +387,23 @@ static void enqueue(char *event_json)
 
 /* ── Public lifecycle ────────────────────────────────────────────────── */
 
+/*
+ * https, or a loopback host. Nothing else: an http:// endpoint on a real
+ * network would put the event payload in clear on the wire.
+ */
+static bool endpoint_is_secure(const char *url)
+{
+    if (g_ascii_strncasecmp(url, "https://", 8) == 0) return true;
+    if (g_ascii_strncasecmp(url, "http://", 7) != 0)  return false;
+
+    const char *host = url + 7;
+    size_t n = strcspn(host, ":/?#");
+    return (n == 9 && g_ascii_strncasecmp(host, "localhost", 9) == 0) ||
+           (n == 3 && strncmp(host, "::1", 3) == 0) ||
+           (n == 5 && strncmp(host, "[::1]", 5) == 0) ||
+           (n >= 8 && strncmp(host, "127.", 4) == 0);
+}
+
 void argus_telemetry_init(void)
 {
     const char *env = getenv("ARGUS_TELEMETRY");
@@ -402,6 +419,19 @@ void argus_telemetry_init(void)
     const char *ep = getenv("ARGUS_TELEMETRY_ENDPOINT");
     if (!ep || !*ep)
         ep = ARGUS_TELEMETRY_ENDPOINT;
+    /*
+     * PRIVACY.md promises the events travel over TLS, and the environment
+     * override could point them at a plain http:// collector, putting the
+     * payload on the wire in clear. Anything but https is refused and
+     * telemetry stays off rather than downgrading silently -- except on
+     * loopback, where a local collector or a sidecar never puts the payload
+     * on a network at all.
+     */
+    if (ep && *ep && !endpoint_is_secure(ep)) {
+        ARGUS_LOG_WARN("Telemetry endpoint %s is neither https nor loopback; "
+                       "telemetry stays off", ep);
+        ep = "";
+    }
     g_endpoint = g_strdup(ep ? ep : "");
 
     snprintf(g_driver_version, sizeof(g_driver_version), "%d.%d.%d",

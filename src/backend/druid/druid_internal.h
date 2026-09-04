@@ -4,6 +4,7 @@
 #include <curl/curl.h>
 #include <json-glib/json-glib.h>
 
+#include "../curl_common.h"
 #include "argus/types.h"
 #include "argus/backend.h"
 
@@ -39,11 +40,8 @@ typedef struct druid_op {
     bool                 delivered;
 } druid_op_t;
 
-typedef struct druid_response {
-    char   *data;
-    size_t  size;
-    long    http_code;
-} druid_response_t;
+/* The shared bounded response body (curl_common.h). */
+typedef argus_http_buf_t druid_response_t;
 
 /* druid_types.c */
 SQLSMALLINT druid_type_to_sql_type(const char *druid_sql_type);

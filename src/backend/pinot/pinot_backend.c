@@ -9,20 +9,6 @@
 #include <string.h>
 #include <stdio.h>
 
-/* ── CURL helpers ────────────────────────────────────────────── */
-
-static size_t write_cb(void *contents, size_t size, size_t nmemb, void *userp)
-{
-    size_t total = size * nmemb;
-    pinot_response_t *resp = (pinot_response_t *)userp;
-    char *p = realloc(resp->data, resp->size + total + 1);
-    if (!p) return 0;
-    resp->data = p;
-    memcpy(resp->data + resp->size, contents, total);
-    resp->size += total;
-    resp->data[resp->size] = '\0';
-    return total;
-}
 
 static void apply_curl(pinot_conn_t *conn, CURL *curl)
 {
@@ -30,9 +16,7 @@ static void apply_curl(pinot_conn_t *conn, CURL *curl)
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);
     }
-    if (conn->connect_timeout_sec > 0)
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
-                         (long)conn->connect_timeout_sec);
+    argus_curl_apply_timeouts(curl, (long)conn->connect_timeout_sec, 0);
     if (conn->user && *conn->user) {
         char up[512];
         snprintf(up, sizeof(up), "%s:%s", conn->user,
@@ -57,7 +41,7 @@ static int http(pinot_conn_t *conn, const char *url, const char *post_body,
     } else {
         curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     }
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, argus_http_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
     resp->data = NULL;
     resp->size = 0;

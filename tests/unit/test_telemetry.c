@@ -196,6 +196,50 @@ static void test_stop_is_bounded_and_sender_restarts(void **state)
 #endif
 }
 
+
+/*
+ * PRIVACY.md promises the events go over TLS. A plain http:// collector on
+ * a real network would put the payload in clear, so it turns telemetry off
+ * instead; loopback is allowed, because nothing leaves the machine.
+ */
+static void test_endpoint_must_be_https_or_loopback(void **state)
+{
+    (void)state;
+    argus_dbc_t dbc;
+    make_dbc(&dbc, true);
+
+    g_setenv("ARGUS_TELEMETRY_ENDPOINT", "http://collector.example.com/v1",
+             TRUE);
+    reinit("1");
+    assert_false(argus_telemetry_active(&dbc));
+    argus_telemetry_shutdown();
+
+    g_setenv("ARGUS_TELEMETRY_ENDPOINT", "https://collector.example.com/v1",
+             TRUE);
+    reinit("1");
+    assert_true(argus_telemetry_active(&dbc));
+    argus_telemetry_shutdown();
+
+    g_setenv("ARGUS_TELEMETRY_ENDPOINT", "http://127.0.0.1:9999/v1", TRUE);
+    reinit("1");
+    assert_true(argus_telemetry_active(&dbc));
+    argus_telemetry_shutdown();
+
+    g_setenv("ARGUS_TELEMETRY_ENDPOINT", "http://localhost:9999/v1", TRUE);
+    reinit("1");
+    assert_true(argus_telemetry_active(&dbc));
+    argus_telemetry_shutdown();
+
+    /* A host that merely starts with the loopback name is not loopback. */
+    g_setenv("ARGUS_TELEMETRY_ENDPOINT", "http://localhost.evil.example/v1",
+             TRUE);
+    reinit("1");
+    assert_false(argus_telemetry_active(&dbc));
+    argus_telemetry_shutdown();
+
+    g_unsetenv("ARGUS_TELEMETRY_ENDPOINT");
+}
+
 int main(void)
 {
     /* Keep the install-id file out of the real home directory. Same reason as
@@ -213,6 +257,7 @@ int main(void)
         cmocka_unit_test(test_null_dbc_off),
         cmocka_unit_test(test_stop_idle_is_clean),
         cmocka_unit_test(test_stop_is_bounded_and_sender_restarts),
+        cmocka_unit_test(test_endpoint_must_be_https_or_loopback),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

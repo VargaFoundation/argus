@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <time.h>
 
+#include "../curl_common.h"
 #include "argus/types.h"
 #include "argus/backend.h"
 
@@ -75,10 +76,8 @@ typedef struct bq_op {
     char                *page_token;  /* next page, NULL when done */
 } bq_op_t;
 
-typedef struct bq_response {
-    char   *data;
-    size_t  size;
-} bq_response_t;
+/* The shared bounded response body (curl_common.h). */
+typedef argus_http_buf_t bq_response_t;
 
 /* bigquery_backend.c */
 int bq_http(bq_conn_t *conn, const char *url, const char *post_body,

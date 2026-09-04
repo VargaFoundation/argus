@@ -154,6 +154,19 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
     /* Retry logic: up to (1 + retry_count) rounds; within a round, fail over
      * across every host (a tap may reorder; the driver guarantees each host
      * is tried at most once per round). */
+    /*
+     * SQL_ATTR_LOGIN_TIMEOUT and SQL_ATTR_CONNECTION_TIMEOUT were stored,
+     * read back, and never used: only the proprietary CONNECTTIMEOUT and
+     * SOCKETTIMEOUT keywords reached a backend, so an application that set
+     * the standard attributes -- which is what a driver manager and every BI
+     * tool do -- got no timeout at all. They feed the same two settings now,
+     * and the connection string still wins when it names one explicitly.
+     */
+    if (dbc->login_timeout > 0 && dbc->connect_timeout_sec == 0)
+        dbc->connect_timeout_sec = (int)dbc->login_timeout;
+    if (dbc->connection_timeout > 0 && dbc->socket_timeout_sec == 0)
+        dbc->socket_timeout_sec = (int)dbc->connection_timeout;
+
     int max_attempts = 1 + (dbc->retry_count > 0 ? dbc->retry_count : 0);
     int rc = -1;
     bool connect_warned = false;

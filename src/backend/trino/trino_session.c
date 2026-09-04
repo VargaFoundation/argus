@@ -83,13 +83,10 @@ static void trino_apply_curl_settings(trino_conn_t *conn, CURL *curl,
         }
     }
 
-    /* Timeout settings */
-    if (conn->connect_timeout_sec > 0) {
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, (long)conn->connect_timeout_sec);
-    }
-    if (conn->query_timeout_sec > 0) {
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)conn->query_timeout_sec);
-    }
+    /* Timeouts, plus the shared low-speed abort: a connection that stays
+     * open and delivers nothing is not a slow query. */
+    argus_curl_apply_timeouts(curl, (long)conn->connect_timeout_sec,
+                              (long)conn->query_timeout_sec);
 
     /* Authentication. Bearer (JWT/OAuth2) is applied as a default header at
      * connect time; Basic and Negotiate are set on the easy handle here because
@@ -117,24 +114,6 @@ static void trino_apply_curl_settings(trino_conn_t *conn, CURL *curl,
     }
 }
 
-/* ── CURL write callback ─────────────────────────────────────── */
-
-size_t trino_curl_write_cb(void *contents, size_t size, size_t nmemb,
-                           void *userp)
-{
-    size_t total = size * nmemb;
-    trino_response_t *resp = (trino_response_t *)userp;
-
-    char *ptr = realloc(resp->data, resp->size + total + 1);
-    if (!ptr) return 0;
-
-    resp->data = ptr;
-    memcpy(resp->data + resp->size, contents, total);
-    resp->size += total;
-    resp->data[resp->size] = '\0';
-
-    return total;
-}
 
 /* ── CURL header callback: the session state the server sets ──── */
 
@@ -262,7 +241,7 @@ int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, argus_http_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, trino_curl_header_cb);
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, conn);
@@ -290,7 +269,7 @@ int trino_http_post(trino_conn_t *conn, const char *url, const char *body,
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->default_headers);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, argus_http_write_cb);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
         curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, trino_curl_header_cb);
         curl_easy_setopt(curl, CURLOPT_HEADERDATA, conn);
@@ -324,7 +303,7 @@ static int trino_http_get_with(trino_conn_t *conn, const char *url,
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, argus_http_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, resp);
     /* Only the coordinator speaks for our session; a spooled-segment host
      * must not be able to rewrite the catalog or the transaction id. */
@@ -453,7 +432,7 @@ static int trino_fetch_oauth_token_uncached(trino_conn_t *conn,
     curl_easy_setopt(c, CURLOPT_POST, 1L);
     curl_easy_setopt(c, CURLOPT_POSTFIELDS, body);
     curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
-    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, argus_http_write_cb);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &resp);
     if (conn->ssl_enabled) {
         curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
@@ -539,7 +518,7 @@ static JsonParser *trino_oauth_form_post(trino_conn_t *conn, const char *url,
     curl_easy_setopt(c, CURLOPT_POST, 1L);
     curl_easy_setopt(c, CURLOPT_POSTFIELDS, body);
     curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
-    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, argus_http_write_cb);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &resp);
     if (conn->ssl_enabled) {
         curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
@@ -675,7 +654,7 @@ static void trino_oidc_discover(trino_conn_t *conn, const char *issuer)
     curl_easy_setopt(c, CURLOPT_URL, url);
     curl_easy_setopt(c, CURLOPT_HTTPGET, 1L);
     curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, trino_curl_write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, argus_http_write_cb);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &resp);
     if (conn->ssl_enabled) {
         curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
@@ -1494,7 +1473,7 @@ bool trino_get_server_version(argus_backend_conn_t raw_conn, char *buf, size_t b
         char url[512];
         snprintf(url, sizeof(url), "%s/v1/info", conn->base_url);
 
-        trino_response_t resp = { NULL, 0 };
+        trino_response_t resp = {0};
         if (trino_http_get(conn, url, &resp) == 0 && resp.data) {
             JsonParser *parser = json_parser_new();
             if (json_parser_load_from_data(parser, resp.data, (gssize)resp.size, NULL)) {

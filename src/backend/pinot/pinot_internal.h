@@ -4,6 +4,7 @@
 #include <curl/curl.h>
 #include <json-glib/json-glib.h>
 
+#include "../curl_common.h"
 #include "argus/types.h"
 #include "argus/backend.h"
 
@@ -39,10 +40,8 @@ typedef struct pinot_op {
     bool                 delivered;     /* cache handed to ODBC layer once */
 } pinot_op_t;
 
-typedef struct pinot_response {
-    char   *data;
-    size_t  size;
-} pinot_response_t;
+/* The shared bounded response body (curl_common.h). */
+typedef argus_http_buf_t pinot_response_t;
 
 /* pinot_types.c */
 SQLSMALLINT pinot_type_to_sql_type(const char *pinot_type);

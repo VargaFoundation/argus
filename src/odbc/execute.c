@@ -564,14 +564,23 @@ static SQLRETURN do_execute(argus_stmt_t *stmt, const char *query)
         ARGUS_LOG_DEBUG("Executing query: %s", query);
     }
 
-    /* Propagate query timeout to backend if set */
-    if (stmt->query_timeout > 0 && dbc->query_timeout_sec == 0)
+    /*
+     * SQL_ATTR_QUERY_TIMEOUT belongs to the statement, but the backends read
+     * it off the connection. It used to be copied only while the connection's
+     * was still zero, so the first statement to set one fixed it for the
+     * whole connection and every later statement's value was ignored. The
+     * statement's value is published for this execution and the connection's
+     * own (from the QUERYTIMEOUT keyword) is put back after it.
+     */
+    int saved_query_timeout = dbc->query_timeout_sec;
+    if (stmt->query_timeout > 0)
         dbc->query_timeout_sec = (int)stmt->query_timeout;
 
     /* Execute via backend with timing */
     gint64 exec_start = g_get_monotonic_time();
     int rc = dbc->backend->execute(dbc->backend_conn, query, &stmt->op);
     gint64 exec_end = g_get_monotonic_time();
+    dbc->query_timeout_sec = saved_query_timeout;
     stmt->execute_time_ms = (double)(exec_end - exec_start) / 1000.0;
 
     if (rc != 0) {

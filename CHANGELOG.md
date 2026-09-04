@@ -140,6 +140,32 @@ All notable changes to the Argus ODBC Driver project.
   carries). Control characters are filtered out of header values.
 - Trino's `time` and `time(p)` are `SQL_TYPE_TIME` instead of a timestamp.
 
+### Fixed: one HTTP floor, and the timeouts an application asks for
+- **Every HTTP backend grew its response buffer without a ceiling.** Trino,
+  Phoenix, Pinot, Druid and BigQuery each carried their own copy of the same
+  unbounded `realloc` write callback, so a server — or anything answering in
+  its place — could grow the host application's heap until it died. The five
+  copies are one shared buffer with a 256 MiB ceiling; passing it aborts the
+  transfer, so a truncated body is never read as a complete one. All five
+  now also get gzip decoding, a redirect limit and a low-speed abort.
+- **`SQL_ATTR_LOGIN_TIMEOUT` and `SQL_ATTR_CONNECTION_TIMEOUT` were stored,
+  read back, and never used.** Only the proprietary `CONNECTTIMEOUT` and
+  `SOCKETTIMEOUT` keywords reached a backend, so an application setting the
+  standard attributes — which every driver manager and BI tool does — got no
+  timeout at all. They feed the same two settings; the connection string
+  still wins when it names one.
+- **The first statement's `SQL_ATTR_QUERY_TIMEOUT` became the connection's
+  for good.** It was copied only while the connection's own was still zero,
+  so every later statement's value was ignored. It is published for the
+  execution that set it and the connection's own restored after.
+- **MySQL-wire had no read or write timeout**: `MYSQL_OPT_CONNECT_TIMEOUT`
+  only covers the handshake, so a server that accepted the connection and
+  then stopped answering hung the calling thread for good.
+- **Telemetry could be redirected to a plain `http://` collector** by
+  `ARGUS_TELEMETRY_ENDPOINT`, against what `PRIVACY.md` promises. Anything
+  but https turns telemetry off, except on loopback, where nothing reaches a
+  network.
+
 ## [0.6.1] — 2026-09-03
 
 A corrective release. An audit of the driver as v0.6.0 shipped it found that
