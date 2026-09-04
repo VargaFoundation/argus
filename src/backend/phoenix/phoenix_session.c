@@ -37,6 +37,27 @@ static void phoenix_apply_curl_settings(phoenix_conn_t *conn, CURL *curl)
     /* Timeouts, plus the shared low-speed abort. */
     argus_curl_apply_timeouts(curl, (long)conn->connect_timeout_sec,
                               (long)conn->query_timeout_sec);
+
+    /* Authentication, which libcurl performs. Both schemes are bound to the
+     * connection's own origin: this backend builds no other URL. */
+    switch (conn->auth_mode) {
+    case PHOENIX_AUTH_BASIC: {
+        curl_easy_setopt(curl, CURLOPT_HTTPAUTH, (long)CURLAUTH_BASIC);
+        curl_easy_setopt(curl, CURLOPT_USERNAME, conn->user ? conn->user : "");
+        curl_easy_setopt(curl, CURLOPT_PASSWORD,
+                         conn->password ? conn->password : "");
+        break;
+    }
+    case PHOENIX_AUTH_SPNEGO:
+        curl_easy_setopt(curl, CURLOPT_HTTPAUTH, (long)CURLAUTH_NEGOTIATE);
+        /* Negotiate needs a user for curl to start the handshake; the ticket
+         * decides the principal, not this string. */
+        curl_easy_setopt(curl, CURLOPT_USERPWD, ":");
+        break;
+    case PHOENIX_AUTH_NONE:
+    default:
+        break;
+    }
 }
 
 
@@ -112,7 +133,12 @@ int phoenix_avatica_request(phoenix_conn_t *conn, const char *request_type,
     g_object_unref(gen);
     g_object_unref(builder);
 
-    ARGUS_LOG_TRACE("Avatica request [%s]: %s", request_type, body);
+    /* The request body carries the SQL with its bound values interpolated,
+     * and the response carries the rows. Neither belongs in a log file that
+     * a DSN chose the path of; the shape of the exchange is what is useful
+     * for support. */
+    ARGUS_LOG_TRACE("Avatica request [%s]: %zu bytes", request_type,
+                    body ? strlen(body) : (size_t)0);
 
     /* Send HTTP POST */
     phoenix_response_t resp = {0};
@@ -126,7 +152,7 @@ int phoenix_avatica_request(phoenix_conn_t *conn, const char *request_type,
 
     if (!resp.data) return -1;
 
-    ARGUS_LOG_TRACE("Avatica response: %s", resp.data);
+    ARGUS_LOG_TRACE("Avatica response: %zu bytes", resp.size);
 
     /* Parse response JSON */
     JsonParser *parser = json_parser_new();
@@ -165,9 +191,6 @@ int phoenix_connect(argus_dbc_t *dbc,
                     const char *database, const char *auth_mechanism,
                     argus_backend_conn_t *out_conn)
 {
-    (void)password;
-    (void)auth_mechanism;
-
     phoenix_conn_t *conn = calloc(1, sizeof(phoenix_conn_t));
     if (!conn) {
         argus_set_error(&dbc->diag, "HY001",
@@ -199,6 +222,30 @@ int phoenix_connect(argus_dbc_t *dbc,
     conn->database = strdup(database && *database ? database : "");
     conn->next_statement_id = 1;
 
+    /*
+     * The password and AuthMech were taken and dropped on the floor
+     * ((void)password; (void)auth_mechanism;), so a Phoenix Query Server
+     * behind Basic auth or Kerberos was reached anonymously and the
+     * connection either failed with a 401 the user could not explain, or --
+     * on a server that allows anonymous access -- succeeded as nobody.
+     *
+     * PQS speaks the two schemes Avatica offers: HTTP Basic (BASIC/PLAIN,
+     * or a password with no AuthMech given) and SPNEGO (KERBEROS/GSSAPI),
+     * both of which libcurl performs. The credentials only ever go to the
+     * connection's own origin, which is the only URL this backend builds.
+     */
+    if (auth_mechanism && (g_ascii_strcasecmp(auth_mechanism, "KERBEROS") == 0 ||
+                           g_ascii_strcasecmp(auth_mechanism, "GSSAPI") == 0 ||
+                           g_ascii_strcasecmp(auth_mechanism, "SPNEGO") == 0)) {
+        conn->auth_mode = PHOENIX_AUTH_SPNEGO;
+    } else if (password && *password) {
+        conn->auth_mode = PHOENIX_AUTH_BASIC;
+        conn->password = strdup(password);
+        if (!conn->ssl_enabled)
+            ARGUS_LOG_WARN("Phoenix: sending Basic credentials over plain "
+                           "HTTP; set SSL=1 to protect them");
+    }
+
     /* Initialize CURL */
     conn->curl = curl_easy_init();
     if (!conn->curl) {
@@ -206,6 +253,7 @@ int phoenix_connect(argus_dbc_t *dbc,
                         "[Argus][Phoenix] Failed to initialize HTTP client", 0);
         free(conn->base_url);
         free(conn->user);
+        free(conn->password);
         free(conn->database);
         free(conn);
         return -1;
@@ -221,10 +269,16 @@ int phoenix_connect(argus_dbc_t *dbc,
     JsonBuilder *params = json_builder_new();
     json_builder_begin_object(params);
     json_builder_set_member_name(params, "connectionId");
-    /* Generate a simple connection ID based on pointer */
+    /*
+     * Avatica keeps server-side state under this id, and it used to be
+     * "argus-<heap pointer>-<uptime>" -- guessable from another process on
+     * the same host, which is enough to attach to somebody else's
+     * connection. A random UUID is what the Java client uses.
+     */
     char conn_id[64];
-    snprintf(conn_id, sizeof(conn_id), "argus-%p-%d",
-             (void *)conn, (int)g_get_monotonic_time());
+    char *uuid = g_uuid_string_random();
+    snprintf(conn_id, sizeof(conn_id), "argus-%s", uuid ? uuid : "0");
+    g_free(uuid);
     json_builder_add_string_value(params, conn_id);
     json_builder_set_member_name(params, "info");
     json_builder_begin_object(params);
@@ -254,6 +308,7 @@ int phoenix_connect(argus_dbc_t *dbc,
         curl_easy_cleanup(conn->curl);
         free(conn->base_url);
         free(conn->user);
+        free(conn->password);
         free(conn->database);
         free(conn);
         return -1;
@@ -348,6 +403,7 @@ void phoenix_disconnect(argus_backend_conn_t raw_conn)
     free(conn->base_url);
     free(conn->connection_id);
     free(conn->user);
+    free(conn->password);
     free(conn->database);
     free(conn->ssl_cert_file);
     free(conn->ssl_key_file);

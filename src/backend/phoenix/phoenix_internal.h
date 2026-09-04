@@ -9,7 +9,16 @@
 #include "argus/backend.h"
 
 /* Phoenix Query Server connection state (Avatica protocol) */
+/* How the Query Server is authenticated to. Avatica offers exactly these. */
+typedef enum {
+    PHOENIX_AUTH_NONE = 0,   /* anonymous, which is what it always was */
+    PHOENIX_AUTH_BASIC,      /* HTTP Basic (PQS behind a password) */
+    PHOENIX_AUTH_SPNEGO      /* Kerberos, through libcurl's Negotiate */
+} phoenix_auth_mode_t;
+
 typedef struct phoenix_conn {
+    phoenix_auth_mode_t auth_mode;
+    char               *password;
     CURL               *curl;
     char               *base_url;        /* e.g. "http://host:8765" */
     char               *connection_id;   /* UUID from openConnection */

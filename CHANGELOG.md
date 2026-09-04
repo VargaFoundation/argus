@@ -194,6 +194,20 @@ All notable changes to the Argus ODBC Driver project.
   that file** — bound parameter values included, which is exactly where a
   password or a token is. A prepared statement's own text, markers still in
   place, is logged instead.
+### Fixed: Phoenix reached the Query Server as nobody
+- **The password and `AuthMech` were taken and discarded** (`(void)password;
+  (void)auth_mechanism;`), so a Phoenix Query Server behind Basic auth or
+  Kerberos was contacted anonymously: the connection failed with a 401 the
+  user could not explain, or — on a server that allows anonymous access —
+  succeeded as nobody. Both schemes Avatica offers are performed now, and a
+  password sent over plain HTTP is warned about.
+- **The Avatica connection id was `argus-<heap pointer>-<uptime>`**, which
+  another process on the same host can guess; the server keeps state under
+  it. It is a random UUID, as the Java client uses.
+- **TRACE logging wrote the request and response bodies** — the SQL with its
+  bound values, and the rows that came back — to a file whose path a DSN
+  chooses. Only their sizes are logged.
+
 - **`SQLGetInfo` answered for Hive whatever the connection was.**
   `SQL_IDENTIFIER_CASE` was `SQL_IC_LOWER` for every backend — true for Hive,
   Impala, Trino and PostgreSQL, wrong for Phoenix (which folds to upper) and
