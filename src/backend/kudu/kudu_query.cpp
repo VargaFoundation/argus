@@ -406,7 +406,21 @@ int kudu_cpp_fetch_batch(kudu_operation_t *op,
                 break;
             }
             default: {
-                cell->data = strdup(row.ToString().c_str());
+                /*
+                 * KuduScanBatch::RowPtr::ToString() renders the WHOLE row --
+                 * "(int32 key=1, string value=abc)" -- so every cell of a
+                 * DECIMAL, VARCHAR or DATE column was handed that text
+                 * instead of its value, in a tool that would show it as
+                 * data. A column the driver cannot read is NULL, which is
+                 * at least true; the log says which type it was, once per
+                 * batch rather than per row.
+                 */
+                cell->is_null = true;
+                if (r == 0)
+                    ARGUS_LOG_WARN("Kudu: column %d has type %d, which this "
+                                   "driver does not read yet; its values are "
+                                   "reported as NULL", c,
+                                   (int)proj.Column(c).type());
                 break;
             }
             }

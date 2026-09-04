@@ -241,6 +241,23 @@ All notable changes to the Argus ODBC Driver project.
   in a 32-character buffer came back as 15 characters. Chunks also no longer
   end on half a surrogate pair.
 
+### Fixed: Kudu put the whole row in a cell
+- **`KuduScanBatch::RowPtr::ToString()` renders the entire row** —
+  `(int32 key=1, string value=abc)` — and it was what every cell of a
+  `DECIMAL`, `VARCHAR` or `DATE` column received, because those types fall
+  through to the default branch. A BI tool showed that text as the value. A
+  column the driver cannot read is `NULL`, which is at least true, and the
+  log names the type once per batch. Reading those three types properly
+  needs the Kudu client library, which no CI job has.
+
+### The Arrow Flight SQL backend is compiled again
+- `arrow-flight-sql` is in no Ubuntu, macOS or MSYS2 image the CI uses, so
+  every job configured with that backend DISABLED and a change to
+  `flightsql_*.cpp` could reach `main` having never been through a
+  compiler. A job installs Arrow from Apache's own repository and builds it
+  with `ARGUS_WITH_FLIGHTSQL=ON`, which makes a missing dependency an error
+  rather than a backend quietly left out.
+
 ### Fixed: the search-pattern escape, and `METADATA_ID` wildcards
 - **`SQL_SEARCH_PATTERN_ESCAPE` answered `"\\"` and nothing acted on it.**
   The driver promised an application that a backslash makes the next

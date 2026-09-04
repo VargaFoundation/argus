@@ -535,6 +535,44 @@ jobs:
           ARGUS_TEST_REQUIRE_LOCALE: "1"
         run: cd build-asan && ctest --output-on-failure -L unit
 
+  # The Arrow Flight SQL backend is the one that no other job compiles:
+  # arrow-flight-sql is not in Ubuntu, so every build above configures with it
+  # DISABLED and a change to flightsql_*.cpp reached main having never been
+  # through a compiler. This installs Arrow from the Apache repository and
+  # builds that backend on its own, so it cannot silently rot.
+  build-flightsql:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Install Arrow Flight SQL and the driver's dependencies
+        run: |
+          for i in 1 2 3; do sudo apt-get update && break || sleep 5; done
+          sudo apt-get -o Acquire::Retries=5 install -y \
+            build-essential cmake pkg-config unixodbc-dev \
+            libglib2.0-dev libcmocka-dev libcurl4-openssl-dev \
+            libjson-glib-dev ca-certificates lsb-release wget
+          # Apache's own repository; the package is not in Ubuntu's.
+          wget -q "https://repo1.maven.org/maven2/org/apache/arrow/arrow-apt-source/1.0.1/arrow-apt-source-1.0.1-$(lsb_release --codename --short).deb" \
+            -O /tmp/arrow-apt-source.deb
+          sudo apt-get -o Acquire::Retries=5 install -y /tmp/arrow-apt-source.deb
+          for i in 1 2 3; do sudo apt-get update && break || sleep 5; done
+          sudo apt-get -o Acquire::Retries=5 install -y \
+            libarrow-dev libarrow-flight-dev libarrow-flight-sql-dev
+
+      # ARGUS_WITH_FLIGHTSQL=ON makes a missing dependency an error rather
+      # than a backend quietly left out -- which is the whole point here.
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DARGUS_WITH_FLIGHTSQL=ON
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Unit tests
+        run: cd build && ctest --output-on-failure -L unit
+
   # Coverage-guided fuzzing over the hand-written parsers (escape translator,
   # connection-string parser). Short deterministic budget per push; crashes
   # are uploaded as artifacts. Run locally with fuzz/README-worthy one-liners
