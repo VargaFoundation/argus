@@ -241,6 +241,21 @@ All notable changes to the Argus ODBC Driver project.
   in a 32-character buffer came back as 15 characters. Chunks also no longer
   end on half a surrogate pair.
 
+### Docs
+- **`SECURITY.md` still said no release had been cut**, three releases in —
+  the worst file in the tree to be stale, since it is what a reporter reads
+  first. It names the supported line and what the published binaries carry
+  (hardening, restricted exports, GPG and Authenticode signatures).
+- **The README described binary and numeric support the driver did not
+  have.** Those claims are now what the code does, including which encoding
+  each backend decodes and which SQLSTATEs a bad conversion raises.
+- **The Power BI connector promised DirectQuery without declaring it**, so
+  the "Get Data" dialog only ever offered Import; and it declared
+  `SupportsStringLiterals` without `StringLiteralEscapeCharacters`, leaving
+  Power Query to guess how to escape a folded literal — on Hive or MySQL a
+  value ending in a backslash escaped its own closing quote.
+- The three `*_PARAMETERS_COMPARISON.md` files moved into `docs/`.
+
 ### Packaging, licensing and CI
 - **An RPM upgrade unregistered the driver.** `%preun` was not guarded by
   `$1`, and RPM runs the old `%preun` *after* the new `%post`, so upgrading

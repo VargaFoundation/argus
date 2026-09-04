@@ -2,9 +2,27 @@
 
 ## Supported versions
 
-Argus has not yet cut a tagged release; until the first release, only the tip
-of `main` is supported. Once releases exist, the latest minor release line will
-receive security fixes.
+Security fixes go to the latest minor release line and to the tip of `main`.
+Older minor lines are not backported to; upgrading to the current minor is
+the supported path.
+
+| Version | Supported |
+|---------|-----------|
+| 0.6.x   | Yes       |
+| < 0.6   | No        |
+
+## What the released binaries carry
+
+Every published artefact is built with the hardening flags the project's
+`ARGUS_HARDENING` option sets — stack protector, stack-clash protection,
+control-flow protection, `_FORTIFY_SOURCE=2`, full RELRO and BIND_NOW on
+ELF, `/GS /guard:cf` and ASLR on Windows — and `scripts/check-hardening.sh`
+fails the release if one of them is missing. Only the ODBC entry points are
+exported; `scripts/check-exports.sh` pins that list.
+
+Linux packages and the checksum manifest are GPG-signed (the public key is in
+`KEYS`), and the Windows driver and installer are Authenticode-signed. Verify
+a download against `SHA256SUMS` and its `.asc` before installing it.
 
 ## Reporting a vulnerability
 

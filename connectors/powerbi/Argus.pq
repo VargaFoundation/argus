@@ -41,6 +41,13 @@ AnsiOffsetBackends = {"trino"};
 // truncates the predicate and the fold returns the wrong rows.
 MicrosecondBackends = {"postgres", "greenplum", "cloudberry"};
 
+// Engines whose string literals treat a backslash as an escape character.
+// Power Query needs this to fold a filter safely: with only the quote listed,
+// a value ending in a backslash on Hive (WHERE p = 'C:\') escapes the
+// closing quote and the folded SQL runs past the end of the literal. Same
+// list the driver's own dialect table carries (src/odbc/dialect.c).
+BackslashEscapeBackends = {"hive", "impala", "mysql", "bigquery"};
+
 BackendList = {
     "hive", "impala", "trino", "phoenix", "pinot",
     "druid", "mysql", "bigquery", "postgres", "greenplum", "cloudberry",
@@ -142,6 +149,13 @@ ArgusImpl = (Host as text, Port as number, Backend as text,
                     then 6 else 3,
                 SupportsNumericLiterals = true,
                 SupportsStringLiterals = true,
+                // Which characters Power Query must escape when it folds a
+                // string literal. Declaring SupportsStringLiterals without
+                // this left it to guess.
+                StringLiteralEscapeCharacters =
+                    if List.Contains(BackslashEscapeBackends, Backend)
+                    then { "\\", "'" }
+                    else { "'" },
                 SupportsOdbcDateLiterals = true,
                 SupportsOdbcTimeLiterals = true,
                 SupportsOdbcTimestampLiterals = true
@@ -194,6 +208,10 @@ Argus = [
 Argus.Publish = [
     Beta = true,
     Category = "Database",
+    // The README and connectors/powerbi/README.md both promise DirectQuery,
+    // and the folding contract above is what makes it work; without this the
+    // "Get Data" dialog only ever offered Import.
+    SupportsDirectQuery = true,
     ButtonText = { Extension.LoadString("ButtonTitle"), Extension.LoadString("ButtonHelp") },
     LearnMoreUrl = "https://github.com/VargaFoundation/argus",
     SourceImage = Argus.Icons,

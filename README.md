@@ -55,12 +55,31 @@ The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery
 - **Connection String**: `RetryCount=3;RetryDelay=2;ConnectTimeout=30`
 
 #### Data Type Conversions
-- **Basic Types**: INTEGER, BIGINT, FLOAT, DOUBLE, VARCHAR, BIT
-- **Date/Time**: DATE, TIME, TIMESTAMP with proper parsing
-- **Numeric**: DECIMAL/NUMERIC with 128-bit precision
-- **Binary**: Raw binary data support
-- **Unsigned**: ULONG, USHORT, UTINYINT, UBIGINT
-- **Wide Char**: UTF-8 to UTF-16LE conversion
+- **Basic Types**: INTEGER, BIGINT, FLOAT, DOUBLE, VARCHAR, BIT. Numeric
+  columns carry their native value alongside the text, so a numeric target
+  costs no parse.
+- **Date/Time**: DATE, TIME, TIMESTAMP. A zone suffix (`Z`, `+05:00`,
+  ` Europe/Paris`) is accepted and the wall-clock value delivered; a date
+  read from a timestamp that has a time part is `01S07`, not a silent
+  truncation.
+- **Numeric**: `SQL_C_NUMERIC` up to 38 digits, exponents included, keeping
+  the value's own scale. `DECIMAL(p,s)` is described with the engine's real
+  precision and scale where the engine sends them (Hive and Impala type
+  qualifiers, Trino's `decimal(18,4)`, Avatica's precision/scale) rather
+  than the family maximums.
+- **Binary**: the bytes themselves. Each backend decodes its own wire
+  encoding — hex on Pinot and PostgreSQL, base64 on Trino, BigQuery and
+  Avatica, raw on Hive, Impala, Kudu, MySQL-wire and Arrow — so
+  `SQL_C_BINARY` returns what the engine sent, embedded NULs included, and a
+  character target gets its hex. The value is never sniffed.
+- **Unsigned**: ULONG, USHORT, UTINYINT, UBIGINT, with `22003` on a negative
+  value rather than a wrap.
+- **Out-of-range and non-numeric**: `22003` when the value does not fit the
+  C type, `22018` when the text is not a number, `01S07` when a fraction is
+  dropped.
+- **Wide Char**: UTF-8 to UTF-16. `SQLGetData` continuation never splits a
+  UTF-8 sequence, a surrogate pair or a hex byte, and ends with
+  `SQL_NO_DATA`.
 
 #### Query Management
 - **SQLCancel** from another thread never waits for the call it interrupts:
