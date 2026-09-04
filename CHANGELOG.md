@@ -165,6 +165,14 @@ All notable changes to the Argus ODBC Driver project.
   `ARGUS_TELEMETRY_ENDPOINT`, against what `PRIVACY.md` promises. Anything
   but https turns telemetry off, except on loopback, where nothing reaches a
   network.
+- **The loopback exemption itself was both too narrow and too wide.** It read
+  the host by stopping at the first `:`, so `http://[::1]:4318` was never
+  recognised as loopback and IPv6-only development setups silently sent
+  nothing; and it accepted any name beginning `127.`, so a plain-http
+  `http://127.evil.example/` was treated as local and the exemption became a
+  way to turn the https requirement off. The host is now parsed as a host --
+  bracketed IPv6 unwrapped, `127.x` accepted only when what follows is
+  numeric.
 
 ### Fixed: accepted-then-ignored ODBC behaviour
 - **`SQLMoreResults` tore the statement down on its way out**, setting
