@@ -352,6 +352,28 @@ static bool mywire_get_last_error(argus_backend_conn_t raw_conn,
     return true;
 }
 
+/*
+ * The same message, plus the SQLSTATE the server itself produced. Without
+ * this every MySQL-wire failure reached the application as HY000, which is
+ * the one part of a diagnostic a tool can branch on: 42S02 (no such table)
+ * and 42000 (syntax error) and 08S01 (the connection went away) all read
+ * alike, and the message text is localised and not a contract.
+ */
+static bool mywire_get_last_error_ex(argus_backend_conn_t raw_conn,
+                                     char sqlstate[6], char *buf, size_t buflen)
+{
+    mywire_conn_t *conn = (mywire_conn_t *)raw_conn;
+    if (!mywire_get_last_error(raw_conn, buf, buflen)) return false;
+
+    if (sqlstate) {
+        const char *st = conn->mysql ? mysql_sqlstate(conn->mysql) : NULL;
+        /* "00000" is the server's "no error"; HY000 is the honest fallback. */
+        snprintf(sqlstate, 6, "%s",
+                 (st && *st && strcmp(st, "00000") != 0) ? st : "HY000");
+    }
+    return true;
+}
+
 /* ── Server version ──────────────────────────────────────────────
  * The wire protocol hands the server banner to the client at connect time, so
  * this is a field read with no round trip — backs SQLGetInfo(SQL_DBMS_VER) for
@@ -401,6 +423,7 @@ static const argus_backend_t mywire_backend = {
     .get_catalogs          = mywire_get_catalogs,
     .get_primary_keys      = mywire_get_primary_keys,
     .get_last_error        = mywire_get_last_error,
+    .get_last_error_ex     = mywire_get_last_error_ex,
     .get_server_version    = mywire_get_server_version,
 };
 

@@ -26,6 +26,7 @@ typedef struct impala_conn {
     TSessionHandle         *session_handle;
     char                   *database;
     char                    last_error[512]; /* most recent server error message */
+    char                    last_sqlstate[6]; /* the state the server named */
 } impala_conn_t;
 
 /* Impala operation state */

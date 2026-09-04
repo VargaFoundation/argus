@@ -66,6 +66,8 @@ int hive_get_primary_keys(argus_backend_conn_t conn,
                           argus_backend_op_t *out_op);
 
 bool hive_get_last_error(argus_backend_conn_t conn, char *buf, size_t buflen);
+bool hive_get_last_error_ex(argus_backend_conn_t conn, char sqlstate[6],
+                            char *buf, size_t buflen);
 
 /* Hive backend vtable */
 /* Only the display name: everything else in this descriptor is left zero,
@@ -94,6 +96,7 @@ static const argus_backend_t hive_backend = {
     .get_catalogs          = hive_get_catalogs,
     .get_primary_keys      = hive_get_primary_keys,
     .get_last_error        = hive_get_last_error,
+    .get_last_error_ex     = hive_get_last_error_ex,
     .caps                  = &hive_caps,
 };
 

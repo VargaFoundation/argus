@@ -194,6 +194,15 @@ All notable changes to the Argus ODBC Driver project.
   that file** — bound parameter values included, which is exactly where a
   password or a token is. A prepared statement's own text, markers still in
   place, is logged instead.
+### Fixed: the server's SQLSTATE reaches the application
+- **Every Hive, Impala and MySQL-wire failure arrived as `HY000`.** All
+  three engines name a SQLSTATE — HiveServer2 and Impala in
+  `TStatus.sqlState`, MySQL through `mysql_sqlstate()` — and the driver read
+  only the message text, which is localised and not a contract. A BI tool
+  telling "no such table" (`42S02`) from "syntax error" (`42000`) from "the
+  connection went away" (`08S01`) has nothing else to branch on. The
+  PostgreSQL family already did this; the mechanism was there and unused.
+
 ### Fixed: Phoenix reached the Query Server as nobody
 - **The password and `AuthMech` were taken and discarded** (`(void)password;
   (void)auth_mechanism;`), so a Phoenix Query Server behind Basic auth or

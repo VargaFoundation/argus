@@ -66,6 +66,8 @@ int impala_get_primary_keys(argus_backend_conn_t conn,
                             argus_backend_op_t *out_op);
 
 bool impala_get_last_error(argus_backend_conn_t conn, char *buf, size_t buflen);
+bool impala_get_last_error_ex(argus_backend_conn_t conn, char sqlstate[6],
+                              char *buf, size_t buflen);
 
 /* Impala backend vtable */
 /* Only the display name: everything else in this descriptor is left zero,
@@ -94,6 +96,7 @@ static const argus_backend_t impala_backend = {
     .get_catalogs          = impala_get_catalogs,
     .get_primary_keys      = impala_get_primary_keys,
     .get_last_error        = impala_get_last_error,
+    .get_last_error_ex     = impala_get_last_error_ex,
     .caps                  = &impala_caps,
 };
 

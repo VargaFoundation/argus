@@ -288,6 +288,26 @@ int argus_hs2_rowset_to_cache(GPtrArray *tcolumns, argus_row_cache_t *cache,
     return argus_hs2_parse_rowset(tcolumns, ncols, nrows, cache);
 }
 
+/*
+ * The SQLSTATE the server named in a TStatus, or HY000. HiveServer2 and
+ * Impala both fill TStatus.sqlState -- "42S02" for a missing table, "42000"
+ * for a syntax error -- and the driver read only the message, so every
+ * failure reached the application as HY000. The SQLSTATE is the one part of
+ * a diagnostic a BI tool can branch on; the message text is not a contract.
+ */
+void argus_hs2_status_sqlstate(TStatus *status, char out[6])
+{
+    g_strlcpy(out, "HY000", 6);
+    if (!status) return;
+
+    char *st = NULL;
+    g_object_get(status, "sqlState", &st, NULL);
+    /* A five-character state that is not the server's "no error". */
+    if (st && strlen(st) == 5 && strcmp(st, "00000") != 0)
+        g_strlcpy(out, st, 6);
+    g_free(st);
+}
+
 bool argus_hs2_status_ok(TStatus *status, char *errbuf, size_t errlen)
 {
     if (!status) return true;

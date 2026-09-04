@@ -62,6 +62,9 @@ int argus_hs2_rowset_to_cache(GPtrArray *tcolumns, argus_row_cache_t *cache,
  * the reply carried no status at all).
  */
 typedef struct _TStatus TStatus;
+/* The SQLSTATE a TStatus names, or "HY000". */
+void argus_hs2_status_sqlstate(TStatus *status, char out[6]);
+
 bool argus_hs2_status_ok(TStatus *status, char *errbuf, size_t errlen);
 
 #endif /* ARGUS_HS2_FETCH_H */

@@ -462,6 +462,43 @@ static void test_hive_server_error_is_reported(void **state)
     fake_hs2_free(&f);
 }
 
+
+/*
+ * HiveServer2 and Impala both fill TStatus.sqlState, and the driver read
+ * only the message, so every server failure reached the application as
+ * HY000 -- the one part of a diagnostic a BI tool can branch on.
+ */
+static void test_status_sqlstate(void **state)
+{
+    (void)state;
+    char st6[6];
+
+    /* No status at all, and a status with no state: HY000. */
+    argus_hs2_status_sqlstate(NULL, st6);
+    assert_string_equal(st6, "HY000");
+
+    TStatus *st = g_object_new(TYPE_T_STATUS, NULL);
+    g_object_set(st, "statusCode", T_STATUS_CODE_ERROR_STATUS, NULL);
+    argus_hs2_status_sqlstate(st, st6);
+    assert_string_equal(st6, "HY000");
+
+    /* The state the server named comes through unchanged. */
+    g_object_set(st, "sqlState", "42S02", NULL);
+    argus_hs2_status_sqlstate(st, st6);
+    assert_string_equal(st6, "42S02");
+
+    /* "no error" and anything that is not five characters are not states. */
+    g_object_set(st, "sqlState", "00000", NULL);
+    argus_hs2_status_sqlstate(st, st6);
+    assert_string_equal(st6, "HY000");
+
+    g_object_set(st, "sqlState", "42", NULL);
+    argus_hs2_status_sqlstate(st, st6);
+    assert_string_equal(st6, "HY000");
+
+    g_object_unref(st);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -473,6 +510,7 @@ int main(void)
         cmocka_unit_test(test_rowset_to_cache_short_column_leaves_cells_empty),
         cmocka_unit_test(test_rowset_to_cache_empty),
         cmocka_unit_test(test_status_ok),
+        cmocka_unit_test(test_status_sqlstate),
         cmocka_unit_test(test_hive_retries_empty_batch_with_more_rows),
         cmocka_unit_test(test_impala_short_batch_is_not_the_end),
         cmocka_unit_test(test_hive_server_error_is_reported),

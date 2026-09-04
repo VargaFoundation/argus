@@ -1,4 +1,5 @@
 #include "hive_internal.h"
+#include "../hs2_fetch.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -67,6 +68,7 @@ int hive_execute(argus_backend_conn_t raw_conn,
                 conn->last_error[sizeof(conn->last_error) - 1] = '\0';
                 g_free(emsg);
             }
+            argus_hs2_status_sqlstate(status, conn->last_sqlstate);
             g_object_unref(status);
             g_object_unref(req);
             g_object_unref(resp);
@@ -156,6 +158,18 @@ bool hive_get_last_error(argus_backend_conn_t raw_conn, char *buf, size_t buflen
     if (!conn || !conn->last_error[0] || buflen == 0) return false;
     strncpy(buf, conn->last_error, buflen - 1);
     buf[buflen - 1] = '\0';
+    return true;
+}
+
+/* The message, plus the SQLSTATE HiveServer2 named for it. */
+bool hive_get_last_error_ex(argus_backend_conn_t raw_conn, char sqlstate[6],
+                            char *buf, size_t buflen)
+{
+    hive_conn_t *conn = (hive_conn_t *)raw_conn;
+    if (!hive_get_last_error(raw_conn, buf, buflen)) return false;
+    if (sqlstate)
+        g_strlcpy(sqlstate, conn->last_sqlstate[0] ? conn->last_sqlstate
+                                                   : "HY000", 6);
     return true;
 }
 
