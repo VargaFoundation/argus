@@ -90,6 +90,16 @@ static int pinot_connect(argus_dbc_t *dbc,
     if (username && *username) conn->user = strdup(username);
     if (password && *password) conn->password = strdup(password);
 
+    /*
+     * These credentials go out as HTTP Basic, which is the username and
+     * password in a header with nothing but base64 over them. Without TLS
+     * that is cleartext on the wire, and the driver was doing it silently --
+     * Trino and Phoenix already say so on the same path.
+     */
+    if (conn->password && !conn->ssl_enabled)
+        ARGUS_LOG_WARN("Pinot: sending Basic credentials over plain HTTP; "
+                       "set SSL=1 to protect them");
+
     conn->headers = curl_slist_append(NULL, "Content-Type: application/json");
     conn->headers = curl_slist_append(conn->headers, "Accept: application/json");
 
