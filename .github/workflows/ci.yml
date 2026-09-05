@@ -85,7 +85,7 @@ jobs:
           tar -czf argus-odbc-linux-x64.tar.gz -C staging argus-odbc
 
       - name: Upload tar.gz
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: argus-odbc-linux
           path: argus-odbc-linux-x64.tar.gz
@@ -100,13 +100,13 @@ jobs:
         run: bash packaging/build-rpm.sh
 
       - name: Upload .deb
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: argus-odbc-deb
           path: argus-odbc_*.deb
 
       - name: Upload .rpm
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: argus-odbc-rpm
           path: argus-odbc-*.rpm
@@ -179,7 +179,7 @@ jobs:
           tar -czf argus-odbc-macos-$(uname -m).tar.gz -C staging argus-odbc
 
       - name: Upload tar.gz
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: argus-odbc-macos
           path: argus-odbc-macos-*.tar.gz
@@ -188,7 +188,7 @@ jobs:
         run: bash packaging/build-macos-pkg.sh
 
       - name: Upload .pkg
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: argus-odbc-pkg
           path: argus-odbc-*.pkg
@@ -315,7 +315,7 @@ jobs:
           timestamp-digest: SHA256
 
       - name: Upload installer
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: argus-odbc-installer
           path: installer/staging/argus-odbc-installer.exe
@@ -340,7 +340,7 @@ jobs:
         run: connectors/powerbi/build.ps1 -OutDir connector-dist -ToolsCacheDir "$env:RUNNER_TEMP\argus-pqsdk"
 
       - name: Upload connector (.mez)
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: argus-powerbi-connector
           path: connector-dist/Argus.mez
@@ -405,7 +405,7 @@ jobs:
           rm -f "$RUNNER_TEMP/ks.p12"
 
       - name: Upload connectors (.taco)
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: argus-tableau-connectors
           path: connector-dist/*.taco
@@ -623,7 +623,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: fuzz-crashes
           path: |

@@ -145,7 +145,7 @@ jobs:
           done
 
       - name: Upload tar.gz
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: release-linux
           path: |
@@ -153,7 +153,7 @@ jobs:
             argus-odbc-*-linux-x64.tar.gz.asc
 
       - name: Upload .deb
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: release-deb
           path: |
@@ -161,7 +161,7 @@ jobs:
             argus-odbc_*.deb.asc
 
       - name: Upload .rpm
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: release-rpm
           path: argus-odbc-*.rpm
@@ -249,7 +249,7 @@ jobs:
           tar -czf argus-odbc-${VERSION}-macos-${ARCH}.tar.gz -C staging argus-odbc
 
       - name: Upload tar.gz
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: release-macos
           path: argus-odbc-*-macos-*.tar.gz
@@ -303,7 +303,7 @@ jobs:
           xcrun stapler staple "$PKG"
 
       - name: Upload .pkg
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: release-pkg
           path: argus-odbc-*.pkg
@@ -467,7 +467,7 @@ jobs:
           Move-Item argus-odbc-installer.intunewin "argus-odbc-${VERSION}-windows-x64.intunewin"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: release-windows
           path: |
@@ -501,7 +501,7 @@ jobs:
         run: connectors/powerbi/build.ps1 -OutDir connector-dist -ToolsCacheDir "$env:RUNNER_TEMP\argus-pqsdk"
 
       - name: Upload connector
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: release-powerbi
           if-no-files-found: warn
