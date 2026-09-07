@@ -601,8 +601,14 @@ jobs:
           sudo apt-get -o Acquire::Retries=5 install -y \
             clang libclang-rt-dev build-essential cmake pkg-config \
             unixodbc-dev libglib2.0-dev libcurl4-openssl-dev \
-            libjson-glib-dev libmariadb-dev libcmocka-dev
+            libjson-glib-dev libmariadb-dev libcmocka-dev \
+            libthrift-c-glib-dev thrift-compiler
 
+      # Without the thrift runtime the Thrift backends -- and with them the
+      # SASL frame reader and its harness -- are configured out, and the
+      # step that runs that harness fails on a binary that was never built.
+      # Which is the right way for it to fail: a fuzzer silently skipped is
+      # a parser nobody is testing.
       - name: Configure (libFuzzer + ASan)
         run: CC=clang CXX=clang++ cmake -B build-fuzz -DENABLE_FUZZING=ON -DBUILD_ADBC=OFF
 
