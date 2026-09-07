@@ -55,6 +55,13 @@ static void test_driver_connect(void **state)
                                       SQL_DRIVER_NOPROMPT),
                      SQL_SUCCESS);
 
+    /* The connection just made is alive, and the driver knows it by
+     * asking the server -- not by looking at a pointer. */
+    SQLUINTEGER dead = SQL_CD_TRUE;
+    assert_int_equal(SQLGetConnectAttr(dbc, SQL_ATTR_CONNECTION_DEAD, &dead,
+                                       0, NULL), SQL_SUCCESS);
+    assert_int_equal((int)dead, SQL_CD_FALSE);
+
     assert_int_equal(SQLDisconnect(dbc), SQL_SUCCESS);
     SQLFreeHandle(SQL_HANDLE_DBC, dbc);
     SQLFreeHandle(SQL_HANDLE_ENV, env);

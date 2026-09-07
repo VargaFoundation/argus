@@ -543,12 +543,54 @@ static void bq_disconnect(argus_backend_conn_t raw)
     bq_conn_free((bq_conn_t *)raw);
 }
 
-/* A BigQuery "connection" is stateless REST configuration plus cached tokens —
- * there is no persistent socket that can die between queries, so a non-NULL
- * handle genuinely is alive. (Token refresh happens per request.) */
+static size_t bq_discard_cb(void *p, size_t sz, size_t n, void *u)
+{
+    (void)p; (void)u;
+    return sz * n;
+}
+
+/*
+ * A BigQuery "connection" is REST configuration plus a cached token, and
+ * this used to answer "alive" for any non-NULL handle on the grounds that
+ * there is no socket to die. But SQL_ATTR_CONNECTION_DEAD is the question
+ * "will the next statement work", and for this backend the ways it will
+ * not are a token that has expired and cannot be refreshed (a revoked
+ * service account, an IAM endpoint that stopped answering), and an API
+ * endpoint -- private, sovereign, or an emulator -- that is no longer
+ * there. Both are found by the cheapest authenticated request the API has:
+ * one page of one dataset, with a short deadline of its own so a probe can
+ * never hang the pool that asked. Any answer from the API is a live
+ * connection except 401, which is exactly the dead token.
+ */
 static bool bq_is_alive(argus_backend_conn_t raw)
 {
-    return raw != NULL;
+    bq_conn_t *conn = (bq_conn_t *)raw;
+    if (!conn || !conn->curl || !conn->base_url || !conn->project) return false;
+    if (bq_auth_ensure(conn) != 0) return false;
+
+    char *e_proj = g_uri_escape_string(conn->project, NULL, FALSE);
+    GString *url = g_string_new(NULL);
+    g_string_printf(url, "%s/bigquery/v2/projects/%s/datasets?maxResults=1",
+                    conn->base_url, e_proj ? e_proj : conn->project);
+    g_free(e_proj);
+
+    CURL *curl = conn->curl;
+    curl_easy_reset(curl);
+    argus_curl_apply_baseline(curl);
+    curl_easy_setopt(curl, CURLOPT_URL, url->str);
+    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->headers);
+    bq_apply_tls(conn, curl);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, bq_discard_cb);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+
+    CURLcode cc = curl_easy_perform(curl);
+    g_string_free(url, TRUE);
+    if (cc != CURLE_OK) return false;
+    long code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    return code >= 200 && code < 500 && code != 401;
 }
 
 /* ── Execute ─────────────────────────────────────────────────── */

@@ -85,6 +85,15 @@ All notable changes to the Argus ODBC Driver project.
   answers the blocked call with 1317 and the statement reports `HY008`.
   `test_mysql_query` shows `SELECT SLEEP(30)` returning within a few seconds
   of a cancel from another thread.
+- **`SQL_ATTR_CONNECTION_DEAD` on BigQuery and Flight SQL answered from a
+  pointer.** BigQuery reported any non-NULL handle alive, on the grounds
+  that REST has no socket to die -- which overlooks the token that has
+  expired and cannot be refreshed and the endpoint that is no longer there;
+  Flight SQL reported alive as long as the client object existed. Both now
+  ask the server, under a five-second deadline of their own: BigQuery lists
+  one dataset (any answer but 401 is a live connection), Flight SQL makes
+  the same `GetCatalogs` call connect validates with. Druid and Pinot had
+  been corrected this way in August; these were the two left.
 
 ### Fixed: parameter markers inside string literals
 - **A backslash-escaped quote ended a literal** for the marker scanner and

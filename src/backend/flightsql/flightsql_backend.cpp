@@ -112,10 +112,23 @@ static void flightsql_disconnect(argus_backend_conn_t raw_conn)
     delete conn;
 }
 
+/*
+ * "Alive" used to mean "the client object exists", which is true of a
+ * connection whose server went away an hour ago; SQL_ATTR_CONNECTION_DEAD
+ * would then say the next statement will work when it will not. The
+ * answer is the same lightweight metadata RPC connect validates with,
+ * under a deadline of its own so a probe cannot hang the caller on a
+ * channel that is half-open: gRPC reports the dead channel as an error
+ * and that is the honest answer.
+ */
 static bool flightsql_is_alive(argus_backend_conn_t raw_conn)
 {
     auto* conn = static_cast<flightsql_conn*>(raw_conn);
-    return conn && conn->client != nullptr;
+    if (!conn || !conn->client) return false;
+    flight::FlightCallOptions probe = conn->call_options;
+    probe.timeout = flight::TimeoutDuration(5.0);
+    auto res = conn->client->GetCatalogs(probe);
+    return res.ok();
 }
 
 /* ── Execution ───────────────────────────────────────────────── */
