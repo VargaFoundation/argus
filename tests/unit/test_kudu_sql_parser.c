@@ -440,6 +440,32 @@ static void test_column_aliases(void **state)
 
 /* ── Main ─────────────────────────────────────────────────────── */
 
+/* A predicate that fails after its column name (and an IN list so far)
+ * was copied must release it: the caller has not counted it, so the
+ * query's own free never reaches it. Under the sanitizers job this test
+ * is a leak check; the Kudu fuzzer found the first case in its first
+ * hour. */
+static void test_failed_predicate_leaves_nothing_behind(void **state)
+{
+    (void)state;
+    const char *bad[] = {
+        "SELECT * FROM t WHERE a NOT NULL",          /* the fuzzer's find */
+        "SELECT * FROM t WHERE a = ",                /* operator, no value */
+        "SELECT * FROM t WHERE a IS",                /* IS, then nothing */
+        "SELECT * FROM t WHERE a IS SOMETHING",      /* IS, then not NULL */
+        "SELECT * FROM t WHERE a IN 1",              /* IN without ( */
+        "SELECT * FROM t WHERE a IN (1, 2, =",       /* IN list, bad value */
+        "SELECT * FROM t WHERE x = 1 AND y NOT NULL",/* second predicate */
+        NULL
+    };
+    for (int i = 0; bad[i]; i++) {
+        kudu_parsed_query_t q;
+        const char *err = NULL;
+        assert_int_equal(kudu_sql_parse(bad[i], &q, &err), -1);
+        assert_non_null(err);
+    }
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -460,6 +486,7 @@ int main(void)
         cmocka_unit_test(test_unsupported_clauses),
         cmocka_unit_test(test_null_input),
         cmocka_unit_test(test_semicolon),
+        cmocka_unit_test(test_failed_predicate_leaves_nothing_behind),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

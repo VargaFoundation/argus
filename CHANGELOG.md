@@ -129,6 +129,13 @@ All notable changes to the Argus ODBC Driver project.
   SASL, seeded from the unit tests' own cases. The Trino harness found three
   heap overflows in its first hour; these two are where the next ones would
   be.
+- **And the Kudu harness found one in its first minute**: a WHERE predicate
+  that failed after its column name was copied (`WHERE a NOT NULL`) leaked
+  the copy, because the caller had not counted the predicate yet and the
+  query's own free never reached it. A failed predicate now releases
+  everything it took -- the column, the value, an IN list so far -- and
+  `test_kudu_sql_parser` drives seven such inputs, which under the
+  sanitizers job is a leak check. The fuzzer's input is in the corpus.
 
 ### Fixed: parameter markers inside string literals
 - **A backslash-escaped quote ended a literal** for the marker scanner and

@@ -261,10 +261,40 @@ static char *parse_value(tokenizer_t *t)
 
 /* ── Parse WHERE predicate ───────────────────────────────────── */
 
+static void predicate_free(kudu_predicate_t *p)
+{
+    free(p->column);
+    free(p->value);
+    if (p->in_values) {
+        for (int j = 0; j < p->num_in_values; j++)
+            free(p->in_values[j]);
+        free(p->in_values);
+    }
+    memset(p, 0, sizeof(*p));
+}
+
+/*
+ * Fills `pred` from the tokens at the cursor; -1 when they do not form a
+ * predicate. A failure can happen after the column name (and the IN list
+ * so far) were copied, and the caller has not counted the predicate yet:
+ * everything this took is released here, so a failed predicate leaves
+ * nothing behind. The first hour of fuzzing found the leak on
+ * "WHERE a NOT NULL".
+ */
+static int parse_predicate_inner(tokenizer_t *t, kudu_predicate_t *pred);
+
 static int parse_predicate(tokenizer_t *t, kudu_predicate_t *pred)
 {
     memset(pred, 0, sizeof(*pred));
+    if (parse_predicate_inner(t, pred) != 0) {
+        predicate_free(pred);
+        return -1;
+    }
+    return 0;
+}
 
+static int parse_predicate_inner(tokenizer_t *t, kudu_predicate_t *pred)
+{
     /* Column name */
     token_t *col_tok = advance(t);
     if (col_tok->type != TOK_WORD) return -1;
@@ -532,15 +562,8 @@ void kudu_parsed_query_free(kudu_parsed_query_t *query)
     }
 
     if (query->predicates) {
-        for (int i = 0; i < query->num_predicates; i++) {
-            free(query->predicates[i].column);
-            free(query->predicates[i].value);
-            if (query->predicates[i].in_values) {
-                for (int j = 0; j < query->predicates[i].num_in_values; j++)
-                    free(query->predicates[i].in_values[j]);
-                free(query->predicates[i].in_values);
-            }
-        }
+        for (int i = 0; i < query->num_predicates; i++)
+            predicate_free(&query->predicates[i]);
         free(query->predicates);
         query->predicates = NULL;
     }
