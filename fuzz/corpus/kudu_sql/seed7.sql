@@ -1,0 +1,1 @@
+select col1 as c FROM t where a != 0 and b <> 0 and c is null;

@@ -117,6 +117,19 @@ All notable changes to the Argus ODBC Driver project.
   ClickHouse's MySQL interface answers it empty, which is the truthful
   answer for an engine without indexes.
 
+### Two more parsers under the fuzzer
+- **The Kudu SQL parser and the SASL frame reader** join the escape
+  translator, the connection-string parser and the Trino page scanner in
+  the CI fuzz job. The first reads application-controlled SQL; the second
+  parses what a HiveServer2 or Impala daemon answers during the PLAIN
+  handshake -- `[status][length][payload]` frames with a length the peer
+  chose -- and is the one parser in the driver that reads bytes from an
+  unauthenticated peer before any session exists. Both harnesses drive the
+  code the unit tests drive, through the same `ThriftMemoryBuffer` for
+  SASL, seeded from the unit tests' own cases. The Trino harness found three
+  heap overflows in its first hour; these two are where the next ones would
+  be.
+
 ### Fixed: parameter markers inside string literals
 - **A backslash-escaped quote ended a literal** for the marker scanner and
   the escape parser alike: on Hive, Impala, MySQL wire and BigQuery,

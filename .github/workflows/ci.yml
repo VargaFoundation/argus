@@ -621,6 +621,17 @@ jobs:
       - name: Fuzz Trino result-page scanner
         run: ./build-fuzz/fuzz/fuzz_trino_json fuzz/corpus/trino_json -max_total_time=90 -print_final_stats=1
 
+      # The SELECT recogniser the Kudu backend pushes predicates through:
+      # plain C, built on every platform whether or not the Kudu client is.
+      - name: Fuzz Kudu SQL parser
+        run: ./build-fuzz/fuzz/fuzz_kudu_sql fuzz/corpus/kudu_sql -max_total_time=60 -print_final_stats=1
+
+      # The SASL frame reader parses what an unauthenticated peer sends
+      # before any session exists; the input is the server's side of the
+      # PLAIN handshake.
+      - name: Fuzz SASL frame reader
+        run: ./build-fuzz/fuzz/fuzz_thrift_sasl fuzz/corpus/thrift_sasl -max_total_time=60 -print_final_stats=1
+
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
