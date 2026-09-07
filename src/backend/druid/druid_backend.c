@@ -25,6 +25,7 @@ static int http_post(druid_conn_t *conn, const char *url, const char *body,
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);
     }
     argus_curl_apply_timeouts(curl, (long)conn->connect_timeout_sec, 0);
+    argus_curl_apply_abort(curl, &conn->abort);
     if (conn->user && *conn->user) {
         char up[512];
         snprintf(up, sizeof(up), "%s:%s", conn->user,
@@ -46,8 +47,11 @@ static int http_post(druid_conn_t *conn, const char *url, const char *body,
 }
 
 /* Build a {"query": "...", "resultFormat":"array", "header":true,
- * "sqlTypesHeader":true} body with the SQL properly JSON-escaped. */
-static char *build_query_body(const char *sql)
+ * "sqlTypesHeader":true} body with the SQL properly JSON-escaped. With a
+ * `query_id`, the context names it as the sqlQueryId: Druid then knows the
+ * query by an id the client chose BEFORE the response, which is the only
+ * way a cancel can reach a query that is still running. */
+static char *build_query_body(const char *sql, const char *query_id)
 {
     JsonBuilder *b = json_builder_new();
     json_builder_begin_object(b);
@@ -59,6 +63,13 @@ static char *build_query_body(const char *sql)
     json_builder_add_boolean_value(b, TRUE);
     json_builder_set_member_name(b, "sqlTypesHeader");
     json_builder_add_boolean_value(b, TRUE);
+    if (query_id) {
+        json_builder_set_member_name(b, "context");
+        json_builder_begin_object(b);
+        json_builder_set_member_name(b, "sqlQueryId");
+        json_builder_add_string_value(b, query_id);
+        json_builder_end_object(b);
+    }
     json_builder_end_object(b);
     JsonGenerator *g = json_generator_new();
     json_generator_set_root(g, json_builder_get_root(b));
@@ -112,7 +123,8 @@ static int druid_connect(argus_dbc_t *dbc,
     /* Connectivity probe. */
     char sqlurl[512];
     snprintf(sqlurl, sizeof(sqlurl), "%s/druid/v2/sql", conn->base_url);
-    char *body = build_query_body("SELECT 1");
+    g_mutex_init(&conn->inflight_lock);
+    char *body = build_query_body("SELECT 1", NULL);
     druid_response_t resp = {0};
     int rc = http_post(conn, sqlurl, body, &resp);
     g_free(body);
@@ -121,6 +133,7 @@ static int druid_connect(argus_dbc_t *dbc,
     if (!ok) {
         curl_slist_free_all(conn->headers);
         curl_easy_cleanup(conn->curl);
+        g_mutex_clear(&conn->inflight_lock);
         free(conn->base_url); free(conn->user); free(conn->password); free(conn);
         if (dbc) argus_set_error(&dbc->diag, "08001",
                                  "[Argus][Druid] Failed to reach broker", 0);
@@ -136,6 +149,8 @@ static void druid_disconnect(argus_backend_conn_t raw)
     if (!conn) return;
     if (conn->headers) curl_slist_free_all(conn->headers);
     if (conn->curl) curl_easy_cleanup(conn->curl);
+    g_mutex_clear(&conn->inflight_lock);
+    g_free(conn->inflight_id);
     free(conn->base_url);
     free(conn->user);
     free(conn->password);
@@ -294,9 +309,24 @@ int druid_execute(argus_backend_conn_t raw, const char *query,
 
     char url[512];
     snprintf(url, sizeof(url), "%s/druid/v2/sql", conn->base_url);
-    char *body = build_query_body(query);
+
+    /* Name the query ourselves so a cancel from another thread can. */
+    char *qid = g_uuid_string_random();
+    char *body = build_query_body(query, qid);
     druid_response_t resp = {0};
+
+    g_mutex_lock(&conn->inflight_lock);
+    g_free(conn->inflight_id);
+    conn->inflight_id = qid;
+    g_mutex_unlock(&conn->inflight_lock);
+
     int rc = http_post(conn, url, body, &resp);
+
+    g_mutex_lock(&conn->inflight_lock);
+    if (conn->inflight_id == qid) conn->inflight_id = NULL;
+    g_mutex_unlock(&conn->inflight_lock);
+    g_free(qid);
+
     g_free(body);
     if (rc != 0 || !resp.data) { free(resp.data); return -1; }
 
@@ -351,15 +381,66 @@ static void druid_close_operation(argus_backend_conn_t conn,
     free(op);
 }
 
-/* Execution is synchronous over HTTP: by the time SQLCancel can reach this,
- * the query has already completed, and cancelling a finished operation is a
- * no-op success per ODBC. Mid-flight cancellation (Druid's
- * DELETE /druid/v2/{queryId}) would require issuing the query asynchronously
- * with a client-set sqlQueryId; not implemented. */
-static int druid_cancel(argus_backend_conn_t conn, argus_backend_op_t op)
+/*
+ * With an operation: the query ran inside one synchronous POST that has
+ * returned, so there is nothing left to cancel and success is the truthful
+ * answer. With none, this is SQLCancel on another thread while the POST is
+ * still on the wire (cancel_from_any_thread): the connection's abort flag
+ * is already raised, so the blocked call is coming back; what remains is
+ * to stop the query on the broker, by the sqlQueryId execute chose for it,
+ * on a handle of our own -- the connection's is busy with the very transfer
+ * being abandoned. 202 is cancelled, 404 is a query that finished first;
+ * neither changes what the cancelled call reports.
+ */
+static int druid_cancel(argus_backend_conn_t raw, argus_backend_op_t op)
 {
-    (void)conn; (void)op;
+    druid_conn_t *conn = (druid_conn_t *)raw;
+    if (!conn || op) return 0;
+
+    g_mutex_lock(&conn->inflight_lock);
+    char *qid = g_strdup(conn->inflight_id);
+    g_mutex_unlock(&conn->inflight_lock);
+    if (!qid) return 0;
+
+    CURL *curl = curl_easy_init();
+    if (!curl) { g_free(qid); return -1; }
+    char *e_qid = curl_easy_escape(curl, qid, 0);
+    char url[600];
+    snprintf(url, sizeof(url), "%s/druid/v2/sql/%s", conn->base_url,
+             e_qid ? e_qid : qid);
+    curl_free(e_qid);
+    g_free(qid);
+
+    argus_curl_apply_baseline(curl);
+    if (conn->ssl_enabled) {
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);
+    }
+    if (conn->user && *conn->user) {
+        char up[512];
+        snprintf(up, sizeof(up), "%s:%s", conn->user,
+                 conn->password ? conn->password : "");
+        curl_easy_setopt(curl, CURLOPT_HTTPAUTH, (long)CURLAUTH_BASIC);
+        curl_easy_setopt(curl, CURLOPT_USERPWD, up);
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_cb);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+    CURLcode cc = curl_easy_perform(curl);
+    long code = 0;
+    if (cc == CURLE_OK) curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    curl_easy_cleanup(curl);
+    ARGUS_LOG_INFO("Druid: cancel of the running query answered %s %ld",
+                   cc == CURLE_OK ? "HTTP" : curl_easy_strerror(cc), code);
     return 0;
+}
+
+static struct argus_http_abort *druid_abort_flag(argus_backend_conn_t raw)
+{
+    druid_conn_t *conn = (druid_conn_t *)raw;
+    return conn ? &conn->abort : NULL;
 }
 
 static int druid_get_result_metadata(argus_backend_conn_t rconn,
@@ -550,6 +631,8 @@ static const argus_backend_caps_t druid_caps = {
 static const argus_backend_t druid_backend = {
     .name                  = "druid",
     .caps                  = &druid_caps,
+    .cancel_from_any_thread = true,
+    .abort_flag            = druid_abort_flag,
     .connect               = druid_connect,
     .disconnect            = druid_disconnect,
     .is_alive              = druid_is_alive,

@@ -10,8 +10,163 @@
 
 #include <curl/curl.h>
 #include <string.h>
+#include <glib.h>
 
 #include "curl_common.h"
+
+#ifndef _WIN32
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+
+/* A server that accepts and then says nothing, the way a coordinator does
+ * while a long query runs: the transfer waits for a first byte that never
+ * comes. Closed when the test is done with it. */
+typedef struct {
+    int      listen_fd;
+    int      port;
+    GThread *thread;
+    gint     stop;
+} silent_server_t;
+
+static gpointer silent_server_run(gpointer data)
+{
+    silent_server_t *srv = data;
+    while (!g_atomic_int_get(&srv->stop)) {
+        struct timeval tv = { 0, 200000 };
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(srv->listen_fd, &rfds);
+        if (select(srv->listen_fd + 1, &rfds, NULL, NULL, &tv) <= 0) continue;
+        int c = accept(srv->listen_fd, NULL, NULL);
+        if (c < 0) continue;
+        /* Read the request and keep the socket open, answering nothing. */
+        char buf[1024];
+        while (!g_atomic_int_get(&srv->stop)) {
+            struct timeval tv2 = { 0, 200000 };
+            fd_set r2;
+            FD_ZERO(&r2);
+            FD_SET(c, &r2);
+            int n = select(c + 1, &r2, NULL, NULL, &tv2);
+            if (n > 0 && recv(c, buf, sizeof(buf), 0) <= 0) break;
+        }
+        close(c);
+    }
+    return NULL;
+}
+
+static int silent_server_start(silent_server_t *srv)
+{
+    memset(srv, 0, sizeof(*srv));
+    srv->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (srv->listen_fd < 0) return -1;
+    struct sockaddr_in a = {0};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    a.sin_port = 0;
+    if (bind(srv->listen_fd, (struct sockaddr *)&a, sizeof(a)) < 0) return -1;
+    if (listen(srv->listen_fd, 4) < 0) return -1;
+    socklen_t len = sizeof(a);
+    if (getsockname(srv->listen_fd, (struct sockaddr *)&a, &len) < 0) return -1;
+    srv->port = ntohs(a.sin_port);
+    srv->thread = g_thread_new("silent", silent_server_run, srv);
+    return 0;
+}
+
+static void silent_server_stop(silent_server_t *srv)
+{
+    g_atomic_int_set(&srv->stop, 1);
+    if (srv->thread) g_thread_join(srv->thread);
+    if (srv->listen_fd >= 0) close(srv->listen_fd);
+}
+
+static size_t sink(void *p, size_t sz, size_t n, void *u)
+{
+    (void)p; (void)u;
+    return sz * n;
+}
+
+typedef struct {
+    argus_http_abort_t *flag;
+    int                 after_ms;
+} raise_later_t;
+
+static gpointer raise_later(gpointer data)
+{
+    raise_later_t *r = data;
+    g_usleep((gulong)r->after_ms * 1000);
+    argus_http_abort_request(r->flag);
+    return NULL;
+}
+
+/*
+ * The whole point of the flag: a transfer waiting on a server that has not
+ * answered ends within about a second of the flag being raised from another
+ * thread, as CURLE_ABORTED_BY_CALLBACK -- not when the server finally
+ * speaks, and not at the transfer's own timeout. Without the flag the same
+ * transfer waits for the timeout, which is the behaviour SQLCancel had on
+ * every HTTP backend.
+ */
+static void test_abort_ends_a_transfer_that_is_waiting(void **state)
+{
+    (void)state;
+    silent_server_t srv;
+    assert_int_equal(silent_server_start(&srv), 0);
+
+    char url[64];
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/", srv.port);
+
+    argus_http_abort_t flag = {0};
+    CURL *curl = curl_easy_init();
+    assert_non_null(curl);
+    argus_curl_apply_baseline(curl);
+    argus_curl_apply_abort(curl, &flag);
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, sink);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+
+    raise_later_t r = { &flag, 300 };
+    GThread *t = g_thread_new("cancel", raise_later, &r);
+    gint64 t0 = g_get_monotonic_time();
+    CURLcode cc = curl_easy_perform(curl);
+    gint64 elapsed_ms = (g_get_monotonic_time() - t0) / 1000;
+    g_thread_join(t);
+
+    print_message("abort raised at 300 ms, transfer ended at %ld ms\n",
+                  (long)elapsed_ms);
+    assert_int_equal(cc, CURLE_ABORTED_BY_CALLBACK);
+    assert_true(elapsed_ms >= 300);        /* not before it was raised */
+    assert_true(elapsed_ms < 5000);        /* and nowhere near the timeout */
+    assert_true(argus_http_abort_pending(&flag));
+
+    /* Lowered, the same handle transfers again; here it waits out a short
+     * timeout instead, which shows the callback aborts nothing on its own. */
+    argus_http_abort_clear(&flag);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 1L);
+    cc = curl_easy_perform(curl);
+    assert_int_equal(cc, CURLE_OPERATION_TIMEDOUT);
+
+    curl_easy_cleanup(curl);
+    silent_server_stop(&srv);
+}
+#endif /* !_WIN32 */
+
+/* NULL is safe on every side of the flag. */
+static void test_abort_flag_null_is_inert(void **state)
+{
+    (void)state;
+    argus_http_abort_request(NULL);
+    argus_http_abort_clear(NULL);
+    assert_false(argus_http_abort_pending(NULL));
+    argus_curl_apply_abort(NULL, NULL);
+    argus_http_abort_t f = {0};
+    assert_false(argus_http_abort_pending(&f));
+    argus_http_abort_request(&f);
+    assert_true(argus_http_abort_pending(&f));
+    argus_http_abort_clear(&f);
+    assert_false(argus_http_abort_pending(&f));
+}
 
 static void test_same_origin_matches_scheme_host_port(void **state)
 {
@@ -162,6 +317,10 @@ int main(void)
         cmocka_unit_test(test_response_body_has_a_ceiling),
         cmocka_unit_test(test_response_body_is_assembled),
         cmocka_unit_test(test_retry_policy),
+        cmocka_unit_test(test_abort_flag_null_is_inert),
+#ifndef _WIN32
+        cmocka_unit_test(test_abort_ends_a_transfer_that_is_waiting),
+#endif
     };
     int rc = cmocka_run_group_tests(tests, NULL, NULL);
     curl_global_cleanup();

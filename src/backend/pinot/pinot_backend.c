@@ -35,6 +35,7 @@ static int http(pinot_conn_t *conn, const char *url, const char *post_body,
     curl_easy_reset(curl);
     argus_curl_apply_baseline(curl);
     apply_curl(conn, curl);
+    argus_curl_apply_abort(curl, &conn->abort);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     if (post_body) {
         curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -377,10 +378,22 @@ static void pinot_close_operation(argus_backend_conn_t conn,
 /* Execution is synchronous: by the time SQLCancel can reach this the query
  * has already completed, and cancelling a finished operation is a no-op
  * success per ODBC. Pinot has no mid-flight cancel API for broker queries. */
+/* The query runs inside one synchronous POST, so by the time a cancel can
+ * reach a finished operation there is nothing left to cancel. A cancel
+ * raised WHILE that POST is on the wire does not come here: SQLCancel
+ * raises the connection's abort flag (pinot_abort_flag) and the transfer
+ * abandons itself. The broker has no cancel a client could address to a
+ * query it has not yet been told the id of. */
 static int pinot_cancel(argus_backend_conn_t conn, argus_backend_op_t op)
 {
     (void)conn; (void)op;
     return 0;
+}
+
+static struct argus_http_abort *pinot_abort_flag(argus_backend_conn_t raw)
+{
+    pinot_conn_t *conn = (pinot_conn_t *)raw;
+    return conn ? &conn->abort : NULL;
 }
 
 /* ── Metadata + fetch ────────────────────────────────────────── */
@@ -632,6 +645,7 @@ static const argus_backend_caps_t pinot_caps = {
 static const argus_backend_t pinot_backend = {
     .name                  = "pinot",
     .caps                  = &pinot_caps,
+    .abort_flag            = pinot_abort_flag,
     .connect               = pinot_connect,
     .disconnect            = pinot_disconnect,
     .is_alive              = pinot_is_alive,

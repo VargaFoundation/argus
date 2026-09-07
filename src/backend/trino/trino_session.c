@@ -62,6 +62,10 @@ static void trino_apply_curl_settings(trino_conn_t *conn, CURL *curl,
                                       bool with_credentials)
 {
     argus_curl_apply_baseline(curl);
+    /* Only the connection's own handle carries a query; the token fetches
+     * use handles of their own and are not what a cancel is aimed at. */
+    if (curl == conn->curl)
+        argus_curl_apply_abort(curl, &conn->abort);
 
     /* SSL/TLS settings */
     if (conn->ssl_enabled) {
@@ -115,6 +119,12 @@ static void trino_apply_curl_settings(trino_conn_t *conn, CURL *curl,
     }
 }
 
+
+struct argus_http_abort *trino_abort_flag(argus_backend_conn_t raw)
+{
+    trino_conn_t *conn = (trino_conn_t *)raw;
+    return conn ? &conn->abort : NULL;
+}
 
 /* ── CURL header callback: the session state the server sets ──── */
 

@@ -79,6 +79,8 @@ bool trino_get_last_error(argus_backend_conn_t conn, char *buf, size_t buflen);
 
 bool trino_get_server_version(argus_backend_conn_t conn, char *buf, size_t buflen);
 
+struct argus_http_abort *trino_abort_flag(argus_backend_conn_t conn);
+
 /* Trino backend vtable */
 /* Only the display name: everything else in this descriptor is left zero,
  * which means exactly the answers SQLGetInfo gave before capabilities
@@ -109,6 +111,7 @@ static const argus_backend_t trino_backend = {
     .get_last_error        = trino_get_last_error,
     .get_server_version    = trino_get_server_version,
     .caps                  = &trino_caps,
+    .abort_flag            = trino_abort_flag,
 };
 
 const argus_backend_t *argus_trino_backend_get(void)

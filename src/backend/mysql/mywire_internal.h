@@ -20,9 +20,30 @@
  * statement is "finished" as soon as execute() returns.
  */
 
+/* Everything needed to open a session to the same server the same way:
+ * kept so a cancel can open a second one. The wire protocol has no
+ * out-of-band cancel; the only way to stop a statement is KILL QUERY <id>
+ * from another session, and the session that is blocked cannot send it. */
+typedef struct mywire_params {
+    char        *host;
+    unsigned     port;
+    char        *user;
+    char        *password;        /* zeroed before it is freed */
+    char        *database;
+    unsigned     connect_timeout; /* seconds, 0 = library default */
+    unsigned     socket_timeout;  /* seconds, 0 = none */
+    bool         ssl_enabled;
+    bool         ssl_verify;
+    char        *ssl_key_file;
+    char        *ssl_cert_file;
+    char        *ssl_ca_file;
+} mywire_params_t;
+
 typedef struct mywire_conn {
-    MYSQL *mysql;
-    char  *database;
+    MYSQL          *mysql;
+    char           *database;
+    mywire_params_t params;
+    unsigned long   thread_id;    /* the server's id for `mysql`: KILL QUERY names it */
 } mywire_conn_t;
 
 /* One executed statement plus its (optional) buffered result set. */

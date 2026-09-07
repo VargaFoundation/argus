@@ -9,6 +9,98 @@
 
 /* ── Connection lifecycle ────────────────────────────────────── */
 
+static void params_free(mywire_params_t *p)
+{
+    if (p->password) {
+        volatile char *v = (volatile char *)p->password;
+        for (size_t i = 0; v[i]; i++) v[i] = 0;
+    }
+    free(p->host); free(p->user); free(p->password); free(p->database);
+    free(p->ssl_key_file); free(p->ssl_cert_file); free(p->ssl_ca_file);
+    memset(p, 0, sizeof(*p));
+}
+
+static char *dup_or_null(const char *s)
+{
+    return (s && *s) ? strdup(s) : NULL;
+}
+
+/* One session to the server described by `p`. On failure `err` (when
+ * given) receives the library's own message and NULL is returned. This is
+ * the whole of how a session is opened, so the one a cancel opens is the
+ * same session the query runs on -- same TLS, same timeouts, same account.
+ */
+static MYSQL *mywire_open(const mywire_params_t *p, char *err, size_t errlen)
+{
+    MYSQL *m = mysql_init(NULL);
+    if (!m) {
+        if (err) snprintf(err, errlen, "mysql_init failed");
+        return NULL;
+    }
+
+    /* Full Unicode over the wire. */
+    mysql_options(m, MYSQL_SET_CHARSET_NAME, "utf8mb4");
+
+    /* Always use TCP: an ODBC HOST means a network host, even when it is
+     * "localhost" (libmariadb would otherwise default to a local unix socket,
+     * which does not exist when the server is remote or in a container). */
+    {
+        unsigned int proto = MYSQL_PROTOCOL_TCP;
+        mysql_options(m, MYSQL_OPT_PROTOCOL, &proto);
+    }
+
+    if (p->connect_timeout > 0) {
+        unsigned int t = p->connect_timeout;
+        mysql_options(m, MYSQL_OPT_CONNECT_TIMEOUT, &t);
+    }
+
+    /*
+     * Without these, a server that accepts the connection and then stops
+     * answering hangs the calling thread forever: MYSQL_OPT_CONNECT_TIMEOUT
+     * only covers the handshake. SOCKETTIMEOUT (and SQL_ATTR_CONNECTION_TIMEOUT
+     * through it) is what an application asks with.
+     */
+    if (p->socket_timeout > 0) {
+        unsigned int t = p->socket_timeout;
+        mysql_options(m, MYSQL_OPT_READ_TIMEOUT, &t);
+        mysql_options(m, MYSQL_OPT_WRITE_TIMEOUT, &t);
+    }
+
+    /* SSL/TLS, driven by the same DBC attributes as the other backends.
+     * SSL=0 must be honoured explicitly. libmariadb >= 3.4 negotiates TLS
+     * whenever the server offers it, so without MYSQL_OPT_SSL_ENFORCE=0 a
+     * plaintext-only server (ClickHouse :9004, a default StarRocks/Doris FE)
+     * is unreachable even with SSL=0. ENFORCE=0 alone is not enough either:
+     * libmariadb's my_auth.c re-enables use_ssl unless server-cert
+     * verification is also turned off, so a plaintext handshake still fails
+     * with "SSL is required, but the server does not support it". Clear both. */
+    {
+        my_bool enforce = p->ssl_enabled ? 1 : 0;
+        my_bool verify = 0;
+        if (p->ssl_enabled) {
+            mysql_ssl_set(m, p->ssl_key_file, p->ssl_cert_file,
+                          p->ssl_ca_file, NULL, NULL);
+            verify = p->ssl_verify ? 1 : 0;
+        }
+        mysql_options(m, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify);
+        mysql_options(m, MYSQL_OPT_SSL_ENFORCE, &enforce);
+    }
+
+    if (!mysql_real_connect(m, p->host, p->user, p->password,
+                            p->database, p->port ? p->port : 3306,
+                            NULL, 0)) {
+        /* Surface the real driver error (auth failed, TLS required, unknown
+         * database, ...) before the handle is closed. */
+        if (err) {
+            const char *e = mysql_error(m);
+            snprintf(err, errlen, "%s", (e && *e) ? e : "connection failed");
+        }
+        mysql_close(m);
+        return NULL;
+    }
+    return m;
+}
+
 static int mywire_connect(argus_dbc_t *dbc,
                           const char *host, int port,
                           const char *username, const char *password,
@@ -22,78 +114,39 @@ static int mywire_connect(argus_dbc_t *dbc,
     mywire_conn_t *conn = calloc(1, sizeof(*conn));
     if (!conn) return -1;
 
-    conn->mysql = mysql_init(NULL);
+    mywire_params_t *p = &conn->params;
+    p->host     = dup_or_null(host);
+    p->port     = port > 0 ? (unsigned)port : 3306;
+    p->user     = dup_or_null(username);
+    p->password = dup_or_null(password);
+    p->database = dup_or_null(database);
+    if (dbc) {
+        if (dbc->connect_timeout_sec > 0)
+            p->connect_timeout = (unsigned)dbc->connect_timeout_sec;
+        if (dbc->socket_timeout_sec > 0)
+            p->socket_timeout = (unsigned)dbc->socket_timeout_sec;
+        p->ssl_enabled   = dbc->ssl_enabled;
+        p->ssl_verify    = dbc->ssl_verify;
+        p->ssl_key_file  = dup_or_null(dbc->ssl_key_file);
+        p->ssl_cert_file = dup_or_null(dbc->ssl_cert_file);
+        p->ssl_ca_file   = dup_or_null(dbc->ssl_ca_file);
+    }
+
+    char err[400];
+    conn->mysql = mywire_open(p, err, sizeof(err));
     if (!conn->mysql) {
-        free(conn);
-        return -1;
-    }
-
-    /* Full Unicode over the wire. */
-    mysql_options(conn->mysql, MYSQL_SET_CHARSET_NAME, "utf8mb4");
-
-    /* Always use TCP: an ODBC HOST means a network host, even when it is
-     * "localhost" (libmariadb would otherwise default to a local unix socket,
-     * which does not exist when the server is remote or in a container). */
-    {
-        unsigned int proto = MYSQL_PROTOCOL_TCP;
-        mysql_options(conn->mysql, MYSQL_OPT_PROTOCOL, &proto);
-    }
-
-    if (dbc && dbc->connect_timeout_sec > 0) {
-        unsigned int t = (unsigned int)dbc->connect_timeout_sec;
-        mysql_options(conn->mysql, MYSQL_OPT_CONNECT_TIMEOUT, &t);
-    }
-
-    /*
-     * Without these, a server that accepts the connection and then stops
-     * answering hangs the calling thread forever: MYSQL_OPT_CONNECT_TIMEOUT
-     * only covers the handshake. SOCKETTIMEOUT (and SQL_ATTR_CONNECTION_TIMEOUT
-     * through it) is what an application asks with.
-     */
-    if (dbc && dbc->socket_timeout_sec > 0) {
-        unsigned int t = (unsigned int)dbc->socket_timeout_sec;
-        mysql_options(conn->mysql, MYSQL_OPT_READ_TIMEOUT, &t);
-        mysql_options(conn->mysql, MYSQL_OPT_WRITE_TIMEOUT, &t);
-    }
-
-    /* SSL/TLS, driven by the same DBC attributes as the other backends.
-     * SSL=0 must be honoured explicitly. libmariadb >= 3.4 negotiates TLS
-     * whenever the server offers it, so without MYSQL_OPT_SSL_ENFORCE=0 a
-     * plaintext-only server (ClickHouse :9004, a default StarRocks/Doris FE)
-     * is unreachable even with SSL=0. ENFORCE=0 alone is not enough either:
-     * libmariadb's my_auth.c re-enables use_ssl unless server-cert
-     * verification is also turned off, so a plaintext handshake still fails
-     * with "SSL is required, but the server does not support it". Clear both. */
-    {
-        my_bool enforce = (dbc && dbc->ssl_enabled) ? 1 : 0;
-        my_bool verify = 0;
-        if (dbc && dbc->ssl_enabled) {
-            mysql_ssl_set(conn->mysql,
-                          dbc->ssl_key_file, dbc->ssl_cert_file,
-                          dbc->ssl_ca_file, NULL, NULL);
-            verify = dbc->ssl_verify ? 1 : 0;
-        }
-        mysql_options(conn->mysql, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &verify);
-        mysql_options(conn->mysql, MYSQL_OPT_SSL_ENFORCE, &enforce);
-    }
-
-    unsigned int p = (port > 0) ? (unsigned int)port : 3306;
-    if (!mysql_real_connect(conn->mysql, host, username, password,
-                            (database && *database) ? database : NULL,
-                            p, NULL, 0)) {
-        /* Surface the real driver error (auth failed, TLS required, unknown
-         * database, ...) before the handle is closed. */
         if (dbc) {
-            const char *e = mysql_error(conn->mysql);
             char msg[512];
-            snprintf(msg, sizeof(msg), "[Argus][MySQL-wire] %s",
-                     (e && *e) ? e : "connection failed");
+            snprintf(msg, sizeof(msg), "[Argus][MySQL-wire] %s", err);
             argus_set_error(&dbc->diag, "08001", msg, 0);
         }
-        mysql_close(conn->mysql);
+        params_free(p);
         free(conn);
         return -1;
     }
+    /* The id KILL QUERY names. Fixed for the life of the session (there is
+     * no auto-reconnect), and read from another thread by the cancel. */
+    conn->thread_id = mysql_thread_id(conn->mysql);
 
     if (database && *database) conn->database = strdup(database);
     *out_conn = conn;
@@ -105,6 +158,7 @@ static void mywire_disconnect(argus_backend_conn_t raw_conn)
     mywire_conn_t *conn = (mywire_conn_t *)raw_conn;
     if (!conn) return;
     if (conn->mysql) mysql_close(conn->mysql);
+    params_free(&conn->params);
     free(conn->database);
     free(conn);
 }
@@ -165,15 +219,31 @@ static void mywire_close_operation(argus_backend_conn_t conn,
     free(op);
 }
 
-static int mywire_cancel(argus_backend_conn_t conn, argus_backend_op_t op)
+/*
+ * With an operation: the statement ran and its result set was buffered, so
+ * there is nothing left to cancel and success is the truthful answer. With
+ * none, this is SQLCancel on another thread while mysql_real_query or
+ * mysql_store_result is blocked (cancel_from_any_thread): the wire protocol
+ * has no out-of-band cancel, so a second session is opened -- the same way,
+ * to the same server -- and asked to KILL QUERY the first one's id. The
+ * server then answers the blocked call with 1317 "Query execution was
+ * interrupted", the call returns -1, and the statement reports HY008.
+ * Opening a session costs a handshake; that is the price of stopping a
+ * query rather than waiting for it, and it is paid only on a cancel.
+ */
+static int mywire_cancel(argus_backend_conn_t raw_conn, argus_backend_op_t op)
 {
-    (void)conn;
-    (void)op;
-    /* Results are fetched synchronously: by the time SQLCancel can reach this
-     * the query has already completed, and cancelling a finished operation is
-     * a no-op success per ODBC. Mid-flight cancel would need KILL QUERY on a
-     * second wire connection; not implemented. */
-    return 0;
+    mywire_conn_t *conn = (mywire_conn_t *)raw_conn;
+    if (!conn || op) return 0;
+
+    char err[256];
+    MYSQL *m = mywire_open(&conn->params, err, sizeof(err));
+    if (!m) return -1;
+    char sql[64];
+    snprintf(sql, sizeof(sql), "KILL QUERY %lu", conn->thread_id);
+    int rc = mysql_real_query(m, sql, (unsigned long)strlen(sql)) == 0 ? 0 : -1;
+    mysql_close(m);
+    return rc;
 }
 
 /* ── Result metadata ─────────────────────────────────────────── */
@@ -408,6 +478,7 @@ static const argus_backend_caps_t mywire_caps = {
 static const argus_backend_t mywire_backend = {
     .name                  = "mysql",
     .caps                  = &mywire_caps,
+    .cancel_from_any_thread = true,
     .connect               = mywire_connect,
     .disconnect            = mywire_disconnect,
     .is_alive              = mywire_is_alive,

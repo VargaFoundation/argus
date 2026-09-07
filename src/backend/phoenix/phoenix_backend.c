@@ -82,9 +82,12 @@ static const argus_backend_caps_t phoenix_caps = {
                        "VIEW_STATEMENT",
 };
 
+struct argus_http_abort *phoenix_abort_flag(argus_backend_conn_t conn);
+
 static const argus_backend_t phoenix_backend = {
     .name                  = "phoenix",
     .caps                  = &phoenix_caps,
+    .abort_flag            = phoenix_abort_flag,
     .connect               = phoenix_connect,
     .disconnect            = phoenix_disconnect,
     .is_alive              = phoenix_is_alive,

@@ -477,6 +477,12 @@ void argus_metadata_cache_store(argus_dbc_t *dbc, argus_stmt_t *stmt,
                                  const char *a1, const char *a2,
                                  const char *a3, const char *a4);
 
+/* Lower the connection's in-flight abort flag (argus/http_abort.h), if the
+ * backend has one. Called where a cancel is consumed and where a new call
+ * begins, so a raise that outlived the call it was for cannot abandon the
+ * next one. */
+void argus_dbc_abort_clear(argus_dbc_t *dbc);
+
 /* The row limit actually in force: the application's, the guardrail's, or
  * the smaller of the two when both are set. 0 means unlimited. */
 static inline SQLULEN argus_stmt_effective_max_rows(const argus_stmt_t *stmt)

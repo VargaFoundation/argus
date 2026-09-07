@@ -84,13 +84,19 @@ The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery
 #### Query Management
 - **SQLCancel** from another thread never waits for the call it interrupts:
   the running `SQLExecDirect`/`SQLExecute`/`SQLFetch` (or the asynchronous
-  worker) returns `SQL_ERROR`/`HY008` at its next checkpoint and the
-  operation is closed. On the PostgreSQL family the cancel reaches the server
-  at once (libpq's out-of-band cancel request), so a blocked call returns
-  early. On the other backends it takes effect when the backend call in
-  progress returns; the server-side operation is then cancelled where the
-  backend has a cancel (Hive, Impala, Trino, Phoenix, BigQuery, Kudu) and
-  simply closed where it does not (Flight SQL, Pinot, Druid, MySQL-wire)
+  worker) returns `SQL_ERROR`/`HY008` and the operation is closed. How soon
+  depends on the transport. On every HTTP backend (Trino, Phoenix, Pinot,
+  Druid, BigQuery, Hive over HTTP) a request on the wire is abandoned where
+  it stands — libcurl polls the driver's abort flag about once a second — so
+  a query the server would hold for minutes comes back within about a
+  second. On the PostgreSQL family the cancel reaches the server at once
+  (libpq's out-of-band request); on MySQL-wire the driver opens a second
+  session and sends `KILL QUERY`, so a blocked `SELECT SLEEP(30)` returns in
+  about a second too. Over binary Thrift (Hive, Impala) and Flight SQL the
+  call in progress returns on its own first. The server-side query is then
+  stopped where the protocol allows it (Hive, Impala, Trino, Phoenix,
+  BigQuery, Kudu, Druid by its `sqlQueryId`, MySQL-wire) and simply dropped
+  where it does not (Flight SQL, Pinot).
 - **Application Name**: Identify queries with a custom app name (`X-Trino-Source`, `hive.query.source`)
 
 #### Fetch Optimization

@@ -39,6 +39,10 @@ typedef struct phoenix_conn {
     int                 connect_timeout_sec;
     int                 query_timeout_sec;
 
+    /* Raised by SQLCancel from another thread while a request is on the
+     * wire; every request on `curl` polls it (curl_common.h). */
+    argus_http_abort_t  abort;
+
     char                last_error[512]; /* most recent Avatica error message */
 } phoenix_conn_t;
 
@@ -86,6 +90,7 @@ int phoenix_http_post(phoenix_conn_t *conn, const char *url,
 /* Avatica RPC helper: send a JSON request and get parsed response */
 int phoenix_avatica_request(phoenix_conn_t *conn, const char *request_type,
                             JsonBuilder *params, JsonParser **out_parser);
+struct argus_http_abort *phoenix_abort_flag(argus_backend_conn_t conn);
 
 /* Query operations */
 int phoenix_cancel(argus_backend_conn_t conn, argus_backend_op_t op);

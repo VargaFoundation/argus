@@ -61,6 +61,24 @@ unsigned argus_http_retry_delay_ms(long http_code, int attempt,
     return ms > ARGUS_HTTP_RETRY_MAX_MS ? ARGUS_HTTP_RETRY_MAX_MS : ms;
 }
 
+/* Non-zero from a progress callback is how a transfer is told to stop. */
+static int abort_xferinfo_cb(void *clientp, curl_off_t dltotal,
+                             curl_off_t dlnow, curl_off_t ultotal,
+                             curl_off_t ulnow)
+{
+    (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+    return argus_http_abort_pending((const argus_http_abort_t *)clientp)
+           ? 1 : 0;
+}
+
+void argus_curl_apply_abort(CURL *curl, argus_http_abort_t *flag)
+{
+    if (!curl || !flag) return;
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, abort_xferinfo_cb);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, flag);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+}
+
 void argus_curl_apply_timeouts(CURL *curl, long connect_sec, long total_sec)
 {
     if (!curl) return;

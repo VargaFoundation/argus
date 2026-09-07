@@ -218,6 +218,15 @@ typedef struct argus_backend {
      * running call leaves this false and is cancelled when that call
      * returns on its own. */
     bool cancel_from_any_thread;
+
+    /* The connection's in-flight abort flag (argus/http_abort.h), or NULL
+     * for a backend without one. SQLCancel raises it from its own thread
+     * while a call on this connection is blocked on the wire, and the call
+     * returns at once instead of when the server is done; the ODBC layer
+     * clears it when the cancelled call reaches its checkpoint and before
+     * each new one. NULL → the call in progress returns on its own. Last
+     * so a positional initialiser leaves it unset. */
+    struct argus_http_abort *(*abort_flag)(argus_backend_conn_t conn);
 } argus_backend_t;
 
 /* Backend registry. The array is a handful of pointers, so the bound exists

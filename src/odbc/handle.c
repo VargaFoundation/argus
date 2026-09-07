@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "argus/handle.h"
+#include "argus/http_abort.h"
 #include "argus/odbc_api.h"
 #include "argus/compat.h"
 #include "argus/lifecycle.h"
@@ -356,12 +357,21 @@ void argus_stmt_request_cancel(argus_stmt_t *stmt)
     g_mutex_unlock(&stmt->cancel_lock);
 }
 
+void argus_dbc_abort_clear(argus_dbc_t *dbc)
+{
+    if (dbc && dbc->backend && dbc->backend->abort_flag)
+        argus_http_abort_clear(dbc->backend->abort_flag(dbc->backend_conn));
+}
+
 SQLRETURN argus_stmt_cancel_checkpoint(argus_stmt_t *stmt)
 {
     g_mutex_lock(&stmt->cancel_lock);
     bool requested = stmt->cancel_requested;
     stmt->cancel_requested = false;
     g_mutex_unlock(&stmt->cancel_lock);
+    /* The wire-level abort raised with the request, if any, is spent: the
+     * call it was for is at this checkpoint. */
+    argus_dbc_abort_clear(stmt->dbc);
     if (!requested) return SQL_SUCCESS;
 
     /* This thread owns the operation, so the backend's cancel is safe to
@@ -397,6 +407,9 @@ void argus_stmt_close_cursor(argus_stmt_t *stmt)
 void argus_stmt_reset(argus_stmt_t *stmt)
 {
     argus_stmt_close_cursor(stmt);
+    /* A new call begins on this connection: an abort raised for the one
+     * before it must not abandon this one. */
+    argus_dbc_abort_clear(stmt->dbc);
 
     free(stmt->query);
     stmt->query    = NULL;

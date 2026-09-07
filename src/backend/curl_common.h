@@ -15,6 +15,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "argus/http_abort.h"
+
 /*
  * The default ceiling on one response body. Every backend accumulated the
  * body with an unbounded realloc, so a server (or anything that could answer
@@ -62,6 +64,16 @@ void argus_curl_apply_baseline(CURL *curl);
  * SQL_ATTR_LOGIN_TIMEOUT and SQL_ATTR_QUERY_TIMEOUT are asking for.
  */
 void argus_curl_apply_timeouts(CURL *curl, long connect_sec, long total_sec);
+
+/*
+ * Make the transfer on `curl` abandon itself once `flag` is raised: libcurl
+ * polls the progress callback about once a second while it waits, and a
+ * raised flag turns the transfer into CURLE_ABORTED_BY_CALLBACK. Apply
+ * after curl_easy_reset(), on every request, with the connection's flag
+ * (argus/http_abort.h) -- that is what lets SQLCancel from another thread
+ * end a query that would otherwise run to the server's completion.
+ */
+void argus_curl_apply_abort(CURL *curl, argus_http_abort_t *flag);
 
 /*
  * How long to wait before retrying a request that came back with

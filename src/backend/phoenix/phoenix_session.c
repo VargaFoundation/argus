@@ -71,6 +71,7 @@ int phoenix_http_post(phoenix_conn_t *conn, const char *url,
 
     curl_easy_reset(curl);
     phoenix_apply_curl_settings(conn, curl);
+    argus_curl_apply_abort(curl, &conn->abort);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_POST, 1L);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
@@ -91,6 +92,12 @@ int phoenix_http_post(phoenix_conn_t *conn, const char *url,
         return -1;
 
     return 0;
+}
+
+struct argus_http_abort *phoenix_abort_flag(argus_backend_conn_t raw)
+{
+    phoenix_conn_t *conn = (phoenix_conn_t *)raw;
+    return conn ? &conn->abort : NULL;
 }
 
 /* ── Avatica RPC helper ──────────────────────────────────────── */

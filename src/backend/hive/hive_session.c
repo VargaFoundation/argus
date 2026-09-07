@@ -322,6 +322,21 @@ bool hive_is_alive(argus_backend_conn_t raw_conn)
     return thrift_transport_is_open(conn->transport);
 }
 
+/* The in-flight abort flag: only the HTTP transport has one. Over binary
+ * Thrift a blocked call returns on its own and the server-side
+ * CancelOperation follows on the calling thread, as before. */
+struct argus_http_abort *hive_abort_flag(argus_backend_conn_t raw_conn)
+{
+    hive_conn_t *conn = (hive_conn_t *)raw_conn;
+#ifdef ARGUS_HAS_CURL
+    if (conn && conn->http_mode && conn->transport)
+        return &THRIFT_HTTP_TRANSPORT(conn->transport)->abort;
+#else
+    (void)conn;
+#endif
+    return NULL;
+}
+
 /* ── Disconnect from HiveServer2 ─────────────────────────────── */
 
 void hive_disconnect(argus_backend_conn_t raw_conn)

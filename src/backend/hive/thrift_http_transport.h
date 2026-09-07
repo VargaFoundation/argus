@@ -5,6 +5,7 @@
 #include <glib-object.h>
 #include <thrift/c_glib/transport/thrift_transport.h>
 #include <curl/curl.h>
+#include "argus/http_abort.h"
 
 G_BEGIN_DECLS
 
@@ -41,6 +42,9 @@ struct _ThriftHttpTransport
 
     /* Runtime state */
     CURL       *curl;
+    /* Raised by SQLCancel from another thread while a POST is on the wire;
+     * installed once on `curl` at open (curl_common.h). */
+    argus_http_abort_t abort;
     GByteArray *write_buf;
     GByteArray *read_buf;
     gsize       read_pos;

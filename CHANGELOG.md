@@ -56,6 +56,35 @@ All notable changes to the Argus ODBC Driver project.
   `cancel_from_any_thread` vtable flag), so a blocked call returns early;
   the other backends are cancelled when their call returns. The README
   paragraph on `SQLCancel` now describes what each backend actually does.
+- **A cancel no longer waits for the HTTP request in flight.** On every
+  HTTP backend (Trino, Phoenix, Pinot, Druid, BigQuery, Hive over HTTP) the
+  cancel took effect only when `curl_easy_perform` returned — for a
+  synchronous engine such as Druid or Pinot, when the server was done with
+  the whole query. `SQLCancel` now raises the connection's abort flag
+  (`argus/http_abort.h`) and libcurl's progress callback, polled about once
+  a second, turns the transfer into `CURLE_ABORTED_BY_CALLBACK`; the call
+  reports `HY008` at the checkpoint it then reaches at once. The flag is
+  exposed through the new `abort_flag` vtable member, raised only for a
+  running call, and lowered by that call's checkpoint, by the next execute
+  and by the reset every catalog function begins with, so a raise that
+  outlived its call cannot abandon the next one. `test_curl_common` proves
+  the primitive against a server that never answers (raised at 300 ms, the
+  transfer ends at ~1000 ms); `test_cancel` proves the ODBC-layer raising
+  and lowering.
+- **Druid's `cancel` and Pinot's returned success without doing anything.**
+  Druid now names every query with a client-chosen `sqlQueryId`, so a
+  cancel from another thread can `DELETE /druid/v2/sql/{id}` on a handle of
+  its own while the POST is being abandoned; Pinot's broker offers no cancel
+  a client could address to a query whose id it has not yet been told, so
+  there the abort of the transfer is the whole of it, and the comment says
+  so instead of the function claiming otherwise.
+- **MySQL-wire could not cancel at all** — the protocol has no out-of-band
+  cancel, and the session that is blocked cannot send anything. The backend
+  now opens a second session the same way (same TLS, timeouts and account)
+  and sends `KILL QUERY <id>` for the first one's thread id; the server
+  answers the blocked call with 1317 and the statement reports `HY008`.
+  `test_mysql_query` shows `SELECT SLEEP(30)` returning within a few seconds
+  of a cancel from another thread.
 
 ### Fixed: parameter markers inside string literals
 - **A backslash-escaped quote ended a literal** for the marker scanner and

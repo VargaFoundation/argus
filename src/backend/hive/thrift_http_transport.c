@@ -88,6 +88,7 @@ thrift_http_transport_open_impl(ThriftTransport *transport, GError **error)
 
     /* Configure persistent curl settings */
     argus_curl_apply_baseline(self->curl);
+    argus_curl_apply_abort(self->curl, &self->abort);
     curl_easy_setopt(self->curl, CURLOPT_URL, self->url);
     curl_easy_setopt(self->curl, CURLOPT_POST, 1L);
     curl_easy_setopt(self->curl, CURLOPT_HTTPHEADER, self->headers);

@@ -63,6 +63,10 @@ typedef struct bq_conn {
     int                query_timeout_sec;
     int                fetch_buffer_size;
 
+    /* Raised by SQLCancel from another thread while a request is on the
+     * wire; every request on `curl` polls it (curl_common.h). */
+    argus_http_abort_t abort;
+
     char               last_error[1024];
 } bq_conn_t;
 

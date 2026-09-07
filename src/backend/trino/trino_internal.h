@@ -20,6 +20,9 @@ typedef enum {
 /* Trino connection state */
 typedef struct trino_conn {
     CURL               *curl;
+    /* Raised by SQLCancel from another thread while a request is on the
+     * wire; every request on `curl` polls it (curl_common.h). */
+    argus_http_abort_t  abort;
     char               *base_url;       /* e.g. "http://host:port" or "https://..." */
     char               *user;
     bool                user_explicit;  /* UID given (vs the "argus" default) */

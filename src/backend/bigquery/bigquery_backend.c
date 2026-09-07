@@ -39,6 +39,7 @@ int bq_http(bq_conn_t *conn, const char *url, const char *post_body,
     CURL *curl = conn->curl;
     curl_easy_reset(curl);
     argus_curl_apply_baseline(curl);
+    argus_curl_apply_abort(curl, &conn->abort);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, conn->headers);
     bq_apply_tls(conn, curl);
@@ -654,6 +655,12 @@ static void bq_close_operation(argus_backend_conn_t conn,
     bq_op_free((bq_op_t *)raw);
 }
 
+static struct argus_http_abort *bq_abort_flag(argus_backend_conn_t raw)
+{
+    bq_conn_t *conn = (bq_conn_t *)raw;
+    return conn ? &conn->abort : NULL;
+}
+
 static int bq_cancel(argus_backend_conn_t raw, argus_backend_op_t rop)
 {
     bq_conn_t *conn = (bq_conn_t *)raw;
@@ -1024,6 +1031,7 @@ static const argus_backend_caps_t bigquery_caps = {
 static const argus_backend_t bigquery_backend = {
     .name                  = "bigquery",
     .caps                  = &bigquery_caps,
+    .abort_flag            = bq_abort_flag,
     .connect               = bq_connect,
     .disconnect            = bq_disconnect,
     .is_alive              = bq_is_alive,

@@ -31,6 +31,10 @@ typedef struct pinot_conn {
     bool               ssl_verify;
     int                connect_timeout_sec;
 
+    /* Raised by SQLCancel from another thread while a request is on the
+     * wire; every request on `curl` polls it (curl_common.h). */
+    argus_http_abort_t abort;
+
     char               last_error[512];
 } pinot_conn_t;
 

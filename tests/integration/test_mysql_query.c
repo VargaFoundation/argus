@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <glib.h>
 
 /*
  * Integration tests: queries + catalog ops against a real MariaDB via the
@@ -182,6 +183,60 @@ static void test_error_message(void **state)
     SQLFreeHandle(SQL_HANDLE_STMT, s);
 }
 
+/* ── SQLCancel while the server is busy ─────────────────────── */
+
+typedef struct {
+    SQLHSTMT  stmt;
+    SQLRETURN ret;
+    gint64    elapsed_ms;
+} sleeping_call_t;
+
+static gpointer run_sleep(gpointer data)
+{
+    sleeping_call_t *c = data;
+    gint64 t0 = g_get_monotonic_time();
+    c->ret = SQLExecDirect(c->stmt, (SQLCHAR *)"SELECT SLEEP(30)", SQL_NTS);
+    c->elapsed_ms = (g_get_monotonic_time() - t0) / 1000;
+    return NULL;
+}
+
+/*
+ * The wire protocol has no out-of-band cancel, so the backend opens a second
+ * session and sends KILL QUERY for the first one's id. The proof is the
+ * clock: a statement the server will hold for 30 seconds comes back HY008
+ * within a few, from a cancel sent on another thread. Before this, SQLCancel
+ * returned SQL_SUCCESS and the call sat out the full 30 seconds.
+ */
+static void test_cancel_interrupts_a_sleeping_query(void **state)
+{
+    (void)state;
+    SQLHSTMT stmt;
+    assert_int_equal(SQLAllocHandle(SQL_HANDLE_STMT, g_dbc, &stmt), SQL_SUCCESS);
+
+    sleeping_call_t c = { .stmt = stmt };
+    GThread *t = g_thread_new("sleep", run_sleep, &c);
+    g_usleep(500 * 1000);                      /* let it reach the server */
+
+    assert_int_equal(SQLCancel(stmt), SQL_SUCCESS);
+    g_thread_join(t);
+
+    print_message("SELECT SLEEP(30) returned after %ld ms\n", (long)c.elapsed_ms);
+    assert_int_equal(c.ret, SQL_ERROR);
+    SQLCHAR st[6] = {0}, msg[256];
+    SQLINTEGER native = 0;
+    SQLSMALLINT len = 0;
+    assert_int_equal(SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, st, &native,
+                                   msg, sizeof(msg), &len), SQL_SUCCESS);
+    assert_string_equal((const char *)st, "HY008");
+    assert_true(c.elapsed_ms < 10000);
+
+    /* The session is intact: the next statement runs. */
+    assert_int_equal(SQLExecDirect(stmt, (SQLCHAR *)"SELECT 1", SQL_NTS),
+                     SQL_SUCCESS);
+    assert_int_equal(SQLFetch(stmt), SQL_SUCCESS);
+    SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -190,6 +245,7 @@ int main(void)
         cmocka_unit_test(test_primary_keys),
         cmocka_unit_test(test_tables),
         cmocka_unit_test(test_error_message),
+        cmocka_unit_test(test_cancel_interrupts_a_sleeping_query),
     };
     return cmocka_run_group_tests(tests, setup, teardown);
 }

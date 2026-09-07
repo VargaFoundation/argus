@@ -31,6 +31,16 @@ typedef struct druid_conn {
     bool               ssl_verify;
     int                connect_timeout_sec;
 
+    /* Raised by SQLCancel from another thread while a request is on the
+     * wire; every request on `curl` polls it (curl_common.h). */
+    argus_http_abort_t abort;
+
+    /* The sqlQueryId of the POST in flight, so a cancel from another thread
+     * can name it to DELETE /druid/v2/sql/{id}. Written by execute around
+     * its POST and read by cancel, under inflight_lock. */
+    GMutex             inflight_lock;
+    char              *inflight_id;
+
     char               last_error[512];
 } druid_conn_t;
 

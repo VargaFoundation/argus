@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "argus/handle.h"
+#include "argus/http_abort.h"
 #include "argus/odbc_api.h"
 #include "argus/log.h"
 #include "argus/dialect.h"
@@ -897,6 +898,7 @@ static void discard_stale_cancel(argus_stmt_t *stmt)
     g_mutex_lock(&stmt->cancel_lock);
     stmt->cancel_requested = false;
     g_mutex_unlock(&stmt->cancel_lock);
+    argus_dbc_abort_clear(stmt->dbc);
 }
 
 /* ── Internal: execute or poll async ─────────────────────────── */
@@ -1372,8 +1374,15 @@ SQLRETURN SQL_API SQLNativeSql(
 static void interrupt_running_call(argus_stmt_t *stmt)
 {
     argus_dbc_t *dbc = stmt->dbc;
-    if (dbc && dbc->backend && dbc->backend->cancel &&
-        dbc->backend->cancel_from_any_thread)
+    if (!dbc || !dbc->backend) return;
+    /* A request on the wire is abandoned where it stands: the transfer
+     * comes back at once instead of when the server is done, and the call
+     * finds the cancel at the checkpoint it then reaches. Raised after the
+     * statement's own flag, which is the one the checkpoint consumes. */
+    if (dbc->backend->abort_flag)
+        argus_http_abort_request(dbc->backend->abort_flag(dbc->backend_conn));
+    /* And the server is told, where the backend can reach it from here. */
+    if (dbc->backend->cancel && dbc->backend->cancel_from_any_thread)
         dbc->backend->cancel(dbc->backend_conn, NULL);
 }
 

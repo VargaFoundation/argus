@@ -223,10 +223,14 @@ if(BUILD_INTEGRATION_TESTS)
             ${PROJECT_SOURCE_DIR}/include
             ${ODBC_INCLUDE_DIRS}
             ${CMOCKA_INCLUDE_DIRS}
+            ${GLIB2_INCLUDE_DIRS}
         )
+        # GLib for the tests that drive a call from a second thread
+        # (SQLCancel); the driver already depends on it.
         target_link_libraries(${name} PRIVATE
             argus_odbc
             ${CMOCKA_LIBRARIES}
+            ${GLIB2_LIBRARIES}
         )
         target_link_directories(${name} PRIVATE
             ${CMOCKA_LIBRARY_DIRS}
