@@ -70,6 +70,8 @@ bool impala_get_last_error(argus_backend_conn_t conn, char *buf, size_t buflen);
 bool impala_get_last_error_ex(argus_backend_conn_t conn, char sqlstate[6],
                               char *buf, size_t buflen);
 
+bool impala_get_server_version(argus_backend_conn_t conn, char *buf, size_t buflen);
+
 /* Impala backend vtable */
 /* Only the display name: everything else in this descriptor is left zero,
  * which means exactly the answers SQLGetInfo gave before capabilities
@@ -99,6 +101,7 @@ static const argus_backend_t impala_backend = {
     .get_last_error        = impala_get_last_error,
     .get_last_error_ex     = impala_get_last_error_ex,
     .caps                  = &impala_caps,
+    .get_server_version    = impala_get_server_version,
 };
 
 const argus_backend_t *argus_impala_backend_get(void)

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "impala_internal.h"
+#include "../hs2_types.h"
 #include "argus/handle.h"
 #include "argus/error.h"
 #include "argus/log.h"
@@ -304,6 +305,27 @@ bool impala_is_alive(argus_backend_conn_t raw_conn)
 }
 
 /* ── Disconnect from Impala ──────────────────────────────────── */
+
+/* Backs SQLGetInfo(SQL_DBMS_VER): GetInfo(CLI_DBMS_VER) on the session,
+ * asked once and cached -- BI tools read it at most once per connection,
+ * and a probe at connect time would add a round trip to every pooled one.
+ * A server that does not answer leaves the driver reporting "unknown". */
+bool impala_get_server_version(argus_backend_conn_t raw_conn, char *buf, size_t buflen)
+{
+    impala_conn_t *conn = (impala_conn_t *)raw_conn;
+    if (!conn || !buf || buflen == 0) return false;
+    if (!conn->version_probed) {
+        conn->version_probed = true;
+        if (!argus_hs2_dbms_version(conn->client, conn->session_handle,
+                                    conn->server_version,
+                                    sizeof(conn->server_version)))
+            ARGUS_LOG_DEBUG("Impala: GetInfo(CLI_DBMS_VER) unavailable; "
+                            "SQL_DBMS_VER stays unknown");
+    }
+    if (!conn->server_version[0]) return false;
+    g_strlcpy(buf, conn->server_version, buflen);
+    return true;
+}
 
 void impala_disconnect(argus_backend_conn_t raw_conn)
 {

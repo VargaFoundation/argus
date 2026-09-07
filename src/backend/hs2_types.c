@@ -11,6 +11,7 @@
 
 #include <glib-object.h>
 #include "gen-c_glib/t_c_l_i_service_types.h"
+#include "gen-c_glib/t_c_l_i_service.h"
 
 SQLSMALLINT argus_hs2_type_to_sql_type(const char *type_name)
 {
@@ -156,4 +157,52 @@ void argus_hs2_describe_column(TColumnDesc *cd, argus_column_desc_t *col)
     default:
         break;
     }
+}
+
+bool argus_hs2_dbms_version(struct _TCLIServiceIf *client,
+                            struct _TSessionHandle *session,
+                            char *out, size_t outlen)
+{
+    if (!client || !session || !out || outlen == 0) return false;
+    out[0] = '\0';
+
+    TGetInfoReq *req = g_object_new(TYPE_T_GET_INFO_REQ,
+                                    "sessionHandle", session,
+                                    "infoType", T_GET_INFO_TYPE_CLI_DBMS_VER,
+                                    NULL);
+    TGetInfoResp *resp = NULL;
+    GError *error = NULL;
+    gboolean ok = t_c_l_i_service_client_get_info(client, &resp, req, &error);
+    g_object_unref(req);
+    if (error) g_error_free(error);
+    if (!ok || !resp) {
+        if (resp) g_object_unref(resp);
+        return false;
+    }
+
+    bool have = false;
+    TStatus *status = NULL;
+    g_object_get(resp, "status", &status, NULL);
+    TStatusCode code = T_STATUS_CODE_ERROR_STATUS;
+    if (status) {
+        g_object_get(status, "statusCode", &code, NULL);
+        g_object_unref(status);
+    }
+    if (code == T_STATUS_CODE_SUCCESS_STATUS ||
+        code == T_STATUS_CODE_SUCCESS_WITH_INFO_STATUS) {
+        TGetInfoValue *val = NULL;
+        g_object_get(resp, "infoValue", &val, NULL);
+        if (val) {
+            gchar *sv = NULL;
+            g_object_get(val, "stringValue", &sv, NULL);
+            if (sv && *sv) {
+                g_strlcpy(out, sv, outlen);
+                have = true;
+            }
+            g_free(sv);
+            g_object_unref(val);
+        }
+    }
+    g_object_unref(resp);
+    return have;
 }

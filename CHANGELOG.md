@@ -94,6 +94,19 @@ All notable changes to the Argus ODBC Driver project.
   one dataset (any answer but 401 is a live connection), Flight SQL makes
   the same `GetCatalogs` call connect validates with. Druid and Pinot had
   been corrected this way in August; these were the two left.
+- **`SQL_DBMS_VER` was "00.00.0000" on Hive, Impala, Druid and Pinot.** Only
+  Trino, MySQL-wire and the PostgreSQL family had a server-version hook, so
+  a BI tool reading the version to pick a dialect saw nothing on the other
+  engines. Hive and Impala now ask the session with `GetInfo(CLI_DBMS_VER)`
+  (one shared helper for the HiveServer2 family), Druid reads the router's
+  `GET /status`, Pinot the controller's `GET /version` -- each once per
+  connection, cached. The `##.##.####` prefix is now taken from the first
+  run of the string that reads as a version, wherever the server put it:
+  Impala says "impalad version 4.4.0-RELEASE ...", which used to parse as
+  zeros. Phoenix stays "unknown" -- Avatica's `databaseProperties` carries
+  function lists and keywords, not the product version -- and BigQuery has
+  no version to report. The four integration tests assert the value is no
+  longer "00.00.0000".
 
 ### Fixed: parameter markers inside string literals
 - **A backslash-escaped quote ended a literal** for the marker scanner and

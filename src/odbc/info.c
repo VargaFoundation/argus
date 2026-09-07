@@ -145,8 +145,19 @@ SQLRETURN SQL_API SQLGetInfo(
         if (dbc->connected && dbc->backend && dbc->backend->get_server_version &&
             dbc->backend->get_server_version(dbc->backend_conn, raw, sizeof(raw)) &&
             raw[0]) {
+            /* The ##.##.#### prefix is what applications parse, and the
+             * numbers are not always where the string starts: Impala says
+             * "impalad version 4.4.0-RELEASE ...". Take the first run that
+             * reads as a version. */
             unsigned major = 0, minor = 0, release = 0;
-            sscanf(raw, "%u.%u.%u", &major, &minor, &release);
+            const char *v = raw;
+            for (const char *q = raw; *q; q++) {
+                if (g_ascii_isdigit(*q) && (q == raw || !g_ascii_isalnum(q[-1]))) {
+                    unsigned a = 0, b = 0;
+                    if (sscanf(q, "%u.%u", &a, &b) == 2) { v = q; break; }
+                }
+            }
+            sscanf(v, "%u.%u.%u", &major, &minor, &release);
 
             char ver[192];
             snprintf(ver, sizeof(ver), "%02u.%02u.%04u %s",

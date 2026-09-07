@@ -10,6 +10,7 @@
 #include <cmocka.h>
 #include <sql.h>
 #include <sqlext.h>
+#include "druid_internal.h"
 
 SQLSMALLINT druid_type_to_sql_type(const char *t);
 SQLULEN     druid_type_column_size(SQLSMALLINT sql_type);
@@ -57,12 +58,30 @@ static void test_druid_column_size(void **state)
     assert_int_equal(druid_type_column_size(SQL_VARCHAR), 255);   /* default */
 }
 
+/* GET /status backs SQL_DBMS_VER; only its "version" is taken, and a
+ * document without one leaves the driver saying "unknown" rather than
+ * inventing something. */
+static void test_druid_status_version(void **state)
+{
+    (void)state;
+    char v[64];
+    assert_true(druid_parse_status_version(
+        "{\"version\":\"30.0.1\",\"modules\":[],\"memory\":{}}", v, sizeof(v)));
+    assert_string_equal(v, "30.0.1");
+    assert_false(druid_parse_status_version("{\"modules\":[]}", v, sizeof(v)));
+    assert_false(druid_parse_status_version("{\"version\":\"\"}", v, sizeof(v)));
+    assert_false(druid_parse_status_version("not json", v, sizeof(v)));
+    assert_false(druid_parse_status_version("[\"30.0.1\"]", v, sizeof(v)));
+    assert_false(druid_parse_status_version(NULL, v, sizeof(v)));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_druid_basic_types),
         cmocka_unit_test(test_druid_varchar_prefix_and_fallback),
         cmocka_unit_test(test_druid_column_size),
+        cmocka_unit_test(test_druid_status_version),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

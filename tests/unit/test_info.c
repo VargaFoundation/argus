@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <setjmp.h>
 #include <cmocka.h>
+#include <glib.h>
+#include <stdint.h>
 #include <sql.h>
 #include <sqlext.h>
 #include <string.h>
@@ -307,6 +309,65 @@ static void test_database_name(void **state)
 
 /* ── Main ─────────────────────────────────────────────────────── */
 
+/* ── Test: SQL_DBMS_VER numbers from a backend's raw string ─── */
+
+static const char *g_fake_version;
+
+static bool fake_server_version(argus_backend_conn_t conn, char *buf, size_t n)
+{
+    (void)conn;
+    if (!g_fake_version || !*g_fake_version) return false;
+    g_strlcpy(buf, g_fake_version, n);
+    return true;
+}
+
+static const argus_backend_t g_versioned_backend = {
+    .name = "fake",
+    .get_server_version = fake_server_version,
+};
+
+/* The ##.##.#### prefix applications parse is taken from the first run of
+ * the string that reads as a version -- Impala answers "impalad version
+ * 4.4.0-RELEASE ...", which used to parse as 00.00.0000 -- and the server's
+ * own string follows it unchanged. A backend that cannot answer leaves the
+ * value at 00.00.0000 rather than a version the driver invented. */
+static void test_dbms_ver_prefix_is_found_wherever_the_server_put_it(void **state)
+{
+    (void)state;
+    argus_dbc_t *dbc = create_test_dbc();
+    dbc->backend = &g_versioned_backend;
+    dbc->backend_conn = (argus_backend_conn_t)(uintptr_t)0xBEEF;
+    dbc->connected = true;
+
+    SQLCHAR buf[256];
+
+    g_fake_version = "3.1.3";
+    assert_int_equal(SQLGetInfo((SQLHDBC)dbc, SQL_DBMS_VER, buf, sizeof(buf),
+                                NULL), SQL_SUCCESS);
+    assert_string_equal((const char *)buf, "03.01.0003 3.1.3");
+
+    g_fake_version = "impalad version 4.4.0-RELEASE RELEASE (build 1a2b)";
+    assert_int_equal(SQLGetInfo((SQLHDBC)dbc, SQL_DBMS_VER, buf, sizeof(buf),
+                                NULL), SQL_SUCCESS);
+    assert_string_equal((const char *)buf,
+        "04.04.0000 impalad version 4.4.0-RELEASE RELEASE (build 1a2b)");
+
+    /* Trino's bare "467" has no dots, so the scan finds nothing better and
+     * the string is read from its start, as it always was. */
+    g_fake_version = "467";
+    assert_int_equal(SQLGetInfo((SQLHDBC)dbc, SQL_DBMS_VER, buf, sizeof(buf),
+                                NULL), SQL_SUCCESS);
+    assert_string_equal((const char *)buf, "467.00.0000 467");
+
+    g_fake_version = "";
+    assert_int_equal(SQLGetInfo((SQLHDBC)dbc, SQL_DBMS_VER, buf, sizeof(buf),
+                                NULL), SQL_SUCCESS);
+    assert_string_equal((const char *)buf, "00.00.0000");
+
+    dbc->connected = false;
+    free_test_dbc(dbc);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -321,6 +382,7 @@ int main(void)
         cmocka_unit_test(test_get_functions_unsupported),
         cmocka_unit_test(test_odbc_ver),
         cmocka_unit_test(test_database_name),
+        cmocka_unit_test(test_dbms_ver_prefix_is_found_wherever_the_server_put_it),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

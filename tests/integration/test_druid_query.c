@@ -201,6 +201,24 @@ static void test_catalog_functions(void **state)
     disconnect(env, dbc);
 }
 
+
+/* SQL_DBMS_VER used to be "00.00.0000" here: the backend had no server
+ * version hook. It is the router's GET /status "version" now. */
+static void test_dbms_ver_is_real(void **state)
+{
+    (void)state;
+    SQLHENV env = SQL_NULL_HENV;
+    SQLHDBC dbc = connect_druid(&env);
+    SQLCHAR ver[192] = {0};
+    SQLSMALLINT len = 0;
+    assert_int_equal(SQLGetInfo(dbc, SQL_DBMS_VER, ver, sizeof(ver), &len),
+                     SQL_SUCCESS);
+    print_message("SQL_DBMS_VER = %s\n", (const char *)ver);
+    assert_true(len > 0);
+    assert_true(strncmp((const char *)ver, "00.00.0000", 10) != 0);
+    disconnect(env, dbc);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -209,6 +227,7 @@ int main(void)
         cmocka_unit_test(test_scalar_query),
         cmocka_unit_test(test_null_is_null),
         cmocka_unit_test(test_catalog_functions),
+        cmocka_unit_test(test_dbms_ver_is_real),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

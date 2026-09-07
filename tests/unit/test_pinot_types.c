@@ -9,6 +9,7 @@
 #include <cmocka.h>
 #include <sql.h>
 #include <sqlext.h>
+#include "pinot_internal.h"
 
 SQLSMALLINT pinot_type_to_sql_type(const char *t);
 SQLULEN     pinot_type_column_size(SQLSMALLINT sql_type);
@@ -50,12 +51,33 @@ static void test_pinot_column_size(void **state)
     assert_int_equal(pinot_type_column_size(SQL_VARCHAR), 255);   /* default */
 }
 
+/* The controller's GET /version is a map of component to version; the
+ * broker's entry is preferred, any version-looking value is accepted, and a
+ * document with none leaves SQL_DBMS_VER "unknown". */
+static void test_pinot_version_document(void **state)
+{
+    (void)state;
+    char v[64];
+    assert_true(pinot_parse_version_json(
+        "{\"pinot-common\":\"1.2.0\",\"pinot-broker\":\"1.2.0-SNAPSHOT\"}",
+        v, sizeof(v)));
+    assert_string_equal(v, "1.2.0-SNAPSHOT");
+    assert_true(pinot_parse_version_json("{\"something-else\":\"0.12.1\"}",
+                                         v, sizeof(v)));
+    assert_string_equal(v, "0.12.1");
+    assert_false(pinot_parse_version_json("{\"pinot-broker\":\"unknown\"}",
+                                          v, sizeof(v)));
+    assert_false(pinot_parse_version_json("{}", v, sizeof(v)));
+    assert_false(pinot_parse_version_json("garbage", v, sizeof(v)));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_pinot_basic_types),
         cmocka_unit_test(test_pinot_multivalue_and_fallback),
         cmocka_unit_test(test_pinot_column_size),
+        cmocka_unit_test(test_pinot_version_document),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

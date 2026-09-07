@@ -35,6 +35,9 @@ typedef struct pinot_conn {
      * wire; every request on `curl` polls it (curl_common.h). */
     argus_http_abort_t abort;
 
+    char               server_version[64];  /* controller GET /version, cached */
+    bool               version_probed;
+
     char               last_error[512];
 } pinot_conn_t;
 
@@ -49,6 +52,11 @@ typedef struct pinot_op {
 typedef argus_http_buf_t pinot_response_t;
 
 /* pinot_types.c */
+/* The version in a controller GET /version document -- a map of component
+ * to version string, e.g. {"pinot-controller":"1.2.0", ...} -- or false.
+ * Pure, for the tests. */
+bool pinot_parse_version_json(const char *json, char *out, size_t outlen);
+
 SQLSMALLINT pinot_type_to_sql_type(const char *pinot_type);
 SQLULEN     pinot_type_column_size(SQLSMALLINT sql_type);
 SQLSMALLINT pinot_type_decimal_digits(SQLSMALLINT sql_type);

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "hive_internal.h"
+#include "../hs2_types.h"
 #include "argus/handle.h"
 #include "argus/error.h"
 #include "argus/log.h"
@@ -335,6 +336,27 @@ struct argus_http_abort *hive_abort_flag(argus_backend_conn_t raw_conn)
     (void)conn;
 #endif
     return NULL;
+}
+
+/* Backs SQLGetInfo(SQL_DBMS_VER): GetInfo(CLI_DBMS_VER) on the session,
+ * asked once and cached -- BI tools read it at most once per connection,
+ * and a probe at connect time would add a round trip to every pooled one.
+ * A server that does not answer leaves the driver reporting "unknown". */
+bool hive_get_server_version(argus_backend_conn_t raw_conn, char *buf, size_t buflen)
+{
+    hive_conn_t *conn = (hive_conn_t *)raw_conn;
+    if (!conn || !buf || buflen == 0) return false;
+    if (!conn->version_probed) {
+        conn->version_probed = true;
+        if (!argus_hs2_dbms_version(conn->client, conn->session_handle,
+                                    conn->server_version,
+                                    sizeof(conn->server_version)))
+            ARGUS_LOG_DEBUG("Hive: GetInfo(CLI_DBMS_VER) unavailable; "
+                            "SQL_DBMS_VER stays unknown");
+    }
+    if (!conn->server_version[0]) return false;
+    g_strlcpy(buf, conn->server_version, buflen);
+    return true;
 }
 
 /* ── Disconnect from HiveServer2 ─────────────────────────────── */

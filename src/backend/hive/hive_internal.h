@@ -29,6 +29,8 @@ typedef struct hive_conn {
     bool                    http_mode;      /* true when using HTTP transport */
     char                    last_error[512]; /* most recent server error message */
     char                    last_sqlstate[6]; /* the state the server named */
+    char                    server_version[128]; /* GetInfo(CLI_DBMS_VER), cached */
+    bool                    version_probed;      /* one attempt per connection */
 } hive_conn_t;
 
 /* Hive operation state */

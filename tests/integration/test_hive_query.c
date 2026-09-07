@@ -235,6 +235,22 @@ static void test_prepare_execute(void **state)
 
 /* ── Main ─────────────────────────────────────────────────────── */
 
+
+/* SQL_DBMS_VER used to be "00.00.0000" here: the backend had no server
+ * version hook. A BI tool that reads it to choose a dialect now gets the
+ * engine's own. */
+static void test_dbms_ver_is_real(void **state)
+{
+    (void)state;
+    SQLCHAR ver[192] = {0};
+    SQLSMALLINT len = 0;
+    assert_int_equal(SQLGetInfo(g_dbc, SQL_DBMS_VER, ver, sizeof(ver), &len),
+                     SQL_SUCCESS);
+    print_message("SQL_DBMS_VER = %s\n", (const char *)ver);
+    assert_true(len > 0);
+    assert_true(strncmp((const char *)ver, "00.00.0000", 10) != 0);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -242,6 +258,7 @@ int main(void)
         cmocka_unit_test(test_create_insert_select),
         cmocka_unit_test(test_tables),
         cmocka_unit_test(test_prepare_execute),
+        cmocka_unit_test(test_dbms_ver_is_real),
     };
     return cmocka_run_group_tests_name("hive_query", tests, setup, teardown);
 }

@@ -69,13 +69,13 @@ static void release(void)
 /* The connection's in-flight abort flag, as an HTTP backend keeps one, and
  * what it read at the start of the last execute / fetch: a raise that
  * outlived its call must have been lowered by the time the next begins. */
-static argus_http_abort_t g_abort;
+static argus_http_abort_t g_wire_abort;
 static gboolean g_pending_at_entry;
 
 static struct argus_http_abort *fake_abort_flag(argus_backend_conn_t conn)
 {
     (void)conn;
-    return &g_abort;
+    return &g_wire_abort;
 }
 
 static int fake_execute(argus_backend_conn_t conn, const char *query,
@@ -83,7 +83,7 @@ static int fake_execute(argus_backend_conn_t conn, const char *query,
 {
     (void)conn; (void)query;
     g_execute_calls++;
-    g_pending_at_entry = argus_http_abort_pending(&g_abort);
+    g_pending_at_entry = argus_http_abort_pending(&g_wire_abort);
     if (g_block_execute) block_here();
     if (g_fail_execute) return -1;
     g_open_ops++;
@@ -135,7 +135,7 @@ static int one_row(argus_backend_conn_t conn, argus_backend_op_t op_,
     columns[0].column_size = 16;
     *num_cols = 1;
     cache->num_cols = 1;
-    g_pending_at_entry = argus_http_abort_pending(&g_abort);
+    g_pending_at_entry = argus_http_abort_pending(&g_wire_abort);
     if (op->fetches == 0 && g_block_fetch) block_here();
     if (g_fail_fetch) return -1;
     if (op->fetches++ >= 3) {
@@ -222,7 +222,7 @@ static int setup(void **state)
     g_block_fetch = FALSE;
     g_in_call = FALSE;
     g_release = FALSE;
-    argus_http_abort_clear(&g_abort);
+    argus_http_abort_clear(&g_wire_abort);
     g_pending_at_entry = FALSE;
     *state = f;
     return 0;
@@ -533,18 +533,18 @@ static void test_cancel_raises_the_wire_abort_and_the_checkpoint_lowers_it(
     g_block_execute = TRUE;
     GThread *t = g_thread_new("exec", run_exec_direct, &c);
     wait_in_call();
-    assert_false(argus_http_abort_pending(&g_abort));   /* nothing yet */
+    assert_false(argus_http_abort_pending(&g_wire_abort));   /* nothing yet */
 
     assert_int_equal(SQLCancel((SQLHSTMT)f->stmt), SQL_SUCCESS);
     /* Raised while the execute is still held, from the cancelling thread. */
-    assert_true(argus_http_abort_pending(&g_abort));
+    assert_true(argus_http_abort_pending(&g_wire_abort));
 
     release();
     g_thread_join(t);
     assert_int_equal(c.ret, SQL_ERROR);
     expect_state(f->stmt, "HY008");
     /* Spent at the checkpoint that reported the cancel. */
-    assert_false(argus_http_abort_pending(&g_abort));
+    assert_false(argus_http_abort_pending(&g_wire_abort));
 
     /* And the next call starts clean. */
     g_block_execute = FALSE;
@@ -560,15 +560,15 @@ static void test_stale_wire_abort_is_lowered_before_the_next_call(void **state)
 {
     fixture_t *f = *state;
 
-    argus_http_abort_request(&g_abort);
+    argus_http_abort_request(&g_wire_abort);
     assert_int_equal(SQLExecDirect((SQLHSTMT)f->stmt, (SQLCHAR *)"SELECT 1",
                                    SQL_NTS), SQL_SUCCESS);
     assert_false(g_pending_at_entry);
 
-    argus_http_abort_request(&g_abort);
+    argus_http_abort_request(&g_wire_abort);
     assert_int_equal(SQLFetch((SQLHSTMT)f->stmt), SQL_SUCCESS);
     assert_false(g_pending_at_entry);
-    assert_false(argus_http_abort_pending(&g_abort));
+    assert_false(argus_http_abort_pending(&g_wire_abort));
 }
 
 /* SQLCancel with nothing running on the statement raises no wire abort:
@@ -580,7 +580,7 @@ static void test_idle_cancel_leaves_the_wire_alone(void **state)
     assert_int_equal(SQLExecDirect((SQLHSTMT)f->stmt, (SQLCHAR *)"SELECT 1",
                                    SQL_NTS), SQL_SUCCESS);
     assert_int_equal(SQLCancel((SQLHSTMT)f->stmt), SQL_SUCCESS);
-    assert_false(argus_http_abort_pending(&g_abort));
+    assert_false(argus_http_abort_pending(&g_wire_abort));
 }
 
 int main(void)

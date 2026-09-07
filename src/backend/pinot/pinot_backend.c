@@ -390,6 +390,75 @@ static int pinot_cancel(argus_backend_conn_t conn, argus_backend_op_t op)
     return 0;
 }
 
+bool pinot_parse_version_json(const char *json, char *out, size_t outlen)
+{
+    if (!json || !out || outlen == 0) return false;
+    out[0] = '\0';
+    JsonParser *p = json_parser_new();
+    bool have = false;
+    if (json_parser_load_from_data(p, json, -1, NULL)) {
+        JsonNode *root = json_parser_get_root(p);
+        if (root && JSON_NODE_HOLDS_OBJECT(root)) {
+            JsonObject *o = json_node_get_object(root);
+            /* The components all carry the release's version; prefer the
+             * ones a client talks to, then take any that looks like one. */
+            static const char *const prefer[] = {
+                "pinot-broker", "pinot-controller", "pinot-common", NULL };
+            for (int i = 0; !have && prefer[i]; i++) {
+                if (!json_object_has_member(o, prefer[i])) continue;
+                JsonNode *v = json_object_get_member(o, prefer[i]);
+                const char *sv = JSON_NODE_HOLDS_VALUE(v)
+                                 ? json_node_get_string(v) : NULL;
+                if (sv && g_ascii_isdigit(sv[0])) {
+                    g_strlcpy(out, sv, outlen); have = true;
+                }
+            }
+            if (!have) {
+                GList *members = json_object_get_members(o);
+                for (GList *l = members; l && !have; l = l->next) {
+                    JsonNode *v = json_object_get_member(o, l->data);
+                    const char *sv = JSON_NODE_HOLDS_VALUE(v)
+                                     ? json_node_get_string(v) : NULL;
+                    if (sv && g_ascii_isdigit(sv[0])) {
+                        g_strlcpy(out, sv, outlen); have = true;
+                    }
+                }
+                g_list_free(members);
+            }
+        }
+    }
+    g_object_unref(p);
+    return have;
+}
+
+/* Backs SQLGetInfo(SQL_DBMS_VER). The broker has no version endpoint; the
+ * controller's GET /version lists every component's. Asked once and
+ * cached. */
+static bool pinot_get_server_version(argus_backend_conn_t raw, char *buf,
+                                     size_t buflen)
+{
+    pinot_conn_t *conn = (pinot_conn_t *)raw;
+    if (!conn || !buf || buflen == 0) return false;
+    if (!conn->version_probed) {
+        conn->version_probed = true;
+        if (conn->controller_url) {
+            char url[560];
+            snprintf(url, sizeof(url), "%s/version", conn->controller_url);
+            pinot_response_t resp = {0};
+            if (http(conn, url, NULL, &resp) == 0 && resp.data) {
+                if (!pinot_parse_version_json(resp.data, conn->server_version,
+                                              sizeof(conn->server_version)))
+                    ARGUS_LOG_DEBUG("Pinot: /version carries no version; "
+                                    "SQL_DBMS_VER stays unknown");
+            }
+            free(resp.data);
+        }
+    }
+    if (!conn->server_version[0]) return false;
+    g_strlcpy(buf, conn->server_version, buflen);
+    return true;
+}
+
 static struct argus_http_abort *pinot_abort_flag(argus_backend_conn_t raw)
 {
     pinot_conn_t *conn = (pinot_conn_t *)raw;
@@ -645,6 +714,7 @@ static const argus_backend_caps_t pinot_caps = {
 static const argus_backend_t pinot_backend = {
     .name                  = "pinot",
     .caps                  = &pinot_caps,
+    .get_server_version    = pinot_get_server_version,
     .abort_flag            = pinot_abort_flag,
     .connect               = pinot_connect,
     .disconnect            = pinot_disconnect,

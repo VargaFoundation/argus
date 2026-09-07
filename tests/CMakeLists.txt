@@ -128,10 +128,23 @@ endif()
 
 if(ARGUS_BUILD_PINOT)
     argus_add_unit_test(test_pinot_types unit/test_pinot_types.c)
+    # The version-document parser lives with the backend.
+    target_include_directories(test_pinot_types PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/backend
+        ${PROJECT_SOURCE_DIR}/src/backend/pinot
+        ${LIBCURL_INCLUDE_DIRS}
+        ${JSON_GLIB_INCLUDE_DIRS}
+    )
 endif()
 
 if(ARGUS_BUILD_DRUID)
     argus_add_unit_test(test_druid_types unit/test_druid_types.c)
+    target_include_directories(test_druid_types PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/backend
+        ${PROJECT_SOURCE_DIR}/src/backend/druid
+        ${LIBCURL_INCLUDE_DIRS}
+        ${JSON_GLIB_INCLUDE_DIRS}
+    )
     argus_add_unit_test(test_druid_catalog_sql unit/test_druid_catalog_sql.c)
     target_include_directories(test_druid_catalog_sql PRIVATE
         ${PROJECT_SOURCE_DIR}/src/backend/druid

@@ -71,6 +71,8 @@ bool hive_get_last_error_ex(argus_backend_conn_t conn, char sqlstate[6],
                             char *buf, size_t buflen);
 struct argus_http_abort *hive_abort_flag(argus_backend_conn_t conn);
 
+bool hive_get_server_version(argus_backend_conn_t conn, char *buf, size_t buflen);
+
 /* Hive backend vtable */
 /* Only the display name: everything else in this descriptor is left zero,
  * which means exactly the answers SQLGetInfo gave before capabilities
@@ -100,6 +102,7 @@ static const argus_backend_t hive_backend = {
     .get_last_error        = hive_get_last_error,
     .get_last_error_ex     = hive_get_last_error_ex,
     .caps                  = &hive_caps,
+    .get_server_version    = hive_get_server_version,
     .abort_flag            = hive_abort_flag,
 };
 

@@ -41,6 +41,9 @@ typedef struct druid_conn {
     GMutex             inflight_lock;
     char              *inflight_id;
 
+    char               server_version[64];  /* GET /status "version", cached */
+    bool               version_probed;
+
     char               last_error[512];
 } druid_conn_t;
 
@@ -58,6 +61,9 @@ typedef argus_http_buf_t druid_response_t;
 SQLSMALLINT druid_type_to_sql_type(const char *druid_sql_type);
 SQLULEN     druid_type_column_size(SQLSMALLINT sql_type);
 SQLSMALLINT druid_type_decimal_digits(SQLSMALLINT sql_type);
+
+/* The "version" of a GET /status document, or false. Pure, for the tests. */
+bool druid_parse_status_version(const char *json, char *out, size_t outlen);
 
 /* druid_backend.c (shared by the catalog helpers) */
 int druid_execute(argus_backend_conn_t conn, const char *query,

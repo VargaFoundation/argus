@@ -437,6 +437,74 @@ static int druid_cancel(argus_backend_conn_t raw, argus_backend_op_t op)
     return 0;
 }
 
+bool druid_parse_status_version(const char *json, char *out, size_t outlen)
+{
+    if (!json || !out || outlen == 0) return false;
+    out[0] = '\0';
+    JsonParser *p = json_parser_new();
+    bool have = false;
+    if (json_parser_load_from_data(p, json, -1, NULL)) {
+        JsonNode *root = json_parser_get_root(p);
+        if (root && JSON_NODE_HOLDS_OBJECT(root)) {
+            JsonObject *o = json_node_get_object(root);
+            if (json_object_has_member(o, "version")) {
+                JsonNode *v = json_object_get_member(o, "version");
+                const char *sv = JSON_NODE_HOLDS_VALUE(v)
+                                 ? json_node_get_string(v) : NULL;
+                if (sv && *sv) { g_strlcpy(out, sv, outlen); have = true; }
+            }
+        }
+    }
+    g_object_unref(p);
+    return have;
+}
+
+/* Backs SQLGetInfo(SQL_DBMS_VER). The router's /status answers
+ * {"version":"30.0.0", ...}; asked once and cached, like the health probe
+ * it shares its shape with. */
+static bool druid_get_server_version(argus_backend_conn_t raw, char *buf,
+                                     size_t buflen)
+{
+    druid_conn_t *conn = (druid_conn_t *)raw;
+    if (!conn || !buf || buflen == 0) return false;
+    if (!conn->version_probed) {
+        conn->version_probed = true;
+        char url[560];
+        snprintf(url, sizeof(url), "%s/status", conn->base_url);
+        druid_response_t resp = {0};
+        CURL *curl = conn->curl;
+        curl_easy_reset(curl);
+        argus_curl_apply_baseline(curl);
+        if (conn->ssl_enabled) {
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, conn->ssl_verify ? 1L : 0L);
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, conn->ssl_verify ? 2L : 0L);
+        }
+        if (conn->user && *conn->user) {
+            char up[512];
+            snprintf(up, sizeof(up), "%s:%s", conn->user,
+                     conn->password ? conn->password : "");
+            curl_easy_setopt(curl, CURLOPT_HTTPAUTH, (long)CURLAUTH_BASIC);
+            curl_easy_setopt(curl, CURLOPT_USERPWD, up);
+        }
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, argus_http_write_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+        if (curl_easy_perform(curl) == CURLE_OK && resp.data) {
+            if (!druid_parse_status_version(resp.data, conn->server_version,
+                                            sizeof(conn->server_version)))
+                ARGUS_LOG_DEBUG("Druid: /status carries no version; "
+                                "SQL_DBMS_VER stays unknown");
+        }
+        free(resp.data);
+    }
+    if (!conn->server_version[0]) return false;
+    g_strlcpy(buf, conn->server_version, buflen);
+    return true;
+}
+
 static struct argus_http_abort *druid_abort_flag(argus_backend_conn_t raw)
 {
     druid_conn_t *conn = (druid_conn_t *)raw;
@@ -631,6 +699,7 @@ static const argus_backend_caps_t druid_caps = {
 static const argus_backend_t druid_backend = {
     .name                  = "druid",
     .caps                  = &druid_caps,
+    .get_server_version    = druid_get_server_version,
     .cancel_from_any_thread = true,
     .abort_flag            = druid_abort_flag,
     .connect               = druid_connect,
