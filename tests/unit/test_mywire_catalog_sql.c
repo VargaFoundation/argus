@@ -98,12 +98,47 @@ static void test_primary_keys_and_long_names(void **state)
     g_free(q);
 }
 
+/* SQLStatistics: a SQL_TABLE_STAT row from information_schema.tables, then
+ * one row per index column from information_schema.statistics, the table
+ * name escaped, unique-only as a filter, and the specification's order. */
+static void test_statistics_query(void **state)
+{
+    (void)state;
+    char *q = mywire_build_statistics_query(g_mysql, "shop", NULL,
+                                            "it's", 1 /* SQL_INDEX_ALL */);
+    assert_non_null(q);
+    assert_non_null(strstr(q, "FROM information_schema.tables"));
+    assert_non_null(strstr(q, "0 AS `TYPE`"));                 /* SQL_TABLE_STAT */
+    assert_non_null(strstr(q, "UNION ALL"));
+    assert_non_null(strstr(q, "FROM information_schema.statistics"));
+    assert_non_null(strstr(q, "table_schema = 'shop'"));
+    assert_non_null(strstr(q, "table_name = 'it\\'s'"));     /* escaped */
+    assert_null(strstr(q, "non_unique = 0"));                   /* all indexes */
+    assert_non_null(strstr(q, "ORDER BY 4, 7, 5, 6, 8"));
+    g_free(q);
+
+    /* SQL_INDEX_UNIQUE narrows the index rows, not the table row. */
+    q = mywire_build_statistics_query(g_mysql, NULL, "shop", "products",
+                                      0 /* SQL_INDEX_UNIQUE */);
+    assert_non_null(q);
+    assert_non_null(strstr(q, "non_unique = 0"));
+    assert_non_null(strstr(q, "table_schema = 'shop'"));
+    g_free(q);
+
+    /* No table: every table of the database, still well-formed. */
+    q = mywire_build_statistics_query(g_mysql, "shop", NULL, NULL, 1);
+    assert_non_null(q);
+    assert_null(strstr(q, "table_name ="));
+    g_free(q);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_tables_query_escapes_patterns),
         cmocka_unit_test(test_table_types_quoted_and_unbounded),
         cmocka_unit_test(test_primary_keys_and_long_names),
+        cmocka_unit_test(test_statistics_query),
     };
     return cmocka_run_group_tests(tests, group_setup, group_teardown);
 }

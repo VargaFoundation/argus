@@ -188,6 +188,73 @@ char *mywire_build_primary_keys_query(MYSQL *mysql, const char *catalog,
     return finish(q, ok, " ORDER BY table_schema, table_name, ordinal_position");
 }
 
+/*
+ * SQLStatistics over information_schema.statistics, which MySQL, MariaDB,
+ * StarRocks and Doris all expose (ClickHouse's MySQL interface answers it
+ * empty, which is the truthful answer for an engine without indexes).
+ *
+ * Two kinds of row, as the specification requires: one SQL_TABLE_STAT row
+ * per table, carrying the row count information_schema.tables estimates,
+ * then one row per index column. `unique` is SQL_INDEX_UNIQUE (0) to ask
+ * for unique indexes only, SQL_INDEX_ALL (1) for all; the PRIMARY KEY is
+ * an index here, which is what the applications reading this expect.
+ * TABLE_CAT is the database, as in every other catalog function of this
+ * backend; PAGES has no counterpart and is NULL rather than a guess.
+ */
+char *mywire_build_statistics_query(MYSQL *mysql, const char *catalog,
+                                    const char *schema,
+                                    const char *table_name,
+                                    unsigned short unique)
+{
+    const char *db = (catalog && *catalog) ? catalog : schema;
+    GString *q = g_string_new(
+        "SELECT "
+        "table_schema AS TABLE_CAT, "
+        "NULL AS TABLE_SCHEM, "
+        "table_name AS TABLE_NAME, "
+        "NULL AS NON_UNIQUE, "
+        "NULL AS INDEX_QUALIFIER, "
+        "NULL AS INDEX_NAME, "
+        "0 AS `TYPE`, "                       /* SQL_TABLE_STAT */
+        "NULL AS ORDINAL_POSITION, "
+        "NULL AS COLUMN_NAME, "
+        "NULL AS ASC_OR_DESC, "
+        "table_rows AS CARDINALITY, "
+        "NULL AS PAGES, "
+        "NULL AS FILTER_CONDITION "
+        "FROM information_schema.tables "
+        "WHERE table_type IN ('BASE TABLE','SYSTEM VERSIONED')");
+    bool ok = append_filter(q, mysql, "table_schema", "=", db);
+    ok = ok && append_filter(q, mysql, "table_name", "=", table_name);
+
+    g_string_append(q,
+        " UNION ALL "
+        "SELECT "
+        "table_schema, "
+        "NULL, "
+        "table_name, "
+        "non_unique, "
+        "NULL, "
+        "index_name, "
+        "3, "                                 /* SQL_INDEX_OTHER */
+        "seq_in_index, "
+        "column_name, "
+        "CASE collation WHEN 'A' THEN 'A' WHEN 'D' THEN 'D' ELSE NULL END, "
+        "cardinality, "
+        "NULL, "
+        "NULL "
+        "FROM information_schema.statistics "
+        "WHERE 1=1");
+    ok = ok && append_filter(q, mysql, "table_schema", "=", db);
+    ok = ok && append_filter(q, mysql, "table_name", "=", table_name);
+    if (unique == 0)                          /* SQL_INDEX_UNIQUE */
+        g_string_append(q, " AND non_unique = 0");
+
+    /* The order the specification prescribes: NON_UNIQUE, TYPE,
+     * INDEX_QUALIFIER, INDEX_NAME, ORDINAL_POSITION. */
+    return finish(q, ok, " ORDER BY 4, 7, 5, 6, 8");
+}
+
 static int run_built_query(argus_backend_conn_t conn, char *query,
                            argus_backend_op_t *out_op)
 {
@@ -305,5 +372,23 @@ int mywire_get_primary_keys(argus_backend_conn_t conn,
     return run_built_query(conn,
                            mywire_build_primary_keys_query(c->mysql, catalog,
                                                            schema, table_name),
+                           out_op);
+}
+
+int mywire_get_statistics(argus_backend_conn_t conn,
+                          const char *catalog,
+                          const char *schema,
+                          const char *table_name,
+                          unsigned short unique,
+                          unsigned short reserved,
+                          argus_backend_op_t *out_op)
+{
+    (void)reserved;
+    mywire_conn_t *c = (mywire_conn_t *)conn;
+    if (!c || !c->mysql) return -1;
+    return run_built_query(conn,
+                           mywire_build_statistics_query(c->mysql, catalog,
+                                                         schema, table_name,
+                                                         unique),
                            out_op);
 }

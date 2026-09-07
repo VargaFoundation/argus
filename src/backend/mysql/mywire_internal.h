@@ -91,5 +91,13 @@ int mywire_get_type_info(argus_backend_conn_t conn, SQLSMALLINT sql_type,
 int mywire_get_primary_keys(argus_backend_conn_t conn, const char *catalog,
                             const char *schema, const char *table_name,
                             argus_backend_op_t *out_op);
+char *mywire_build_statistics_query(MYSQL *mysql, const char *catalog,
+                                    const char *schema,
+                                    const char *table_name,
+                                    unsigned short unique);
+int mywire_get_statistics(argus_backend_conn_t conn, const char *catalog,
+                          const char *schema, const char *table_name,
+                          unsigned short unique, unsigned short reserved,
+                          argus_backend_op_t *out_op);
 
 #endif /* ARGUS_MYWIRE_INTERNAL_H */

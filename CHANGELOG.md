@@ -107,6 +107,15 @@ All notable changes to the Argus ODBC Driver project.
   function lists and keywords, not the product version -- and BigQuery has
   no version to report. The four integration tests assert the value is no
   longer "00.00.0000".
+- **`SQLStatistics` on MySQL-wire returned nothing.** The backend had no
+  `get_statistics`, so an application asking which columns are indexed on
+  StarRocks, Doris, MariaDB or MySQL learned nothing. It now answers from
+  `information_schema.statistics` -- a `SQL_TABLE_STAT` row per table with
+  the row count `information_schema.tables` estimates, then one row per
+  index column, the PRIMARY KEY among them -- with `SQL_INDEX_UNIQUE`
+  honoured and the rows in the order the specification prescribes.
+  ClickHouse's MySQL interface answers it empty, which is the truthful
+  answer for an engine without indexes.
 
 ### Fixed: parameter markers inside string literals
 - **A backslash-escaped quote ended a literal** for the marker scanner and

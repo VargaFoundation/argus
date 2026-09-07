@@ -494,6 +494,7 @@ static const argus_backend_t mywire_backend = {
     .get_schemas           = mywire_get_schemas,
     .get_catalogs          = mywire_get_catalogs,
     .get_primary_keys      = mywire_get_primary_keys,
+    .get_statistics        = mywire_get_statistics,
     .get_last_error        = mywire_get_last_error,
     .get_last_error_ex     = mywire_get_last_error_ex,
     .get_server_version    = mywire_get_server_version,

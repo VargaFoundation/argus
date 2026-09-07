@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <glib.h>
+#include <stdbool.h>
 
 /*
  * Integration tests: queries + catalog ops against a real MariaDB via the
@@ -135,6 +136,63 @@ static void test_primary_keys(void **state)
     SQLFreeHandle(SQL_HANDLE_STMT, s);
 }
 
+/* ── SQLStatistics: the PRIMARY KEY is an index ──────────────── */
+
+/* This used to be an empty result set: the backend had no get_statistics,
+ * so an application asking which columns are indexed learned nothing. Now
+ * information_schema.statistics answers: a SQL_TABLE_STAT row for the
+ * table, then the PRIMARY index on `id`. */
+static void test_statistics(void **state)
+{
+    (void)state;
+    SQLHSTMT s;
+    SQLAllocHandle(SQL_HANDLE_STMT, g_dbc, &s);
+
+    assert_int_equal(SQLStatistics(s, NULL, 0, NULL, 0,
+                                   (SQLCHAR *)"products", SQL_NTS,
+                                   SQL_INDEX_ALL, SQL_QUICK),
+                     SQL_SUCCESS);
+
+    bool saw_table_stat = false, saw_primary = false;
+    while (SQLFetch(s) == SQL_SUCCESS) {
+        SQLSMALLINT type = -1;
+        SQLLEN ind = 0;
+        SQLGetData(s, 7, SQL_C_SSHORT, &type, sizeof(type), &ind);   /* TYPE */
+        if (type == SQL_TABLE_STAT) {
+            saw_table_stat = true;
+            continue;
+        }
+        SQLCHAR idx[64] = {0}, col[64] = {0};
+        SQLGetData(s, 6, SQL_C_CHAR, idx, sizeof(idx), &ind);   /* INDEX_NAME */
+        SQLGetData(s, 9, SQL_C_CHAR, col, sizeof(col), &ind);   /* COLUMN_NAME */
+        if (strcmp((char *)idx, "PRIMARY") == 0 && strcmp((char *)col, "id") == 0) {
+            SQLSMALLINT non_unique = -1;
+            SQLGetData(s, 4, SQL_C_SSHORT, &non_unique, sizeof(non_unique), &ind);
+            assert_int_equal(non_unique, 0);
+            saw_primary = true;
+        }
+    }
+    assert_true(saw_table_stat);
+    assert_true(saw_primary);
+    SQLFreeHandle(SQL_HANDLE_STMT, s);
+
+    /* Unique-only still lists the PRIMARY KEY. */
+    SQLAllocHandle(SQL_HANDLE_STMT, g_dbc, &s);
+    assert_int_equal(SQLStatistics(s, NULL, 0, NULL, 0,
+                                   (SQLCHAR *)"products", SQL_NTS,
+                                   SQL_INDEX_UNIQUE, SQL_QUICK),
+                     SQL_SUCCESS);
+    saw_primary = false;
+    while (SQLFetch(s) == SQL_SUCCESS) {
+        SQLCHAR idx[64] = {0};
+        SQLLEN ind = 0;
+        SQLGetData(s, 6, SQL_C_CHAR, idx, sizeof(idx), &ind);
+        if (strcmp((char *)idx, "PRIMARY") == 0) saw_primary = true;
+    }
+    assert_true(saw_primary);
+    SQLFreeHandle(SQL_HANDLE_STMT, s);
+}
+
 /* ── SQLTables finds the seeded table (TABLE vs BASE TABLE) ──── */
 
 static void test_tables(void **state)
@@ -243,6 +301,7 @@ int main(void)
         cmocka_unit_test(test_select_products),
         cmocka_unit_test(test_columns),
         cmocka_unit_test(test_primary_keys),
+        cmocka_unit_test(test_statistics),
         cmocka_unit_test(test_tables),
         cmocka_unit_test(test_error_message),
         cmocka_unit_test(test_cancel_interrupts_a_sleeping_query),
