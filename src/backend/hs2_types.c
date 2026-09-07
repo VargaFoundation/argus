@@ -170,7 +170,10 @@ bool argus_hs2_dbms_version(struct _TCLIServiceIf *client,
                                     "sessionHandle", session,
                                     "infoType", T_GET_INFO_TYPE_CLI_DBMS_VER,
                                     NULL);
-    TGetInfoResp *resp = NULL;
+    /* The c_glib client reads the reply INTO the object the caller passes;
+     * a NULL here is what thrift_struct_read's THRIFT_IS_STRUCT assertion
+     * complains about, as the CI's HiveServer2 promptly showed. */
+    TGetInfoResp *resp = g_object_new(TYPE_T_GET_INFO_RESP, NULL);
     GError *error = NULL;
     gboolean ok = t_c_l_i_service_client_get_info(client, &resp, req, &error);
     g_object_unref(req);
