@@ -359,7 +359,7 @@ SQLRETURN SQL_API SQLGetInfo(
     /* Reporting outer-join capability commits the driver to accepting the
      * {oj ...} escape, so both answers come from the dialect. Backends whose
      * join surface we have not verified (Phoenix, Pinot, Druid, Flight SQL,
-     * Kudu) report none rather than claim all of them. */
+     * Druid) report none rather than claim all of them. */
     case SQL_OUTER_JOINS:
         return set_string_info(argus_dialect_for(dbc)->supports_oj ? "Y" : "N",
                                InfoValue, BufferLength, StringLength);

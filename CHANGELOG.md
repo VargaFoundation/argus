@@ -4,6 +4,24 @@ All notable changes to the Argus ODBC Driver project.
 
 ## [Unreleased]
 
+### Removed: the Kudu backend
+- **`BACKEND=kudu` is gone.** Kudu was always queried through Impala in
+  practice — Impala plans and executes SQL against Kudu tables natively — so
+  the direct backend duplicated that with a hand-written SQL parser, and its
+  C++ client (`libkudu_client`) has not been packaged for any Ubuntu since
+  16.04: Cloudera's apt repository stops at `xenial`, and it is in neither
+  Ubuntu universe, conda-forge nor vcpkg. The backend could therefore not be
+  built by the release pipeline, shipped in any artefact, or exercised by a
+  single test — 3 200 lines nobody could run, including the C++ that pulled
+  `enable_language(CXX)` into a C driver.
+- **A DSN that still says `kudu` gets told where to go**, not "Unknown
+  backend": the diagnostic names `BACKEND=impala` and port 21050. The same
+  table will carry any future removal, and `argus_backend_names()` lists what
+  the build really registered when a name was never ours at all.
+- Reach Kudu tables through Impala:
+  `DRIVER=Argus;BACKEND=impala;HOST=impalad;PORT=21050;DATABASE=default`.
+
+
 ### Fixed: memory safety and handle lifetime
 - **A negative length that is not `SQL_NTS`** (`SQLExecDirect`, `SQLPrepare`,
   `SQLNativeSql`, `SQLDriverConnect`, `SQLBrowseConnect`, `SQLConnect`,

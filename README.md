@@ -3,7 +3,7 @@
 [![CI](https://github.com/VargaFoundation/argus/actions/workflows/ci.yml/badge.svg)](https://github.com/VargaFoundation/argus/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/VargaFoundation/argus/actions/workflows/codeql.yml/badge.svg)](https://github.com/VargaFoundation/argus/actions/workflows/codeql.yml)
 
-Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix, Pinot, Druid, Kudu, MySQL-wire (StarRocks/Doris/ClickHouse), PostgreSQL, Greenplum, Apache Cloudberry and Arrow Flight SQL (Dremio/InfluxDB 3) — with comprehensive logging, SSL/TLS, OAuth2 and an Arrow ADBC surface built over the same stack.
+Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix, Pinot, Druid, MySQL-wire (StarRocks/Doris/ClickHouse), PostgreSQL, Greenplum, Apache Cloudberry and Arrow Flight SQL (Dremio/InfluxDB 3) — with comprehensive logging, SSL/TLS, OAuth2 and an Arrow ADBC surface built over the same stack.
 
 ## Features
 
@@ -30,9 +30,8 @@ Multi-backend ODBC driver for analytics engines — Hive, Impala, Trino, Phoenix
 | `greenplum` | VMware/Broadcom Greenplum 6 and 7 | PostgreSQL wire | libpq | yes |
 | `cloudberry` | Apache Cloudberry | PostgreSQL wire | libpq | yes |
 | `flightsql` | Dremio / InfluxDB 3 / any Arrow Flight SQL server | gRPC / Arrow | arrow-flight-sql (C++) | no |
-| `kudu` | Apache Kudu (deprecated — prefer `BACKEND=impala`) | kudu_client | libkudu_client | no |
 
-The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery and MySQL-wire (StarRocks/Doris/ClickHouse); Flight SQL and Kudu need dependencies MSYS2 does not provide. Hive/Impala speak through a GIO socket transport (portable, with timeouts and TLS); the installer bundles the glib-networking TLS backend, which the driver loads automatically.
+The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery and MySQL-wire (StarRocks/Doris/ClickHouse); Flight SQL needs dependencies MSYS2 does not provide. Hive/Impala speak through a GIO socket transport (portable, with timeouts and TLS); the installer bundles the glib-networking TLS backend, which the driver loads automatically.
 
 ### Production Features
 
@@ -69,7 +68,7 @@ The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery
   than the family maximums.
 - **Binary**: the bytes themselves. Each backend decodes its own wire
   encoding — hex on Pinot and PostgreSQL, base64 on Trino, BigQuery and
-  Avatica, raw on Hive, Impala, Kudu, MySQL-wire and Arrow — so
+  Avatica, raw on Hive, Impala, MySQL-wire and Arrow — so
   `SQL_C_BINARY` returns what the engine sent, embedded NULs included, and a
   character target gets its hex. The value is never sniffed.
 - **Unsigned**: ULONG, USHORT, UTINYINT, UBIGINT, with `22003` on a negative
@@ -95,7 +94,7 @@ The Windows installer ships Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery
   about a second too. Over binary Thrift (Hive, Impala) and Flight SQL the
   call in progress returns on its own first. The server-side query is then
   stopped where the protocol allows it (Hive, Impala, Trino, Phoenix,
-  BigQuery, Kudu, Druid by its `sqlQueryId`, MySQL-wire) and simply dropped
+  BigQuery, Druid by its `sqlQueryId`, MySQL-wire) and simply dropped
   where it does not (Flight SQL, Pinot).
 - **Application Name**: Identify queries with a custom app name (`X-Trino-Source`, `hive.query.source`)
 
@@ -248,7 +247,7 @@ HOST=localhost;PORT=10000;UID=myuser;PWD=mypass;DATABASE=default;BACKEND=hive
 | **UID** / USERNAME | Username | `admin` | `` |
 | **PWD** / PASSWORD | Password | `secret` | `` |
 | **DATABASE** / SCHEMA | Database name | `mydb` | `default` |
-| **BACKEND** | `hive`, `impala`, `trino`, `phoenix`, `pinot`, `druid`, `bigquery`, `mysql`, `postgres`, `greenplum`, `cloudberry`, `flightsql`, `kudu` | `trino` | `hive` |
+| **BACKEND** | `hive`, `impala`, `trino`, `phoenix`, `pinot`, `druid`, `bigquery`, `mysql`, `postgres`, `greenplum`, `cloudberry`, `flightsql` | `trino` | `hive` |
 | **SSL** / UseSSL | Enable SSL | `1`, `true` | `false` |
 | **SSLCertFile** | Client certificate | `/path/cert.pem` | - |
 | **SSLKeyFile** | Client key | `/path/key.pem` | - |

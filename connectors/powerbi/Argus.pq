@@ -51,7 +51,7 @@ BackslashEscapeBackends = {"hive", "impala", "mysql", "bigquery"};
 BackendList = {
     "hive", "impala", "trino", "phoenix", "pinot",
     "druid", "mysql", "bigquery", "postgres", "greenplum", "cloudberry",
-    "flightsql", "kudu"
+    "flightsql"
 };
 
 [DataSource.Kind = "Argus", Publish = "Argus.Publish"]

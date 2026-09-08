@@ -159,7 +159,6 @@ Each backend has a tri-state cache variable:
 | `ARGUS_WITH_TRINO`, `_PHOENIX`, `_PINOT`, `_DRUID`, `_BIGQUERY` | the HTTP backends | libcurl + json-glib |
 | `ARGUS_WITH_MYSQL` | MySQL-wire (MySQL, MariaDB, Doris, StarRocks…) | libmariadb / libmysqlclient |
 | `ARGUS_WITH_POSTGRES` | PostgreSQL, Greenplum, Cloudberry | libpq |
-| `ARGUS_WITH_KUDU` | Kudu | kudu_client (C++) |
 | `ARGUS_WITH_FLIGHTSQL` | Arrow Flight SQL | Arrow Flight SQL (C++) |
 
 - `AUTO` (default): build the backend when its dependency is found, otherwise
@@ -172,13 +171,13 @@ Each backend has a tri-state cache variable:
 ships with (Hive, Impala, Trino, Phoenix, Pinot, Druid, BigQuery, MySQL-wire,
 PostgreSQL family) to `ON`. The CI and release workflows configure with it so a
 runner missing a `-dev` package fails the build instead of silently publishing
-a driver without that backend. Kudu and Flight SQL stay optional because their
+a driver without that backend. Flight SQL stays optional because its
 C++ SDKs are not packaged everywhere. An explicit `ARGUS_WITH_<BACKEND>=OFF`
 still wins under `ARGUS_RELEASE=ON`.
 
 ```bash
-# Require PostgreSQL, skip Kudu, take whatever else is installed
-cmake -B build -DARGUS_WITH_POSTGRES=ON -DARGUS_WITH_KUDU=OFF
+# Require PostgreSQL, skip Flight SQL, take whatever else is installed
+cmake -B build -DARGUS_WITH_POSTGRES=ON -DARGUS_WITH_FLIGHTSQL=OFF
 ```
 
 ### Debug Build

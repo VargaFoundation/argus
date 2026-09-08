@@ -117,7 +117,7 @@ folder if needed) and restart Power BI Desktop. Then either:
 |-------|---------|-------|
 | Server | `trino.example.com` | host of the backend |
 | Port | `8080` | backend port |
-| Backend | `trino` | one of hive, impala, trino, phoenix, pinot, druid, mysql, bigquery, flightsql, kudu. StarRocks, Doris and ClickHouse are reached with `mysql`; Spark and Flink with `hive`. `kudu` is deprecated — prefer `impala`. |
+| Backend | `trino` | one of hive, impala, trino, phoenix, pinot, druid, mysql, bigquery, flightsql. StarRocks, Doris and ClickHouse are reached with `mysql`; Spark and Flink with `hive`; Kudu through `impala`. |
 | Database / catalog | `tpch` | optional; defaults to `default` |
 
 Pick the authentication kind, choose a privacy level, then in the Navigator pick

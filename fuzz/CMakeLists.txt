@@ -5,8 +5,6 @@
 set(ARGUS_FUZZERS
     fuzz_escape
     fuzz_connstr
-    # Plain C, compiled on every platform whether or not the Kudu client is.
-    fuzz_kudu_sql
 )
 
 # The Trino scanner harness needs the backend's internal header, and the
@@ -31,7 +29,6 @@ foreach(f ${ARGUS_FUZZERS})
         ${THRIFT_C_GLIB_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/src/backend
         ${PROJECT_SOURCE_DIR}/src/backend/trino
-        ${PROJECT_SOURCE_DIR}/src/backend/kudu
         ${JSON_GLIB_INCLUDE_DIRS}
         ${LIBCURL_INCLUDE_DIRS})
     target_link_libraries(${f} PRIVATE argus_odbc_static ${GLIB_FUZZ_LIBRARIES})

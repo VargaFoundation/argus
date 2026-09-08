@@ -20,7 +20,7 @@ Druid, Pinot, TDengine, Arrow Flight SQL).
 > paresseusement** (~360 Ko → quelques centaines d'octets par statement) ;
 > lectures de diagnostics verrouillées ; **fuzzing libFuzzer en CI** sur
 > l'escape translator et le parseur de connection string ; job CI
-> `integration-full` (manuel + hebdo) couvrant Phoenix/Kudu/Spark/Flink ;
+> `integration-full` (manuel + hebdo) couvrant Phoenix/Spark/Flink ;
 > mapping de types Hive/Impala fusionné (`backend/hs2_types.c`).
 > Reste ouvert : format filaire Arrow natif (Cloud Fetch), `SQLBulkOperations`.
 
@@ -31,8 +31,8 @@ connectant les outils BI à des moteurs SQL big-data via une architecture à deu
 (API ODBC `src/odbc/` + backends pluggables `src/backend/`). Douze backends existent :
 Hive, Impala (Thrift CLI), Trino, Phoenix, Pinot, Druid (HTTP/JSON), MySQL-wire
 (StarRocks/Doris/ClickHouse), PostgreSQL, Greenplum, Apache Cloudberry (protocole
-PostgreSQL via libpq), Arrow Flight SQL (Dremio/InfluxDB 3) et Kudu (client C++
-natif, déprécié — préférer `BACKEND=impala`). Une surface Arrow ADBC est bâtie sur la
+PostgreSQL via libpq) et Arrow Flight SQL (Dremio/InfluxDB 3). Kudu a été
+retiré en 0.7.0 : il se requête via Impala. Une surface Arrow ADBC est bâtie sur la
 même pile.
 
 L'ingénierie est solide (multi-plateforme, packaging signé, CI, Unicode complet,
@@ -96,7 +96,7 @@ sécurisés et sur la BI cloud. C'est la priorité absolue de la roadmap.
   (`SQL_TXN_CAPABLE` par backend via `argus_backend_caps_t`), `SQLDescribeParam`
   interroge le serveur, et les SQLSTATE serveur remontent tels quels.
   `get_statistics` couvre Trino et la famille PostgreSQL ; `get_primary_keys`
-  couvre Hive, Impala, Trino, Phoenix, Kudu, MySQL-wire, Flight SQL et
+  couvre Hive, Impala, Trino, Phoenix, MySQL-wire, Flight SQL et
   PostgreSQL.
   **Corrigé depuis** : le driver traduit les escape sequences ODBC
   (`src/odbc/escape.c`) — il annonçait 48 fonctions scalaires sans en traduire
@@ -111,9 +111,7 @@ sécurisés et sur la BI cloud. C'est la priorité absolue de la roadmap.
 - **HTTP/Knox : exposé depuis.** `TransportMode=HTTP` + `HttpPath` sont supportés pour
   Hive (avec SPNEGO/Kerberos et Bearer/JWT), couvrant Knox et Databricks ; reste à
   faire pour Impala.
-- **Backend Kudu discutable.** Kudu se requête normalement via Impala. Le parser SQL
-  maison (`kudu_sql_parser.c`, 461 lignes) est une dette de maintenance fragile et
-  introduit du C++ dans une base C. À reconsidérer.
+- **Backend Kudu discutable.** *Tranché : retiré en 0.7.0 — voir §4 des décisions.*
 - **Pas de suite de benchmarks** ni de tracing distribué (OpenTelemetry). À noter :
   une **télémétrie d'usage anonyme et opt-in** (off par défaut) a été ajoutée
   (`src/odbc/telemetry.c`, voir `docs/TELEMETRY.md`) — elle couvre backends,
@@ -259,14 +257,14 @@ Spark/Flink en conditions réelles.
    Doris, StarRocks ; fondations d'une future surface **ADBC** (supplément à ODBC,
    pas un remplacement : la bascule Power BI 2026-2027 ne vise que les drivers
    embarqués, cf. plus haut).
-4. **Kudu : déprécié** (décidé). Kudu se requête normalement via Impala, et le
+4. **Kudu : retiré en 0.7.0** (fait). Kudu se requête normalement via Impala,
+   qui planifie et exécute le SQL contre les tables Kudu nativement, et le
    client C++ natif (`libkudu_client`) n'est **packagé pour aucune Ubuntu plus
    récente que 16.04** (le dépôt apt Cloudera s'arrête à `xenial` ; absent de
-   universe / conda-forge / vcpkg), donc le backend n'est même plus buildable sur
-   un OS courant sans compiler Kudu depuis les sources. ⇒ rediriger les
-   utilisateurs vers `BACKEND=impala` (voir `docs/CONFIGURATION.md`). Le backend
-   `kudu` reste compilable là où `libkudu_client` existe mais passe en mode
-   maintenance (pas de nouveau travail, ex. propagation d'erreur serveur non câblée).
+   universe / conda-forge / vcpkg) — le backend n'était donc ni buildable, ni
+   livrable, ni testable sur un OS courant. Un DSN qui dit encore
+   `BACKEND=kudu` échoue au connect avec la ligne qui le remet en marche
+   (`BACKEND=impala`, port 21050), pas avec « Unknown backend ».
 
 ---
 

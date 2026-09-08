@@ -1,1 +1,0 @@
-SELECT * FROM t /* block */ WHERE p = 'C:\path' ANDnameS NOT NULL

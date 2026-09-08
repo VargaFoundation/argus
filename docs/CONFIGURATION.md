@@ -99,7 +99,7 @@ DRIVER=Argus;BACKEND=hive;HOST=hive.example.com;PORT=10000;UID=admin;PWD={p@ss};
 | KRBSERVICENAME | SERVICEPRINCIPALNAME | hive/impala | Kerberos SPN service name |
 | KRBHOSTFQDN | KRBHOST | (HOST) | Kerberos SPN host, if it differs from HOST |
 | KRBREALM | REALM | (from krb5.conf) | Explicit Kerberos realm |
-| BACKEND | DRIVER_TYPE | hive | Backend type: hive, impala, trino, phoenix, pinot, druid, bigquery, mysql, postgres, greenplum, cloudberry, flightsql, kudu |
+| BACKEND | DRIVER_TYPE | hive | Backend type: hive, impala, trino, phoenix, pinot, druid, bigquery, mysql, postgres, greenplum, cloudberry, flightsql |
 | APPLICATIONNAME | APPNAME | (none) | Client application name reported to the backend |
 | FETCHBUFFERSIZE | | (backend default) | Rows fetched per backend round-trip |
 | SOCKETTIMEOUT | | 0 (none) | Socket I/O timeout in seconds |
@@ -495,25 +495,24 @@ Emulator / tests (no auth):
 Backend=bigquery;Project=test;BQEndpoint=http://localhost:9050
 ```
 
-### Apache Kudu (BACKEND=kudu) — deprecated
+### Apache Kudu — removed in 0.7.0, reach it through Impala
 
-> **Deprecated — use the Impala backend instead.** Kudu is normally queried
-> through Impala (Impala plans and executes SQL against Kudu tables natively), so
-> a direct Kudu SQL backend duplicates that with a hand-rolled SQL parser. The
-> deciding factor: the native C++ client (`libkudu_client`) is **not packaged for
-> any Ubuntu newer than 16.04** (Cloudera's apt repo stops at `xenial`; it is not
-> in Ubuntu universe, conda-forge, or vcpkg), so the backend can't even be built
-> on a current OS without compiling Kudu from source.
+> The `kudu` backend was removed. Kudu was always queried through Impala in
+> practice — Impala plans and executes SQL against Kudu tables natively — so
+> the direct backend duplicated that with a hand-written SQL parser; and its
+> C++ client (`libkudu_client`) is **not packaged for any Ubuntu newer than
+> 16.04** (Cloudera's apt repo stops at `xenial`; it is in neither Ubuntu
+> universe, conda-forge nor vcpkg), so it could not be built, shipped or
+> tested on a current OS.
 >
-> Reach Kudu tables through Impala instead:
+> Reach Kudu tables through Impala:
 >
 > ```
 > DRIVER=Argus;BACKEND=impala;HOST=impalad;PORT=21050;DATABASE=default
 > ```
 >
-> The `kudu` backend still builds and runs where `libkudu_client` is available
-> (`-DARGUS_BUILD_KUDU`, auto-detected), but is in maintenance mode and receives
-> no new feature work (e.g. server-error propagation is not wired up).
+> A DSN that still says `BACKEND=kudu` fails at connect with that line in the
+> diagnostic, not with "Unknown backend".
 
 ## Connecting to Databricks (via the Hive backend)
 

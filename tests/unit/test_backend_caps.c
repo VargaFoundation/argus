@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "argus/handle.h"
+#include "argus/backend.h"
 #include "argus/caps.h"
 #include "argus/dialect.h"
 
@@ -156,7 +157,6 @@ static void test_dbms_name_is_preserved(void **state)
         { "phoenix",   "Apache Phoenix" },
         { "pinot",     "Apache Pinot" },
         { "druid",     "Apache Druid" },
-        { "kudu",      "Apache Kudu" },
         { "mysql",     "MySQL" },
         { "bigquery",  "Google BigQuery" },
         { "flightsql", "Arrow Flight SQL" },
@@ -191,7 +191,7 @@ static void test_dbms_name_is_preserved(void **state)
 /*
  * SQL_IDENTIFIER_CASE was SQL_IC_LOWER for every backend, which is only
  * true for some of them: Phoenix folds to upper, and BigQuery, Druid,
- * Pinot and Kudu store an identifier exactly as written.
+ * Pinot store an identifier exactly as written.
  */
 static void test_identifier_case_follows_the_engine(void **state)
 {
@@ -206,7 +206,6 @@ static void test_identifier_case_follows_the_engine(void **state)
         { "phoenix",  SQL_IC_UPPER },
         { "pinot",    SQL_IC_SENSITIVE },
         { "druid",    SQL_IC_SENSITIVE },
-        { "kudu",     SQL_IC_SENSITIVE },
         { "bigquery", SQL_IC_SENSITIVE },
         { "mysql",    SQL_IC_MIXED },
     };
@@ -359,12 +358,46 @@ static void test_postgres_family_caps(void **state)
     }
 }
 
+/*
+ * A name the driver used to answer to is gone from the registry, and the
+ * diagnostic for it is not "Unknown backend": a DSN that worked before the
+ * upgrade needs the one line that makes it work again. Kudu is the first
+ * such name -- removed in 0.7.0, because Impala plans and executes SQL
+ * against Kudu tables natively and the C++ client had not been packaged
+ * for any Ubuntu since 16.04.
+ */
+static void test_a_retired_backend_says_where_it_went(void **state)
+{
+    (void)state;
+    argus_backends_init();
+
+    assert_null(argus_backend_find("kudu"));
+
+    const char *advice = argus_backend_retired("kudu");
+    assert_non_null(advice);
+    assert_non_null(strstr(advice, "BACKEND=impala"));
+    assert_non_null(strstr(advice, "0.7.0"));
+    /* Case-insensitively, as the DSN keyword is matched. */
+    assert_ptr_equal(argus_backend_retired("KUDU"), advice);
+
+    /* A name that was never ours gets no advice, and neither does NULL. */
+    assert_null(argus_backend_retired("oracle"));
+    assert_null(argus_backend_retired(NULL));
+
+    /* The list offered instead names what this build registered. */
+    const char *names = argus_backend_names();
+    assert_non_null(names);
+    assert_null(strstr(names, "kudu"));
+    if (argus_backend_find("trino")) assert_non_null(strstr(names, " trino"));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_backends_without_caps_are_unchanged),
         cmocka_unit_test(test_dbms_name_is_preserved),
         cmocka_unit_test(test_identifier_case_follows_the_engine),
+        cmocka_unit_test(test_a_retired_backend_says_where_it_went),
         cmocka_unit_test(test_keywords_follow_the_engine),
         cmocka_unit_test(test_unconnected_dbc_uses_defaults),
         cmocka_unit_test(test_defaulting_helpers),

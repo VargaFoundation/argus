@@ -89,35 +89,6 @@ services:
       retries: 30
       start_period: 90s
 
-  kudu-master:
-    image: apache/kudu:latest
-    container_name: argus-kudu-master
-    ports:
-      - "7051:7051"     # Kudu Master RPC
-      - "8051:8051"     # Kudu Master Web UI
-    command: ["master"]
-    environment:
-      MASTER_ARGS: "--fs_wal_dir=/var/lib/kudu/master --webserver_doc_root=/opt/kudu/www"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8051/"]
-      interval: 10s
-      timeout: 10s
-      retries: 12
-      start_period: 30s
-
-  kudu-tserver:
-    image: apache/kudu:latest
-    container_name: argus-kudu-tserver
-    ports:
-      - "7050:7050"     # Kudu Tablet Server RPC
-      - "8050:8050"     # Kudu Tablet Server Web UI
-    command: ["tserver"]
-    environment:
-      TSERVER_ARGS: "--fs_wal_dir=/var/lib/kudu/tserver --tserver_master_addrs=kudu-master:7051"
-    depends_on:
-      kudu-master:
-        condition: service_healthy
-
   # ── Spark Thrift Server ────────────────────────────────────────────────
   # Spark's Thrift Server is HiveServer2-compatible; Argus reaches it through
   # the Hive backend. Exposed on host port 10010 to avoid clashing with the

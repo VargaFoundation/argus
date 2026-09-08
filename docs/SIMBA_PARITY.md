@@ -39,7 +39,7 @@ confirming it is the shared SimbaEngine core, not a per-data-store surface.
 | Async (ODBC 3.8) | yes | **yes** — worker-thread execute, `SQL_AM_STATEMENT`, `SQLCompleteAsync` | Parity |
 | Catalog completeness | full for the engine | Tables/Columns/TypeInfo/PrimaryKeys real; ForeignKeys/SpecialColumns/Procedures/Privileges correctly empty | Parity (see note) |
 | **Large-result decode** | Arrow + Cloud Fetch (columnar) | Trino spooling transport, but **row-wise** decode (Arrow only via the ADBC layer) | **Simba ahead on decode** |
-| **Client-side SQL engine** | SQLEngine + Collaborative Query Execution | delegate-only (Kudu has a minimal SELECT parser) | Simba ahead *architecturally* |
+| **Client-side SQL engine** | SQLEngine + Collaborative Query Execution | delegate-only: every backend speaks SQL to its engine | Simba ahead *architecturally* |
 
 ## Remaining gaps, ranked
 
@@ -68,8 +68,8 @@ confirming it is the shared SimbaEngine core, not a per-data-store surface.
    Simba Cloud Fetch) would cut network transfer further, but the dominant
    decode cost is now gone; it is an optional follow-on, not a standing gap.
 2. **Client-side SQL engine** — only matters for *non-SQL* sources (Salesforce,
-   Mongo). Argus's 10 backends are all full-SQL engines (Kudu, the exception,
-   has a minimal parser), so this is not required for the current targets.
+   Mongo). Every Argus backend is a full-SQL engine, so this is not required
+   for the current targets.
 
 ## Closed since this study began
 

@@ -3,6 +3,7 @@
 #include "argus/compat.h"
 #include "argus/log.h"
 #include <string.h>
+#include <stdio.h>
 
 /* Backend registry */
 static const argus_backend_t *registry[ARGUS_MAX_BACKENDS];
@@ -18,9 +19,6 @@ extern const argus_backend_t *argus_trino_backend_get(void);
 #endif
 #ifdef ARGUS_HAS_PHOENIX
 extern const argus_backend_t *argus_phoenix_backend_get(void);
-#endif
-#ifdef ARGUS_HAS_KUDU
-extern const argus_backend_t *argus_kudu_backend_get(void);
 #endif
 #ifdef ARGUS_HAS_MYSQL
 extern const argus_backend_t *argus_mysql_backend_get(void);
@@ -70,9 +68,6 @@ static const char build_manifest[] =
 #ifdef ARGUS_HAS_PHOENIX
     " phoenix"
 #endif
-#ifdef ARGUS_HAS_KUDU
-    " kudu"
-#endif
 #ifdef ARGUS_HAS_MYSQL
     " mysql"
 #endif
@@ -104,6 +99,31 @@ static const char build_manifest[] =
     " telemetry"
 #endif
     ;
+
+/*
+ * Backends that were removed, and where their users should go. Kudu is the
+ * first entry: it was always queried through Impala in practice (Impala
+ * plans and executes SQL against Kudu tables natively), the direct backend
+ * duplicated that with a hand-written SQL parser, and its C++ client has
+ * not been packaged for any Ubuntu since 16.04 -- so the backend could not
+ * be built, shipped or tested on a current OS.
+ */
+static const struct { const char *name; const char *advice; } retired[] = {
+    { "kudu",
+      "The kudu backend was removed in 0.7.0. Kudu tables are reached "
+      "through Impala, which plans and executes SQL against them natively: "
+      "use BACKEND=impala with the Impala coordinator's host and port "
+      "(21050 for the binary protocol)." },
+};
+
+const char *argus_backend_retired(const char *name)
+{
+    if (!name) return NULL;
+    for (size_t i = 0; i < sizeof(retired) / sizeof(retired[0]); i++)
+        if (strcasecmp(name, retired[i].name) == 0)
+            return retired[i].advice;
+    return NULL;
+}
 
 const char *argus_build_manifest(void)
 {
@@ -138,6 +158,23 @@ const argus_backend_t *argus_backend_find(const char *name)
     return NULL;
 }
 
+const char *argus_backend_names(void)
+{
+    /* Built once from the registry, so it lists what this build really
+     * registered rather than what it was configured to want. */
+    static char names[256];
+    if (!names[0]) {
+        size_t at = 0;
+        for (int i = 0; i < registry_count; i++) {
+            int n = snprintf(names + at, sizeof(names) - at, " %s",
+                             registry[i]->name);
+            if (n < 0 || (size_t)n >= sizeof(names) - at) break;
+            at += (size_t)n;
+        }
+    }
+    return names;
+}
+
 size_t argus_backend_count(void)
 {
     return (size_t)registry_count;
@@ -167,9 +204,6 @@ void argus_backends_init(void)
 #endif
 #ifdef ARGUS_HAS_PHOENIX
     argus_backend_register(argus_phoenix_backend_get());
-#endif
-#ifdef ARGUS_HAS_KUDU
-    argus_backend_register(argus_kudu_backend_get());
 #endif
 #ifdef ARGUS_HAS_MYSQL
     argus_backend_register(argus_mysql_backend_get());

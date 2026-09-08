@@ -627,11 +627,6 @@ jobs:
       - name: Fuzz Trino result-page scanner
         run: ./build-fuzz/fuzz/fuzz_trino_json fuzz/corpus/trino_json -max_total_time=90 -print_final_stats=1
 
-      # The SELECT recogniser the Kudu backend pushes predicates through:
-      # plain C, built on every platform whether or not the Kudu client is.
-      - name: Fuzz Kudu SQL parser
-        run: ./build-fuzz/fuzz/fuzz_kudu_sql fuzz/corpus/kudu_sql -max_total_time=60 -print_final_stats=1
-
       # The SASL frame reader parses what an unauthenticated peer sends
       # before any session exists; the input is the server's side of the
       # PLAIN handshake.
@@ -688,12 +683,11 @@ jobs:
           # overcommit. Spark and Flink (metastore-backed) are validated
           # recipes; Phoenix stays best-effort (the only available image
           # serves Avatica PROTOBUF while the driver speaks JSON — confirmed
-          # live) and Kudu is deprecated (image refuses its own default
-          # unsafe flags; backend unbuildable on current distros).
+          # live).
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
             spark-thrift metastore flink-sql-gateway
           docker compose -f tests/integration/docker-compose.yml up -d --wait \
-            phoenix kudu-master kudu-tserver || true
+            phoenix || true
 
       - name: Configure
         run: cmake -B build -DBUILD_INTEGRATION_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
@@ -719,15 +713,14 @@ jobs:
           HIVE_HOST: "127.0.0.1"
           HIVE_PORT: "10000"
           PHOENIX_HOST: "127.0.0.1"
-          KUDU_HOST: "127.0.0.1"
           SPARK_HOST: "127.0.0.1"
           SPARK_PORT: "10010"
           FLINK_HOST: "127.0.0.1"
           FLINK_PORT: "10011"
-        # Phoenix and Kudu tests are excluded until their infra blockers land
-        # (JSON-serialization PQS image; a bootable Kudu image) — see the
-        # comments in docker-compose.yml.
-        run: cd build && ctest --output-on-failure -L integration -E "phoenix|kudu"
+        # Phoenix is excluded until its infra blocker lands (the only
+        # available PQS image serves Avatica PROTOBUF; the driver speaks
+        # JSON) — see the comments in docker-compose.yml.
+        run: cd build && ctest --output-on-failure -L integration -E "phoenix"
 
       - name: Service diagnostics
         if: failure()

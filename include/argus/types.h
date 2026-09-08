@@ -68,7 +68,7 @@ typedef enum argus_native_kind {
  * A binary column's value is the bytes themselves (ARGUS_NATIVE_BINARY):
  * `data` then holds data_len raw bytes, which may include NULs, and no text
  * form. Backends that already carry bytes on the wire (Hive and Impala's
- * TBinaryColumn, Kudu's Slice, Arrow) set this directly; those that send
+ * TBinaryColumn, Arrow) set this directly; those that send
  * text — hex on Pinot and PostgreSQL's \x form, base64 on Trino, BigQuery
  * and Avatica — decode it with argus_cache_decode_binary below. The encoding
  * belongs to the engine, so it is applied per column, never guessed from the
@@ -153,7 +153,7 @@ typedef enum argus_binary_encoding {
  * never sniffed. A cell the decoder rejects keeps the engine's text, so a
  * column typed binary by mistake still shows something rather than nothing.
  * ARGUS_BINARY_RAW is for the backends whose cells already hold the bytes
- * (MySQL's wire lengths, Kudu's Slice): it only marks them, so a character
+ * (MySQL's wire lengths, a Flight SQL buffer): it only marks them, so a character
  * target renders hex instead of the bytes. */
 void argus_cache_decode_binary(argus_row_cache_t *cache,
                                const argus_column_desc_t *columns,

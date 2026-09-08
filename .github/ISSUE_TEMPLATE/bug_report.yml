@@ -58,7 +58,6 @@ body:
         - Impala
         - Trino
         - Phoenix
-        - Kudu
     validations:
       required: true
 

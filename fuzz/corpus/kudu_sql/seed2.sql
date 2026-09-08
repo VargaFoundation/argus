@@ -1,1 +1,0 @@
-SELECT * FROM t WHERE status IN ('active', 'pending', 'new')

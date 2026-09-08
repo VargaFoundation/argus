@@ -236,6 +236,19 @@ typedef struct argus_backend {
 
 void argus_backend_register(const argus_backend_t *backend);
 const argus_backend_t *argus_backend_find(const char *name);
+
+/* The names this build actually answers to, as a leading-space list
+ * (" hive impala trino"). For a diagnostic, never for parsing. */
+const char *argus_backend_names(void);
+
+/*
+ * For a backend name this driver used to answer to and no longer does, the
+ * sentence to put in the diagnostic -- what replaced it and how to say so
+ * in the DSN. NULL for a name that was never ours. A DSN that worked
+ * before an upgrade deserves the one line that makes it work again, not
+ * "Unknown backend".
+ */
+const char *argus_backend_retired(const char *name);
 void argus_backends_init(void);
 
 /* Iteration over the registry, for diagnostics and for the tests that assert

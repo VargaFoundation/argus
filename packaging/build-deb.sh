@@ -77,7 +77,7 @@ Depends: unixodbc, ${LIB_DEPS}
 Maintainer: Varga <contact@varga.co>
 Description: Argus ODBC Driver for Data Warehouses
  Argus is a universal ODBC driver supporting Hive, Impala, Trino, Phoenix,
- Pinot, Druid, BigQuery, MySQL-wire (StarRocks/Doris/ClickHouse) and Kudu.
+ Pinot, Druid, BigQuery and MySQL-wire (StarRocks/Doris/ClickHouse).
 EOF
 
 # Create postinst script

@@ -15,7 +15,7 @@ Requires:       json-glib
 %description
 Argus is a universal ODBC driver for analytics engines: Hive, Impala,
 Trino, Phoenix, Pinot, Druid, BigQuery, MySQL-wire (StarRocks/Doris/
-ClickHouse), Arrow Flight SQL (Dremio/InfluxDB 3) and Kudu.
+ClickHouse) and Arrow Flight SQL (Dremio/InfluxDB 3).
 
 %prep
 %setup -q -n argus-odbc-%{version}

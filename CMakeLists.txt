@@ -69,7 +69,7 @@ pkg_check_modules(GIO2 REQUIRED gio-2.0>=2.56)
 # and MySQL-wire (and the Windows installer without PostgreSQL) because the
 # release runners lacked the client libraries and the auto-detection only
 # printed a STATUS line; a release configure now fails on that runner instead.
-# Kudu and Flight SQL stay optional: their client libraries are not packaged
+# Flight SQL stays optional: its client library is not packaged
 # for the release platforms.
 # ---------------------------------------------------------------------------
 option(ARGUS_RELEASE "Require every backend a release artefact ships with" OFF)
@@ -87,7 +87,6 @@ argus_backend_request(PHOENIX "Phoenix backend (libcurl + json-glib)")
 argus_backend_request(PINOT "Pinot backend (libcurl + json-glib)")
 argus_backend_request(DRUID "Druid backend (libcurl + json-glib)")
 argus_backend_request(BIGQUERY "BigQuery backend (libcurl + json-glib)")
-argus_backend_request(KUDU "Kudu backend (libkudu_client)")
 argus_backend_request(MYSQL "MySQL-wire backend (libmariadb)")
 argus_backend_request(POSTGRES "PostgreSQL/Greenplum/Cloudberry backends (libpq)")
 argus_backend_request(FLIGHTSQL "Arrow Flight SQL backend (arrow-flight-sql)")
@@ -183,15 +182,6 @@ endif()
 argus_resolve_backend(BIGQUERY ARGUS_BUILD_BIGQUERY "BigQuery backend" "${HTTP_JSON_FOUND}"
     "${HTTP_JSON_MISSING}" "${HTTP_JSON_INSTALL}" "${BIGQUERY_DETAIL}")
 
-# Kudu backend (libkudu_client C++ library)
-find_library(KUDU_CLIENT_LIB kudu_client)
-find_path(KUDU_CLIENT_INCLUDE kudu/client/client.h)
-set(KUDU_FOUND FALSE)
-if(KUDU_CLIENT_LIB AND KUDU_CLIENT_INCLUDE)
-    set(KUDU_FOUND TRUE)
-endif()
-argus_resolve_backend(KUDU ARGUS_BUILD_KUDU "Kudu backend" "${KUDU_FOUND}"
-    "libkudu_client" "install libkudu-client-dev")
 
 # MySQL-wire backend (StarRocks/Doris/ClickHouse/MySQL/MariaDB)
 pkg_check_modules(LIBMARIADB libmariadb)
@@ -229,8 +219,8 @@ argus_resolve_backend(FLIGHTSQL ARGUS_BUILD_FLIGHTSQL "Arrow Flight SQL backend"
     "arrow-flight-sql" "install libarrow-flight-sql-dev"
     " (arrow-flight-sql ${ARROW_FLIGHT_SQL_VERSION})")
 
-if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO AND NOT ARGUS_BUILD_PHOENIX AND NOT ARGUS_BUILD_KUDU AND NOT ARGUS_BUILD_MYSQL AND NOT ARGUS_BUILD_FLIGHTSQL AND NOT ARGUS_BUILD_PINOT AND NOT ARGUS_BUILD_DRUID AND NOT ARGUS_BUILD_BIGQUERY AND NOT ARGUS_BUILD_POSTGRES)
-    message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino/Phoenix) or libkudu_client (for Kudu) or libmariadb-dev (for MySQL-wire: StarRocks/Doris/ClickHouse) or libpq-dev (for PostgreSQL/Greenplum/Cloudberry) or libarrow-flight-sql-dev (for Arrow Flight SQL: Dremio/InfluxDB 3).")
+if(NOT ARGUS_BUILD_THRIFT_BACKENDS AND NOT ARGUS_BUILD_TRINO AND NOT ARGUS_BUILD_PHOENIX AND NOT ARGUS_BUILD_MYSQL AND NOT ARGUS_BUILD_FLIGHTSQL AND NOT ARGUS_BUILD_PINOT AND NOT ARGUS_BUILD_DRUID AND NOT ARGUS_BUILD_BIGQUERY AND NOT ARGUS_BUILD_POSTGRES)
+    message(FATAL_ERROR "No backends available. Install thrift_c_glib (for Hive/Impala) or libcurl+json-glib (for Trino/Phoenix) or libmariadb-dev (for MySQL-wire: StarRocks/Doris/ClickHouse) or libpq-dev (for PostgreSQL/Greenplum/Cloudberry) or libarrow-flight-sql-dev (for Arrow Flight SQL: Dremio/InfluxDB 3).")
 endif()
 
 # Anonymous opt-in telemetry (requires libcurl for the HTTPS transport)
@@ -245,10 +235,10 @@ else()
     message(STATUS "Telemetry: DISABLED (ARGUS_ENABLE_TELEMETRY=OFF)")
 endif()
 
-# Kudu and Flight SQL are C++ backends. Enable CXX here at the top-level scope:
+# Flight SQL is a C++ backend. Enable CXX here at the top-level scope:
 # calling enable_language(CXX) from a subdirectory breaks CMake's regenerate step
 # ("required internal CMake variable not set").
-if(ARGUS_BUILD_KUDU OR ARGUS_BUILD_FLIGHTSQL)
+if(ARGUS_BUILD_FLIGHTSQL)
     enable_language(CXX)
 endif()
 

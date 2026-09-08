@@ -60,7 +60,7 @@ typedef struct argus_backend_caps {
      * SQL_IDENTIFIER_CASE: how the engine stores an unquoted identifier.
      * 0 → SQL_IC_LOWER, which is what info.c answered for every backend,
      * true or not: Phoenix folds to upper, and BigQuery, Druid, Pinot and
-     * Kudu are case-sensitive. A tool that lower-cases a name because the
+     * Trino are case-sensitive. A tool that lower-cases a name because the
      * driver said the engine does looks for a table that is not there.
      */
     SQLUSMALLINT   identifier_case;

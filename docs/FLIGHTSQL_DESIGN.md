@@ -44,7 +44,7 @@ What exists and is verified:
 - **`BOOL` macro clash** — unixODBC's `<sql.h>` does `#define BOOL int`, which
   corrupts `arrow::Type::BOOL`; the Flight SQL headers `#undef BOOL` after the
   ODBC headers. The argus C headers are wrapped in `extern "C"` from the C++ TU
-  (they have no guards of their own), as the Kudu backend does.
+  (they have no guards of their own).
 
 Build it:
 ```
@@ -104,7 +104,7 @@ Unlike the MySQL-wire backend (one synchronous C library, `libmariadb`), Flight
 SQL pulls in a heavy C++ stack:
 
 - `libarrow`, `libarrow-flight`, `libarrow-flight-sql` (+ gRPC, protobuf, ~100 MB+).
-- A **C++** translation unit, like the Kudu backend (`enable_language(CXX)`).
+- A **C++** translation unit (`enable_language(CXX)`).
 - Results arrive as Arrow `RecordBatch`es, not text rows — a real columnar→cell
   conversion layer is required, not the trivial passthrough MySQL-wire uses.
 - No Flight SQL endpoint is available in the current test environment, so the
@@ -127,7 +127,7 @@ endif()
 
 Plus a `src/backend/flightsql/` subdir (C++), `ARGUS_HAS_FLIGHTSQL` compile def,
 and registration in `src/backend/backend.c` (`argus_flightsql_backend_get`),
-mirroring the Kudu wiring.
+wired like the other optional backends.
 
 ## Mapping onto the `argus_backend_t` vtable
 

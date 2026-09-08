@@ -6,7 +6,7 @@
 #include <arrow/ipc/dictionary.h>
 
 /* The argus C headers have no extern "C" guards; wrap them so the C functions
- * they declare (e.g. argus_log_write) keep C linkage, as the Kudu backend does. */
+ * they declare (e.g. argus_log_write) keep C linkage. */
 extern "C" {
 #include "argus/backend.h"
 #include "argus/handle.h"

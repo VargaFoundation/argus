@@ -81,7 +81,7 @@ you are relying on:
 | `hive` | full | **yes** — against HiveServer2 3.1.3 |
 | `impala` | full | **yes** — against the Impala 4.5 quickstart |
 | `bigquery` | full | **yes** — against the emulator; the 2-arg `TRUNCATE` is the one form it cannot exercise |
-| `phoenix`, `druid`, `flightsql`, `kudu` | minimal (3 functions) | n/a — deliberately under-claimed |
+| `phoenix`, `druid`, `flightsql` | minimal (3 functions) | n/a — deliberately under-claimed |
 
 Every full table above was probed function-by-function through the driver
 against a live server, and every probe found at least one mapping the

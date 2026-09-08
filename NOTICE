@@ -54,8 +54,6 @@ them.
   Apache Arrow, Arrow Flight SQL          Apache-2.0
   https://arrow.apache.org                Arrow Flight SQL backend
 
-  Apache Kudu C++ client                  Apache-2.0
-  https://kudu.apache.org                 Kudu backend
 
   cmocka (tests only, not distributed)    Apache-2.0
   https://cmocka.org

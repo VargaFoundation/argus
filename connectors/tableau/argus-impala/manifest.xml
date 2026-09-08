@@ -5,7 +5,7 @@
 
   Impala speaks HiveServer2 too, so this mirrors argus-hive; the differences are
   the default port (21050) and the dialect. Kudu tables are reached through
-  Impala, which is why BACKEND=kudu is deprecated.
+  Impala, which plans and executes SQL against them natively.
 
   Each customization states a fact about the driver or about Impala. If one has
   to paper over what SQLGetInfo reports, the bug is in the driver, not here.

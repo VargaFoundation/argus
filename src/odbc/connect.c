@@ -88,10 +88,18 @@ static SQLRETURN do_connect(argus_dbc_t *dbc)
     const char *backend_name = dbc->backend_name ? dbc->backend_name : default_backend;
     const argus_backend_t *backend = argus_backend_find(backend_name);
     if (!backend) {
-        char msg[256];
-        snprintf(msg, sizeof(msg),
-                 "[Argus] Unknown backend: %s", backend_name);
-        ARGUS_LOG_ERROR("Unknown backend: %s", backend_name);
+        char msg[512];
+        /* A name this driver used to answer to deserves better than
+         * "unknown": the DSN worked before the upgrade, and what the
+         * operator needs is the one line that makes it work again. */
+        const char *retired = argus_backend_retired(backend_name);
+        if (retired)
+            snprintf(msg, sizeof(msg), "[Argus] %s", retired);
+        else
+            snprintf(msg, sizeof(msg),
+                     "[Argus] Unknown backend: %s (this build has:%s)",
+                     backend_name, argus_backend_names());
+        ARGUS_LOG_ERROR("%s", msg);
         return argus_set_error(&dbc->diag, "HY000", msg, 0);
     }
 
@@ -774,7 +782,7 @@ SQLRETURN SQL_API SQLBrowseConnect(
     static const struct { const char *key; const char *alt; const char *desc; } required[] = {
         { "HOST",    "SERVER",      "Server hostname" },
         { "PORT",    NULL,          "Server port number" },
-        { "BACKEND", "DRIVER_TYPE", "Backend type (hive,impala,trino,phoenix,kudu)" },
+        { "BACKEND", "DRIVER_TYPE", "Backend type (hive,impala,trino,phoenix,...)" },
     };
     static const int num_required = 3;
 

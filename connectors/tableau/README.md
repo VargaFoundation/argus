@@ -84,7 +84,7 @@ Two scoping notes worth knowing before you pick one:
   shape is unusual for Tableau's ODBC superclass, which makes this the connector
   most likely to need adjusting once tried in Desktop.
 
-The remaining backends (phoenix, pinot, druid, flightsql, kudu) have no close
+The remaining backends (phoenix, pinot, druid, flightsql) have no close
 base dialect and would need a full custom `dialect.tdd`. They work through
 Tableau's generic **Other Databases (ODBC)** in the meantime.
 

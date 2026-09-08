@@ -442,7 +442,7 @@ static const argus_fn_entry_t pinot_fns[] = {
 };
 
 /* ── ANSI fallback ───────────────────────────────────────────────
- * Used by phoenix, druid, flightsql and kudu, and by any backend we don't
+ * Used by phoenix, druid and flightsql, and by any backend we don't
  * know. Deliberately tiny. These backends previously advertised all 48 scalar
  * functions and could translate none of them; a short honest list is strictly
  * better than a long false one.
@@ -569,7 +569,7 @@ static const argus_fn_entry_t postgres_fns[] = {
 /* ── Dialect registry ────────────────────────────────────────────
  * The quote characters keep the values (and the reasoning) that info.c used:
  * HiveQL, the MySQL wire dialect and BigQuery quote identifiers with a
- * backtick; Trino, Phoenix, Pinot, Druid, Flight SQL and Kudu follow the ANSI
+ * backtick; Trino, Phoenix, Pinot, Druid and Flight SQL follow the ANSI
  * double quote. A wrong value makes every generated query fail on the server.
  *
  * Every backend renders {d}/{ts} as SQL-92 literals (DATE '...'), and
@@ -590,7 +590,6 @@ static const argus_dialect_t argus_dialects[] = {
     { "pinot",    "\"", ARGUS_LIT_ANSI, false, false, false, pinot_fns, NULL },
     { "druid",    "\"", ARGUS_LIT_ANSI, false, false, false, ansi_fns, NULL },
     { "flightsql","\"", ARGUS_LIT_ANSI, false, false, false, ansi_fns, NULL },
-    { "kudu",     "\"", ARGUS_LIT_ANSI, false, false, false, ansi_fns, NULL },
     /* Greenplum and Cloudberry share PostgreSQL's table today; they are listed
      * separately so a divergence can be expressed without a structural change,
      * and so each carries its own verification provenance (see the header).

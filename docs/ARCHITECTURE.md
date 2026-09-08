@@ -38,7 +38,7 @@ adding a backend, see `ADDING_BACKENDS.md`; for the Flight SQL specifics,
   │ phoenix/  Avatica JSON     pinot/  broker JSON                │
   │ druid/    router SQL JSON  bigquery/ REST/JSON (+S3NS)        │
   │ mysql/    MySQL wire via libmariadb (StarRocks/Doris/CH)      │
-  │ flightsql/ Arrow Flight SQL (C++)   kudu/ (deprecated)        │
+  │ flightsql/ Arrow Flight SQL (C++)                             │
   │ shared: backend.c registry · thrift_gio_transport.c ·         │
   │         thrift_sasl.c (GSSAPI/SSPI) · http_client.c           │
   └───────────────────────────────────────────────────────────────┘
