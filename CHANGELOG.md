@@ -2,7 +2,7 @@
 
 All notable changes to the Argus ODBC Driver project.
 
-## [Unreleased]
+## [0.7.0] — 2026-09-08
 
 ### Removed: the Kudu backend
 - **`BACKEND=kudu` is gone.** Kudu was always queried through Impala in

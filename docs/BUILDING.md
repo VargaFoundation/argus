@@ -265,7 +265,7 @@ uses, which fails when a requested token is missing:
 
 ```bash
 strings -a build/src/libargus_odbc.so | grep '^argus-build '
-# argus-build 0.6.1 hive impala trino phoenix mysql pinot druid bigquery postgres greenplum cloudberry gssapi openssl telemetry
+# argus-build 0.7.0 hive impala trino phoenix mysql pinot druid bigquery postgres greenplum cloudberry gssapi openssl telemetry
 
 scripts/check-build-manifest.sh build/src/libargus_odbc.so hive impala trino postgres
 ```
